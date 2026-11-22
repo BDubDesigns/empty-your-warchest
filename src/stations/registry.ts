@@ -2,6 +2,8 @@ import { GameDataError, type GameData } from '../data';
 
 /** Phaser scene key for stations whose mini game isn't built yet. */
 export const PLACEHOLDER_SCENE = 'station-placeholder';
+/** Kept in sync with WOODCUTTING_SCENE; the scene itself loads with Phaser. */
+const WOODCUTTING_SCENE = 'woodcutting';
 
 /** Where a station's mini game runs: a Phaser scene, or the three.js screen. */
 export type StationScreen = { kind: 'phaser'; scene: string } | { kind: 'three' };
@@ -17,10 +19,7 @@ export interface MechanicModule {
  * A new mini game is new data plus one entry here.
  */
 export const mechanics: Readonly<Record<string, MechanicModule>> = {
-  woodcutting: {
-    screen: { kind: 'phaser', scene: PLACEHOLDER_SCENE },
-    placeholderNote: 'Domino felling arrives in M3',
-  },
+  woodcutting: { screen: { kind: 'phaser', scene: WOODCUTTING_SCENE } },
   rive: {
     screen: { kind: 'phaser', scene: PLACEHOLDER_SCENE },
     placeholderNote: 'Riving arrives in M4',

@@ -1,0 +1,108 @@
+import { readFile } from 'node:fs/promises';
+import { expect, test, type Page } from '@playwright/test';
+import { stations } from '../src/data/stations';
+import { woodcutting } from '../src/data/woodcutting';
+import { fitClearing, toScreen } from '../src/stations/woodcutting/logic/layout';
+
+const treeLine = stations.find((station) => station.id === 'tree_line');
+const clearing = woodcutting.clearings[0];
+
+async function canvasBox(page: Page) {
+  const box = await page.locator('#screen-phaser canvas').boundingBox();
+  if (!box) throw new Error('Canvas has no size');
+  return box;
+}
+
+async function phase(page: Page): Promise<string | undefined> {
+  return page.evaluate(() => document.body.dataset.woodcutting);
+}
+
+test('a woodcutting turn: pick, aim, chop, fall, logs to the warchest', async ({ page }) => {
+  if (!treeLine || !clearing) throw new Error('Missing tree line or clearing in data');
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  await page.goto('/');
+  await expect(page.locator('body')).toHaveAttribute('data-view', 'camp');
+
+  let box = await canvasBox(page);
+  await page.touchscreen.tap(
+    box.x + box.width * treeLine.camp.x,
+    box.y + box.height * treeLine.camp.y,
+  );
+  await expect(page.locator('body')).toHaveAttribute('data-view', 'station:tree_line');
+  await expect(page.locator('body')).toHaveAttribute('data-woodcutting', 'pick');
+
+  box = await canvasBox(page);
+  const fit = fitClearing(box.width, box.height, { ...clearing, hitRadius: 18 });
+  const tree = clearing.trees[0];
+  if (!tree) throw new Error('Clearing has no trees');
+  const at = toScreen(fit, tree);
+  await page.touchscreen.tap(box.x + at.x, box.y + at.y);
+  await expect(page.locator('body')).toHaveAttribute('data-woodcutting', 'aim');
+
+  await page.touchscreen.tap(box.x + box.width / 2, box.y + box.height / 2);
+  await expect(page.locator('body')).toHaveAttribute('data-woodcutting', 'chop');
+
+  // Chop until the tree goes down; misses score nothing, so this can take a few taps.
+  for (let taps = 0; taps < 80 && (await phase(page)) === 'chop'; taps++) {
+    await page.touchscreen.tap(box.x + box.width / 2, box.y + box.height / 2);
+    await page.waitForTimeout(90);
+  }
+  await expect(page.locator('body')).toHaveAttribute('data-woodcutting', /pick|cleared/, {
+    timeout: 10_000,
+  });
+
+  await page.getByRole('button', { name: 'Back to camp' }).tap();
+  await expect(page.locator('body')).toHaveAttribute('data-view', 'camp');
+
+  await page.getByRole('button', { name: 'Open debug menu' }).tap();
+  await expect(page.getByText(/^Log × \d+$/)).toBeVisible();
+  const download = page.getByRole('button', { name: 'Download logs' });
+  await expect(download).toBeEnabled();
+  const [file] = await Promise.all([page.waitForEvent('download'), download.tap()]);
+  const exported = JSON.parse(await readFile(await file.path(), 'utf8')) as {
+    events: { type: string; data?: Record<string, unknown> }[];
+  };
+  const types = exported.events.map((event) => event.type);
+  for (const type of [
+    'woodcutting.roundStart',
+    'woodcutting.select',
+    'woodcutting.aim',
+    'woodcutting.chop',
+    'woodcutting.fell',
+    'woodcutting.bank',
+    'woodcutting.roundEnd',
+  ]) {
+    expect(types).toContain(type);
+  }
+  const bank = exported.events.find((event) => event.type === 'woodcutting.bank');
+  expect(bank?.data?.logs).toBeGreaterThanOrEqual(1);
+  expect(errors).toEqual([]);
+});
+
+test('the live tuning panel changes feel values and logs it', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('body')).toHaveAttribute('data-view', 'camp');
+  await page.getByRole('button', { name: 'Open debug menu' }).tap();
+  const slider = page.getByLabel('Fall time (s)');
+  await slider.fill('1.5');
+  await expect(page.locator('.debug-tune', { hasText: 'Fall time (s)' })).toContainText('1.5 •');
+  await page.reload();
+  await page.getByRole('button', { name: 'Open debug menu' }).tap();
+  await expect(page.locator('.debug-tune', { hasText: 'Fall time (s)' })).toContainText('1.5 •');
+  await page.getByRole('button', { name: 'Reset to data' }).tap();
+  await expect(page.locator('.debug-tune', { hasText: 'Fall time (s)' })).not.toContainText('•');
+
+  const download = page.getByRole('button', { name: 'Download logs' });
+  const [file] = await Promise.all([page.waitForEvent('download'), download.tap()]);
+  const exported = JSON.parse(await readFile(await file.path(), 'utf8')) as {
+    events: { type: string; data?: Record<string, unknown> }[];
+  };
+  expect(exported.events).toContainEqual(
+    expect.objectContaining({
+      type: 'debug.tune',
+      data: { group: 'woodcutting', key: 'fallSeconds', value: 1.5 },
+    }),
+  );
+  expect(exported.events.map((event) => event.type)).toContain('debug.tuneReset');
+});

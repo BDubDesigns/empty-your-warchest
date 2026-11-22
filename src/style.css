@@ -248,3 +248,32 @@ body {
   color: var(--muted);
   font-size: 13px;
 }
+
+.debug-note {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.debug-tune {
+  display: block;
+  margin-bottom: 10px;
+}
+
+.debug-tune-label {
+  display: flex;
+  justify-content: space-between;
+  font-size: 14px;
+}
+
+.debug-tune-value {
+  color: var(--accent);
+}
+
+.debug-panel input[type='range'] {
+  width: 100%;
+  min-height: 36px;
+  padding: 0;
+  border: 0;
+  background: none;
+  accent-color: var(--accent);
+}

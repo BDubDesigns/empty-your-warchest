@@ -8,15 +8,19 @@ import {
   systemClock,
   type Clock,
   type EventSink,
+  type LiveTuning,
 } from '../core';
+import type { WoodcuttingFeel } from '../data';
 import { loadGameData } from '../data';
 import { checkMechanics } from '../stations';
+import { woodcuttingFeel } from '../stations/woodcutting';
 
 export interface Booted {
   game: Game;
   clock: Clock;
   logger: EventLogger;
   saves: SaveStore;
+  feel: { woodcutting: LiveTuning<WoodcuttingFeel> };
 }
 
 async function openSink(): Promise<{ sink: EventSink; fallback?: string }> {
@@ -72,5 +76,7 @@ export async function bootGame(buildLabel: string): Promise<Booted> {
     }
   });
 
-  return { game, clock, logger, saves };
+  const feel = { woodcutting: woodcuttingFeel(data.woodcutting.feel, localStorageStore()) };
+
+  return { game, clock, logger, saves, feel };
 }

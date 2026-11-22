@@ -31,13 +31,17 @@ export async function startApp(): Promise<void> {
   let booted;
   try {
     booted = await bootGame(__BUILD_LABEL__);
-    mountDebugMenu(byId('app'), { ...booted, buildLabel: __BUILD_LABEL__ });
+    mountDebugMenu(byId('app'), {
+      ...booted,
+      tuning: [booted.feel.woodcutting],
+      buildLabel: __BUILD_LABEL__,
+    });
   } catch (error) {
     // Bad data or a broken save must fail loudly, not leave a half-working game.
     showFatal(error);
     return;
   }
-  const { game, logger, clock } = booted;
+  const { game, logger, clock, feel } = booted;
 
   const phaserElement = byId('screen-phaser');
   const threeElement = byId('screen-three');
@@ -53,6 +57,8 @@ export async function startApp(): Promise<void> {
         const { PhaserView } = await import('./phaserView');
         phaser = await PhaserView.create(phaserElement, {
           game,
+          logger,
+          feel: feel.woodcutting,
           onStationTap: (stationId) => {
             run(() => navigation.openStation(stationId))();
           },

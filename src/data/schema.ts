@@ -106,6 +106,60 @@ export const tuningSchema = z.object({
   weaponRecoveryOnWin: z.record(id, fraction),
 });
 
+const clearingSchema = z.object({
+  id,
+  /** Size of the clearing in its own units; it's scaled to fit the phone screen. */
+  width: positive,
+  height: positive,
+  /** A falling tree knocks over standing trees whose center is this close to its fall line. */
+  hitRadius: positive,
+  trees: z
+    .array(
+      z.object({
+        id,
+        x: nonNegative,
+        y: nonNegative,
+        /** How far the tree reaches when it falls. */
+        height: positive,
+      }),
+    )
+    .min(1),
+});
+
+/** Feel numbers for the woodcutting mini game. The debug menu can override them live. */
+export const woodcuttingFeelSchema = z.object({
+  /** Degrees per second the aiming arrow sweeps around the tree. */
+  arrowSpeed: positive,
+  /** Passes per second the chop meter's cursor makes across the bar. */
+  meterSpeed: positive,
+  /** Share of the meter that counts as a good chop. */
+  timingWindow: fraction,
+  /** Share of the meter that counts as a perfect chop (inside the good window). */
+  perfectWindow: fraction,
+  /** Chop points needed to fell a tree. */
+  chopPoints: positiveInt,
+  /** Points for a good chop; a perfect chop gets perfectPoints; a miss gets none. */
+  goodPoints: nonNegative,
+  perfectPoints: nonNegative,
+  /** Seconds for a tree to fall from upright to the ground. */
+  fallSeconds: positive,
+  /** How sharply a fall speeds up: 1 = steady, higher = slower start and faster finish. */
+  fallEase: z.number().min(1),
+  /** Extra pause before a hit tree starts to fall, so the cascade ripples. */
+  chainDelay: nonNegative,
+  /** Multiplier for every screen shake. 0 turns shake off. */
+  shakeStrength: nonNegative,
+  /** How long the game freezes on a perfect chop (hit-stop), in milliseconds. */
+  hitStopMs: nonNegative,
+});
+
+export const woodcuttingSchema = z.object({
+  /** Recipe that turns each felled tree into logs. */
+  recipe: id,
+  clearings: z.array(clearingSchema).min(1),
+  feel: woodcuttingFeelSchema,
+});
+
 export const gameDataShape = z.object({
   /** Ordered worst to best. */
   qualities: z.array(qualitySchema).min(1),
@@ -117,6 +171,7 @@ export const gameDataShape = z.object({
   enemies: z.array(enemySchema),
   levels: z.array(levelSchema),
   camp: campSchema,
+  woodcutting: woodcuttingSchema,
   tuning: tuningSchema,
 });
 
@@ -134,3 +189,6 @@ export type Level = GameData['levels'][number];
 export type Tuning = GameData['tuning'];
 export type Camp = GameData['camp'];
 export type CampSpot = Camp['chest'];
+export type Clearing = GameData['woodcutting']['clearings'][number];
+export type ClearingTree = Clearing['trees'][number];
+export type WoodcuttingFeel = GameData['woodcutting']['feel'];

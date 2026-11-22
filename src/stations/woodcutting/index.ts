@@ -1,3 +1,6 @@
-// Woodcutting mini game (domino felling). Filled in by M3.
+// Woodcutting mini game (domino felling). Renderer-free parts; the scene loads with Phaser.
 
-export {};
+export * from './feel';
+export * from './logic/chain';
+export * from './logic/layout';
+export * from './logic/meter';
