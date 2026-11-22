@@ -111,8 +111,11 @@ const clearingSchema = z.object({
   /** Size of the clearing in its own units; it's scaled to fit the phone screen. */
   width: positive,
   height: positive,
-  /** A falling tree knocks over standing trees whose center is this close to its fall line. */
-  hitRadius: positive,
+  /**
+   * Radius of every tree's canopy. Collisions use exactly what's drawn: a falling tree
+   * knocks over any standing tree its canopy or trunk touches on the way down.
+   */
+  canopyRadius: positive,
   trees: z
     .array(
       z.object({
@@ -128,8 +131,6 @@ const clearingSchema = z.object({
 
 /** Feel numbers for the woodcutting mini game. The debug menu can override them live. */
 export const woodcuttingFeelSchema = z.object({
-  /** Degrees per second the aiming arrow sweeps around the tree. */
-  arrowSpeed: positive,
   /** Passes per second the chop meter's cursor makes across the bar. */
   meterSpeed: positive,
   /** Share of the meter that counts as a good chop. */
@@ -145,6 +146,11 @@ export const woodcuttingFeelSchema = z.object({
   fallSeconds: positive,
   /** How sharply a fall speeds up: 1 = steady, higher = slower start and faster finish. */
   fallEase: z.number().min(1),
+  /**
+   * Most a hit tree turns away from the hitter's direction, in degrees, for a hit at the very
+   * edge of its canopy. A dead-center hit falls straight on; in between scales evenly.
+   */
+  maxDeflection: z.number().min(0).max(90),
   /** Extra pause before a hit tree starts to fall, so the cascade ripples. */
   chainDelay: nonNegative,
   /** Multiplier for every screen shake. 0 turns shake off. */

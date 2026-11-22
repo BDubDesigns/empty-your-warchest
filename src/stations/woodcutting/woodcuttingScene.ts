@@ -17,7 +17,8 @@ export interface WoodcuttingDeps {
 
 type Phase =
   | { kind: 'pick' }
-  | { kind: 'aim'; tree: string; startedAt: number }
+  /** `angle` is undefined until the finger moves away from the tree. `held` is true while pressed. */
+  | { kind: 'aim'; tree: string; angle?: number | undefined; held: boolean; startedAt: number }
   | { kind: 'chop'; tree: string; angle: number; points: number; startedAt: number }
   | { kind: 'falling' }
   | { kind: 'cleared' };
@@ -43,7 +44,12 @@ const COLORS = {
   meter: 0x2a2f27,
   good: 0x4f8a3c,
   perfect: 0xd9b44a,
+  pipEmpty: 0x4a5045,
+  goodText: '#8fd16f',
+  perfectText: '#f0cd5c',
 };
+/** Screen pixels the finger must move off a tree before it sets a direction. */
+const AIM_DEAD_ZONE = 24;
 /** Seconds a banked chain's logs take to be hauled off (fade out). */
 const HAUL_SECONDS = 0.5;
 const DEG = Math.PI / 180;
@@ -118,7 +124,7 @@ export class WoodcuttingScene extends Phaser.Scene {
       scale: { start: 0.8, end: 2.6 },
       emitting: false,
     });
-    this.#total = text(this, '', { fontSize: '14px', color: theme.muted }).setOrigin(0, 0.5);
+    this.#total = text(this, '', { fontSize: '14px', color: theme.muted }).setOrigin(1, 0.5);
     this.#hint = text(this, '', { fontSize: '16px', color: theme.fg });
     this.#counter = text(this, '', { fontSize: '40px', fontStyle: 'bold', color: theme.fg })
       .setStroke(theme.bg, 6)
@@ -126,7 +132,13 @@ export class WoodcuttingScene extends Phaser.Scene {
     this.#summary = this.#makeSummary();
 
     this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
-      this.#onTap(pointer.x, pointer.y);
+      this.#onPress(pointer.x, pointer.y);
+    });
+    this.input.on('pointermove', (pointer: Phaser.Input.Pointer) => {
+      if (pointer.isDown) this.#onDrag(pointer.x, pointer.y);
+    });
+    this.input.on('pointerup', (pointer: Phaser.Input.Pointer) => {
+      this.#onRelease(pointer.x, pointer.y);
     });
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
       this.#bankChain();
@@ -178,9 +190,9 @@ export class WoodcuttingScene extends Phaser.Scene {
     // Lets the e2e test follow the round.
     document.body.dataset.woodcutting = phase.kind;
     const hints: Record<Phase['kind'], string> = {
-      pick: 'Tap a tree',
-      aim: 'Tap to lock where it falls',
-      chop: 'Tap when the marker is in the green',
+      pick: 'Touch a tree and drag to aim',
+      aim: 'Drag toward where it should fall, then let go',
+      chop: 'Tap on gold for a perfect chop, green for a good one',
       falling: '',
       cleared: '',
     };
@@ -189,29 +201,54 @@ export class WoodcuttingScene extends Phaser.Scene {
 
   // Input
 
-  #onTap(x: number, y: number): void {
+  #onPress(x: number, y: number): void {
     const phase = this.#phase;
     if (phase.kind === 'pick') {
       const tree = this.#treeAt(x, y);
       if (!tree) return;
-      this.#setPhase({ kind: 'aim', tree: tree.id, startedAt: this.#now });
+      this.#setPhase({ kind: 'aim', tree: tree.id, held: true, startedAt: this.#now });
       this.#deps.logger.log('woodcutting.select', { tree: tree.id });
     } else if (phase.kind === 'aim') {
-      const angle = this.#aimAngle(phase.startedAt);
-      this.#setPhase({ kind: 'chop', tree: phase.tree, angle, points: 0, startedAt: this.#now });
-      this.#deps.logger.log('woodcutting.aim', {
-        tree: phase.tree,
-        angle: Math.round((angle / DEG) % 360),
-        aimSeconds: Math.round((this.#now - phase.startedAt) * 10) / 10,
-      });
+      // A second press aims again from wherever the finger is.
+      this.#phase = { ...phase, held: true, angle: this.#angleTo(phase.tree, x, y) ?? phase.angle };
     } else if (phase.kind === 'chop') {
       this.#chop(phase);
     }
   }
 
+  #onDrag(x: number, y: number): void {
+    const phase = this.#phase;
+    if (phase.kind !== 'aim' || !phase.held) return;
+    this.#phase = { ...phase, angle: this.#angleTo(phase.tree, x, y) ?? phase.angle };
+  }
+
+  #onRelease(x: number, y: number): void {
+    const phase = this.#phase;
+    if (phase.kind !== 'aim' || !phase.held) return;
+    const angle = this.#angleTo(phase.tree, x, y);
+    if (angle === undefined) {
+      // Let go on the tree itself: keep it selected and wait for a drag.
+      this.#phase = { ...phase, held: false };
+      return;
+    }
+    this.#setPhase({ kind: 'chop', tree: phase.tree, angle, points: 0, startedAt: this.#now });
+    this.#deps.logger.log('woodcutting.aim', {
+      tree: phase.tree,
+      angle: Math.round((((angle / DEG) % 360) + 360) % 360),
+      aimSeconds: Math.round((this.#now - phase.startedAt) * 10) / 10,
+    });
+  }
+
+  /** Direction from a tree to the finger, or undefined while the finger is still on the tree. */
+  #angleTo(treeId: string, x: number, y: number): number | undefined {
+    const base = toScreen(this.#fit(), this.#tree(treeId));
+    if (Math.hypot(x - base.x, y - base.y) < AIM_DEAD_ZONE) return undefined;
+    return Math.atan2(y - base.y, x - base.x);
+  }
+
   #treeAt(x: number, y: number): ClearingTree | undefined {
     const fit = this.#fit();
-    const reach = Math.max(28, this.#clearing.hitRadius * fit.scale * 1.6);
+    const reach = Math.max(28, this.#clearing.canopyRadius * fit.scale * 1.6);
     let best: { tree: ClearingTree; distance: number } | undefined;
     for (const id of this.#standing) {
       const tree = this.#tree(id);
@@ -241,12 +278,13 @@ export class WoodcuttingScene extends Phaser.Scene {
       this.#chips.explode(18, base.x, base.y);
       if (shake > 0) this.cameras.main.shake(120, 0.008 * shake);
       this.#frozenUntil = performance.now() + feel.hitStopMs;
-      this.#flash('Perfect!', base.x, base.y - 36, theme.fg);
+      this.#flash(`Perfect! +${points}`, base.x, base.y - 36, COLORS.perfectText);
     } else {
       this.#play('chop', result === 'good' ? 0.8 : 0.5);
       this.#chips.explode(result === 'good' ? 10 : 4, base.x, base.y);
       if (shake > 0) this.cameras.main.shake(70, (result === 'good' ? 0.004 : 0.002) * shake);
-      if (result === 'miss') this.#flash('Glancing blow', base.x, base.y - 36, theme.muted);
+      if (result === 'good') this.#flash(`Good +${points}`, base.x, base.y - 36, COLORS.goodText);
+      else this.#flash('Glancing +0', base.x, base.y - 36, theme.muted);
     }
 
     if (total >= feel.chopPoints) this.#startChain(phase.tree, phase.angle);
@@ -257,7 +295,7 @@ export class WoodcuttingScene extends Phaser.Scene {
 
   #startChain(treeId: string, angle: number): void {
     // The chain is decided here, before anything moves; the animation only plays it back.
-    const steps = resolveChain(this.#clearing, this.#standing, treeId, angle);
+    const steps = resolveChain(this.#clearing, this.#standing, treeId, angle, this.#feel);
     const feel = this.#feel;
     const starts = new Map<string, number>();
     this.#fallers = steps.map((step) => {
@@ -360,7 +398,7 @@ export class WoodcuttingScene extends Phaser.Scene {
       this.#clearing.height * fit.scale,
     );
 
-    const canopy = Math.max(10, this.#clearing.hitRadius * fit.scale);
+    const canopy = Math.max(8, this.#clearing.canopyRadius * fit.scale);
     const trunkWidth = Math.max(4, canopy * 0.45);
     const fallingIds = new Map(this.#fallers.map((faller) => [faller.step.tree, faller]));
 
@@ -403,43 +441,39 @@ export class WoodcuttingScene extends Phaser.Scene {
     if (phase.kind === 'aim' || phase.kind === 'chop') {
       const tree = this.#tree(phase.tree);
       const base = toScreen(fit, tree);
-      const angle = phase.kind === 'aim' ? this.#aimAngle(phase.startedAt) : phase.angle;
-      const tip = toScreen(fit, fallTip(tree, angle));
-      // Selection ring
       g.lineStyle(3, theme.accentHex, 1).strokeCircle(base.x, base.y, canopy + 5);
-      // Faint line showing exactly how far the tree will reach
-      g.lineStyle(2, theme.fgHex, phase.kind === 'aim' ? 0.35 : 0.5).lineBetween(
-        base.x,
-        base.y,
-        tip.x,
-        tip.y,
-      );
-      g.strokeCircle(tip.x, tip.y, 5);
-      // Arrow around the base
-      const arrowStart = canopy + 8;
-      const arrowEnd = canopy + 30;
-      const dx = Math.cos(angle);
-      const dy = Math.sin(angle);
-      const ax = base.x + dx * arrowEnd;
-      const ay = base.y + dy * arrowEnd;
-      g.lineStyle(4, theme.accentHex, 1).lineBetween(
-        base.x + dx * arrowStart,
-        base.y + dy * arrowStart,
-        ax,
-        ay,
-      );
-      g.fillStyle(theme.accentHex, 1).fillTriangle(
-        ax + dx * 10,
-        ay + dy * 10,
-        ax - dy * 7,
-        ay + dx * 7,
-        ax + dy * 7,
-        ay - dx * 7,
-      );
+      const angle = phase.angle;
+      if (angle !== undefined) {
+        const tip = toScreen(fit, fallTip(tree, angle));
+        // Exactly where the tree will reach, and the outline of its canopy when it lands
+        g.lineStyle(2, theme.fgHex, 0.45).lineBetween(base.x, base.y, tip.x, tip.y);
+        g.lineStyle(2, theme.fgHex, 0.35).strokeCircle(tip.x, tip.y, canopy);
+        // Arrow off the base
+        const arrowStart = canopy + 8;
+        const arrowEnd = canopy + 30;
+        const dx = Math.cos(angle);
+        const dy = Math.sin(angle);
+        const ax = base.x + dx * arrowEnd;
+        const ay = base.y + dy * arrowEnd;
+        g.lineStyle(4, theme.accentHex, 1).lineBetween(
+          base.x + dx * arrowStart,
+          base.y + dy * arrowStart,
+          ax,
+          ay,
+        );
+        g.fillStyle(theme.accentHex, 1).fillTriangle(
+          ax + dx * 10,
+          ay + dy * 10,
+          ax - dy * 7,
+          ay + dx * 7,
+          ax + dy * 7,
+          ay - dx * 7,
+        );
+      }
     }
     if (phase.kind === 'chop') this.#drawMeter(phase, width, height);
 
-    this.#total.setPosition(16, height - 22).setText(`Logs this round: ${this.#round.logs}`);
+    this.#total.setPosition(width - 16, 70).setText(`Logs this round: ${this.#round.logs}`);
     this.#hint.setPosition(width / 2, height - 124);
     this.#counter.setPosition(width / 2, height * 0.5);
     this.#summary.setPosition(width / 2, height * 0.5);
@@ -490,7 +524,7 @@ export class WoodcuttingScene extends Phaser.Scene {
     const pipsWidth = feel.chopPoints * pip + (feel.chopPoints - 1) * gap;
     for (let i = 0; i < feel.chopPoints; i++) {
       const filled = i < phase.points;
-      g.fillStyle(filled ? theme.accentHex : COLORS.meter, 1).fillCircle(
+      g.fillStyle(filled ? theme.accentHex : COLORS.pipEmpty, 1).fillCircle(
         (width - pipsWidth) / 2 + i * (pip + gap) + pip / 2,
         top - 20,
         pip / 2,
@@ -578,9 +612,5 @@ export class WoodcuttingScene extends Phaser.Scene {
     const tree = this.#trees.get(id);
     if (!tree) throw new Error(`Unknown tree "${id}"`);
     return tree;
-  }
-
-  #aimAngle(startedAt: number): number {
-    return (this.#now - startedAt) * this.#feel.arrowSpeed * DEG;
   }
 }

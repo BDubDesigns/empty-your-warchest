@@ -1,7 +1,7 @@
 import type { Clearing } from '../../../data';
 
 /** Screen space kept free around the clearing: the back button above, the chop meter below. */
-export const CLEARING_MARGIN = { top: 72, bottom: 128, side: 12 };
+export const CLEARING_MARGIN = { top: 88, bottom: 128, side: 12 };
 
 /** Scales the clearing to fit the screen, centered. */
 export function fitClearing(viewWidth: number, viewHeight: number, clearing: Clearing) {

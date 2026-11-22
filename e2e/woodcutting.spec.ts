@@ -13,6 +13,21 @@ async function canvasBox(page: Page) {
   return box;
 }
 
+/** A real touch drag (Playwright's touchscreen only taps). */
+async function touchDrag(page: Page, from: { x: number; y: number }, to: { x: number; y: number }) {
+  const client = await page.context().newCDPSession(page);
+  await client.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [from] });
+  for (let step = 1; step <= 6; step++) {
+    const point = {
+      x: from.x + ((to.x - from.x) * step) / 6,
+      y: from.y + ((to.y - from.y) * step) / 6,
+    };
+    await client.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [point] });
+  }
+  await client.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  await client.detach();
+}
+
 async function phase(page: Page): Promise<string | undefined> {
   return page.evaluate(() => document.body.dataset.woodcutting);
 }
@@ -33,14 +48,17 @@ test('a woodcutting turn: pick, aim, chop, fall, logs to the warchest', async ({
   await expect(page.locator('body')).toHaveAttribute('data-woodcutting', 'pick');
 
   box = await canvasBox(page);
-  const fit = fitClearing(box.width, box.height, { ...clearing, hitRadius: 18 });
-  const tree = clearing.trees[0];
-  if (!tree) throw new Error('Clearing has no trees');
-  const at = toScreen(fit, tree);
-  await page.touchscreen.tap(box.x + at.x, box.y + at.y);
-  await expect(page.locator('body')).toHaveAttribute('data-woodcutting', 'aim');
-
-  await page.touchscreen.tap(box.x + box.width / 2, box.y + box.height / 2);
+  const fit = fitClearing(box.width, box.height, clearing);
+  const [tree, next] = clearing.trees;
+  if (!tree || !next) throw new Error('Clearing needs two trees');
+  const from = toScreen(fit, tree);
+  const toward = toScreen(fit, next);
+  // Touch the first tree and drag toward the second to aim at it.
+  await touchDrag(
+    page,
+    { x: box.x + from.x, y: box.y + from.y },
+    { x: box.x + toward.x, y: box.y + toward.y },
+  );
   await expect(page.locator('body')).toHaveAttribute('data-woodcutting', 'chop');
 
   // Chop until the tree goes down; misses score nothing, so this can take a few taps.

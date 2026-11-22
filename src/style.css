@@ -88,6 +88,11 @@ body {
   pointer-events: none;
 }
 
+/* Only on the camp; in mini games it would sit on top of the controls. The debug menu shows it too. */
+body:not([data-view='camp']) #build-label {
+  display: none;
+}
+
 #rotate-hint {
   display: none;
 }

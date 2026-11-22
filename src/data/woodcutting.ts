@@ -9,7 +9,7 @@ export const woodcutting = {
       id: 'first_clearing',
       width: 360,
       height: 640,
-      hitRadius: 18,
+      canopyRadius: 18,
       trees: [
         // A diagonal run that chains when aimed down-right.
         { id: 'a1', x: 70, y: 110, height: 100 },
@@ -33,7 +33,6 @@ export const woodcutting = {
     },
   ],
   feel: {
-    arrowSpeed: 120,
     meterSpeed: 1.2,
     timingWindow: 0.5,
     perfectWindow: 0.12,
@@ -42,6 +41,7 @@ export const woodcutting = {
     perfectPoints: 2,
     fallSeconds: 0.9,
     fallEase: 2.5,
+    maxDeflection: 60,
     chainDelay: 0.12,
     shakeStrength: 1,
     hitStopMs: 70,
