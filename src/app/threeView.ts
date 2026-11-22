@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import type { ScreenView } from './screen';
 import { theme } from './theme';
 
-/** A placeholder three.js scene: a box you can spin by dragging. */
+/** Placeholder for the Attack Run's three.js view: a box you can spin by dragging. */
 export class ThreeView implements ScreenView {
   readonly #element: HTMLElement;
   readonly #renderer: THREE.WebGLRenderer;
@@ -13,7 +13,7 @@ export class ThreeView implements ScreenView {
   #spinSpeed = 0.6;
   #dragX: number | undefined;
 
-  constructor(element: HTMLElement, onBack: () => void) {
+  constructor(element: HTMLElement, hint: string) {
     this.#element = element;
     this.#renderer = new THREE.WebGLRenderer({ antialias: true });
     this.#renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -36,15 +36,10 @@ export class ThreeView implements ScreenView {
     this.#camera.position.set(0, 3, 6);
     this.#camera.lookAt(0, 1, 0);
 
-    const back = document.createElement('button');
-    back.className = 'shell-button';
-    back.textContent = 'Back to 2D';
-    back.addEventListener('click', onBack);
-
-    const hint = document.createElement('div');
-    hint.className = 'screen-hint';
-    hint.textContent = 'three.js screen · drag to spin';
-    element.append(back, hint);
+    const hintElement = document.createElement('div');
+    hintElement.className = 'screen-hint';
+    hintElement.textContent = hint;
+    element.append(hintElement);
 
     this.#listenForDrag(this.#renderer.domElement);
     new ResizeObserver(() => {

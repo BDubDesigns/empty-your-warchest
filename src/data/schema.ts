@@ -8,6 +8,9 @@ const positive = z.number().positive();
 const positiveInt = z.number().int().positive();
 const nonNegative = z.number().nonnegative();
 
+/** A spot in the camp, as a fraction of the portrait screen (0,0 top-left; 1,1 bottom-right). */
+const campSpotSchema = z.object({ x: fraction, y: fraction });
+
 export const qualitySchema = z.object({ id, name });
 
 export const skillSchema = z.object({ id, name });
@@ -33,6 +36,12 @@ export const stationSchema = z.object({
   skill: id,
   /** Which mini game module runs this station. */
   mechanic: id,
+  camp: campSpotSchema,
+});
+
+export const campSchema = z.object({
+  /** Where the chest that opens the warchest view sits. */
+  chest: campSpotSchema,
 });
 
 export const recipeSchema = z.object({
@@ -107,6 +116,7 @@ export const gameDataShape = z.object({
   units: z.array(unitSchema),
   enemies: z.array(enemySchema),
   levels: z.array(levelSchema),
+  camp: campSchema,
   tuning: tuningSchema,
 });
 
@@ -122,3 +132,5 @@ export type Unit = GameData['units'][number];
 export type Enemy = GameData['enemies'][number];
 export type Level = GameData['levels'][number];
 export type Tuning = GameData['tuning'];
+export type Camp = GameData['camp'];
+export type CampSpot = Camp['chest'];

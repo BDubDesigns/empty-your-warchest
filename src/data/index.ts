@@ -1,6 +1,7 @@
 // Single source of truth: skills, items, recipes, stations, units, levels, tuning.
 // Code reads these; it never repeats them.
 
+import { camp } from './camp';
 import { items } from './items';
 import { levels } from './levels';
 import { qualities } from './qualities';
@@ -24,6 +25,7 @@ export const rawGameData: GameDataInput = {
   units,
   enemies,
   levels,
+  camp,
   tuning,
 };
 

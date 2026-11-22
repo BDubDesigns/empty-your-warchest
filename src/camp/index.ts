@@ -1,3 +1,5 @@
-// Phaser camp scene, with stations built from data. Filled in by M2.
+// Phaser camp scene, with stations built from data.
+// Scenes are loaded with Phaser (see app/phaserView); these helpers are renderer-free.
 
-export {};
+export * from './layout';
+export * from './warchestRows';

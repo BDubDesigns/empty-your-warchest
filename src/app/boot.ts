@@ -6,12 +6,15 @@ import {
   SaveStore,
   localStorageStore,
   systemClock,
+  type Clock,
   type EventSink,
 } from '../core';
 import { loadGameData } from '../data';
+import { checkMechanics } from '../stations';
 
 export interface Booted {
   game: Game;
+  clock: Clock;
   logger: EventLogger;
   saves: SaveStore;
 }
@@ -28,6 +31,7 @@ async function openSink(): Promise<{ sink: EventSink; fallback?: string }> {
 /** Validates the data, opens the logger, loads the save and starts autosaving. */
 export async function bootGame(buildLabel: string): Promise<Booted> {
   const data = loadGameData();
+  checkMechanics(data);
   const clock = systemClock;
   const { sink, fallback } = await openSink();
   const logger = new EventLogger(sink, clock, crypto.randomUUID());
@@ -68,5 +72,5 @@ export async function bootGame(buildLabel: string): Promise<Booted> {
     }
   });
 
-  return { game, logger, saves };
+  return { game, clock, logger, saves };
 }
