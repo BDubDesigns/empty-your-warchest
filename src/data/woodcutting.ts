@@ -34,8 +34,8 @@ export const woodcutting = {
   ],
   feel: {
     meterSpeed: 1.1,
-    timingWindow: 0.32,
-    perfectWindow: 0.1,
+    timingWindow: 0.46,
+    perfectWindow: 0.06,
     swingSeconds: 0.12,
     goodScatter: 8,
     glancingScatter: 20,

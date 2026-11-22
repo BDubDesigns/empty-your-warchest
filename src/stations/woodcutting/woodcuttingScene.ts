@@ -97,7 +97,7 @@ const COLORS = {
 /** Screen pixels the finger must move before it aims or pulls the axe back. */
 const DEAD_ZONE = 24;
 /** Screen pixels of drag that pull the axe all the way back. */
-const FULL_PULL = 140;
+const FULL_PULL = 120;
 /** Seconds a banked chain's logs take to be hauled off (fade out). */
 const HAUL_SECONDS = 0.5;
 const DEG = Math.PI / 180;
@@ -418,7 +418,12 @@ export class WoodcuttingScene extends Phaser.Scene {
     });
 
     const box = this.#box();
-    const hit = { x: box.centerX, y: box.logY + box.logRadius };
+    const rest = box.axe.headAt(box.axe.restAngle);
+    const toLog = Math.atan2(box.log.y - rest.y, box.log.x - rest.x);
+    const hit = {
+      x: box.log.x - Math.cos(toLog) * box.logRadius,
+      y: box.log.y - Math.sin(toLog) * box.logRadius,
+    };
     this.#lastHitAt = this.#now;
     const treeBase = toScreen(this.#fit(), this.#tree(phase.tree));
     const shake = feel.shakeStrength;
@@ -714,34 +719,74 @@ export class WoodcuttingScene extends Phaser.Scene {
     const left = (width - boxWidth) / 2;
     const top = height - CLEARING_MARGIN.bottom + 28;
     const boxHeight = CLEARING_MARGIN.bottom - 40;
+    const bottom = top + boxHeight;
     const barTop = top + 12;
-    const logRadius = 30;
-    const logY = top + 92;
+    const log = { x: width / 2, y: top + 84 };
+    const logRadius = 26;
     return {
       left,
       top,
       width: boxWidth,
       height: boxHeight,
+      bottom,
       centerX: width / 2,
       bar: { left: left + 18, top: barTop, width: boxWidth - 36, height: 18 },
       pipsY: barTop + 32,
-      logY,
+      log,
       logRadius,
-      /** Where the blade rests, touching the log; pulling back moves it down by up to `pullRange`. */
-      bladeY: logY + logRadius + 2,
-      pullRange: Math.max(top + boxHeight - 30 - (logY + logRadius + 2), 20),
+      axe: this.#axeGeometry(left, top, boxWidth, bottom, log, logRadius),
     };
   }
 
   /**
-   * End-on view of the log, centered, with the axe centered behind it. Pull the axe back
-   * (away from the log) while the marker sweeps; let go on yellow and it bites a chunk out.
+   * Seen from above, an axe swing is an arc around the hands. The hands sit low and to the
+   * left of the log; at the moment of impact the handle is at right angles to the line from
+   * the head to the log, so the blade bites in at an angle, like a real felling chop.
+   * Winding up turns the axe back around the hands, as far as the box allows.
+   */
+  #axeGeometry(
+    left: number,
+    top: number,
+    boxWidth: number,
+    bottom: number,
+    log: Point,
+    logRadius: number,
+  ) {
+    const bladeLength = 16;
+    const pivot = { x: log.x - boxWidth * 0.26, y: bottom - 26 };
+    const toLog = { x: log.x - pivot.x, y: log.y - pivot.y };
+    const distance = Math.hypot(toLog.x, toLog.y);
+    const reach = logRadius + bladeLength;
+    const handle = Math.sqrt(Math.max(distance * distance - reach * reach, 1));
+    // The head sits where the handle is tangent to the log, on the side facing the box's open space.
+    const restAngle = Math.atan2(toLog.y, toLog.x) + Math.asin(Math.min(reach / distance, 1));
+    const headAt = (angle: number) => ({
+      x: pivot.x + Math.cos(angle) * handle,
+      y: pivot.y + Math.sin(angle) * handle,
+    });
+    // Wind up clockwise (away from the log) as far as fits, up to 110°.
+    let windArc = 110 * DEG;
+    for (; windArc > 30 * DEG; windArc -= 5 * DEG) {
+      const head = headAt(restAngle + windArc);
+      const fits =
+        head.x > left + 14 &&
+        head.x < left + boxWidth - 14 &&
+        head.y > top + 60 &&
+        head.y < bottom - 8;
+      if (fits) break;
+    }
+    return { pivot, handle, restAngle, windArc, bladeLength, headAt };
+  }
+
+  /**
+   * The log seen from above, centered, and the axe swinging in from the hands below it.
+   * Pull the axe back while the marker sweeps; let go on yellow and it bites a chunk out.
    */
   #drawChopBox(phase: Extract<Phase, { kind: 'chop' }>): void {
     const g = this.#graphics;
     const feel = this.#feel;
     const box = this.#box();
-    const { bar } = box;
+    const { bar, axe } = box;
 
     // Bar: green zone around the yellow one, both centered on this chop's target
     g.fillStyle(COLORS.bar, 1).fillRoundedRect(bar.left, bar.top, bar.width, bar.height, 6);
@@ -774,11 +819,16 @@ export class WoodcuttingScene extends Phaser.Scene {
       );
     }
 
-    // The log, end-on: bark ring, rings, and the bite taken out of it so far.
+    // The log: bark, rings, and the bite taken so far, on the side the axe strikes.
     // It jolts away from the axe for a moment after each hit.
+    const rest = axe.headAt(axe.restAngle);
+    const into = { x: box.log.x - rest.x, y: box.log.y - rest.y };
+    const intoLength = Math.hypot(into.x, into.y);
+    const u = { x: into.x / intoLength, y: into.y / intoLength };
     const sinceHit = this.#now - this.#lastHitAt;
-    const jolt = sinceHit < 0.18 ? Math.sin(sinceHit * 70) * (1 - sinceHit / 0.18) * 5 : 0;
-    const log = { x: box.centerX, y: box.logY - Math.abs(jolt) };
+    const jolt =
+      sinceHit < 0.18 ? Math.abs(Math.sin(sinceHit * 70)) * (1 - sinceHit / 0.18) * 5 : 0;
+    const log = { x: box.log.x + u.x * jolt, y: box.log.y + u.y * jolt };
     const r = box.logRadius;
     g.fillStyle(COLORS.bark, 1).fillCircle(log.x, log.y, r + 4);
     g.fillStyle(COLORS.wood, 1).fillCircle(log.x, log.y, r);
@@ -787,47 +837,73 @@ export class WoodcuttingScene extends Phaser.Scene {
     g.fillStyle(COLORS.trunk, 0.6).fillCircle(log.x, log.y, r * 0.08);
     const depth = Math.min(phase.points / feel.chopPoints, 1) * r * 1.1;
     if (depth > 0) {
-      // A V-shaped bite into the side facing the axe
-      const mouth = 8 + depth * 0.7;
+      // A V-shaped bite into the struck side, opening toward the axe
+      const surface = { x: log.x - u.x * (r + 4), y: log.y - u.y * (r + 4) };
+      const apex = { x: surface.x + u.x * depth, y: surface.y + u.y * depth };
+      const side = { x: -u.y, y: u.x };
+      const mouth = 7 + depth * 0.7;
       g.fillStyle(COLORS.box, 1).fillTriangle(
-        log.x - mouth,
-        log.y + r + 5,
-        log.x + mouth,
-        log.y + r + 5,
-        log.x,
-        log.y + r + 4 - depth,
+        surface.x + side.x * mouth - u.x * 2,
+        surface.y + side.y * mouth - u.y * 2,
+        surface.x - side.x * mouth - u.x * 2,
+        surface.y - side.y * mouth - u.y * 2,
+        apex.x,
+        apex.y,
       );
-      g.lineStyle(2, COLORS.wood, 0.9).lineBetween(
-        log.x - mouth,
-        log.y + r + 4,
-        log.x,
-        log.y + r + 4 - depth,
-      );
-      g.lineBetween(log.x + mouth, log.y + r + 4, log.x, log.y + r + 4 - depth);
+      g.lineStyle(2, COLORS.wood, 0.9);
+      g.lineBetween(surface.x + side.x * mouth, surface.y + side.y * mouth, apex.x, apex.y);
+      g.lineBetween(surface.x - side.x * mouth, surface.y - side.y * mouth, apex.x, apex.y);
     }
 
-    // The axe, centered behind the log with its blade toward it: handle across, head in the middle
+    // The axe: handle from the hands to the head, blade on the leading side
     const pulled = phase.swing
       ? phase.swing.from * (1 - Math.min((this.#now - phase.swing.at) / feel.swingSeconds, 1) ** 2)
       : phase.hold
         ? this.#pullAmount(phase.hold)
         : 0;
-    const bladeY = box.bladeY + box.pullRange * pulled;
-    const headY = bladeY + 12;
-    const handleHalf = Math.min(110, box.width * 0.32);
-    g.lineStyle(8, COLORS.handle, 1).lineBetween(
-      box.centerX - handleHalf,
-      headY + 6,
-      box.centerX + handleHalf * 0.35,
-      headY + 6,
+    const angle = axe.restAngle + axe.windArc * pulled;
+    const head = axe.headAt(angle);
+    if (phase.hold || phase.swing) {
+      // Faint swing path
+      g.lineStyle(2, theme.mutedHex, 0.25);
+      g.beginPath();
+      g.arc(axe.pivot.x, axe.pivot.y, axe.handle, axe.restAngle, axe.restAngle + axe.windArc);
+      g.strokePath();
+    }
+    g.lineStyle(7, COLORS.handle, 1).lineBetween(axe.pivot.x, axe.pivot.y, head.x, head.y);
+    g.fillStyle(COLORS.handle, 1).fillCircle(axe.pivot.x, axe.pivot.y, 6);
+    // Leading direction: the way the head moves when swinging in (counter-clockwise)
+    const lead = { x: Math.sin(angle), y: -Math.cos(angle) };
+    const along = { x: Math.cos(angle), y: Math.sin(angle) };
+    const poll = 7;
+    const edgeHalf = 13;
+    g.fillStyle(0x6d7178, 1).fillPoints(
+      [
+        new Phaser.Math.Vector2(
+          head.x - along.x * poll - lead.x * 6,
+          head.y - along.y * poll - lead.y * 6,
+        ),
+        new Phaser.Math.Vector2(
+          head.x + along.x * poll - lead.x * 6,
+          head.y + along.y * poll - lead.y * 6,
+        ),
+        new Phaser.Math.Vector2(head.x + along.x * poll, head.y + along.y * poll),
+        new Phaser.Math.Vector2(head.x - along.x * poll, head.y - along.y * poll),
+      ],
+      true,
     );
-    g.fillStyle(0x6d7178, 1).fillRect(box.centerX - 12, headY - 2, 24, 16);
     g.fillStyle(COLORS.blade, 1).fillPoints(
       [
-        new Phaser.Math.Vector2(box.centerX - 12, headY - 2),
-        new Phaser.Math.Vector2(box.centerX - 18, bladeY),
-        new Phaser.Math.Vector2(box.centerX + 18, bladeY),
-        new Phaser.Math.Vector2(box.centerX + 12, headY - 2),
+        new Phaser.Math.Vector2(head.x - along.x * poll, head.y - along.y * poll),
+        new Phaser.Math.Vector2(head.x + along.x * poll, head.y + along.y * poll),
+        new Phaser.Math.Vector2(
+          head.x + along.x * edgeHalf + lead.x * axe.bladeLength,
+          head.y + along.y * edgeHalf + lead.y * axe.bladeLength,
+        ),
+        new Phaser.Math.Vector2(
+          head.x - along.x * edgeHalf + lead.x * axe.bladeLength,
+          head.y - along.y * edgeHalf + lead.y * axe.bladeLength,
+        ),
       ],
       true,
     );
