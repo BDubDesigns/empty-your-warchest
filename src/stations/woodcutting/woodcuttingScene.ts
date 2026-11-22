@@ -3,9 +3,10 @@ import { onTap, text } from '../../app/phaserUi';
 import { theme } from '../../app/theme';
 import { Rng, type EventLogger, type Game, type LiveTuning } from '../../core';
 import type { Clearing, ClearingTree, WoodcuttingFeel } from '../../data';
-import { fallTip, resolveChain, type FallStep } from './logic/chain';
+import { fallTip, previewFall, resolveChain, type FallStep, type Point } from './logic/chain';
+import { fallProgress, fallTimeToReach } from './logic/fall';
 import { fitClearing, toScreen } from './logic/layout';
-import { fallProgress, fallTimeToReach, judgeChop, meterPosition } from './logic/meter';
+import { judgeSwing, pullAmount, swingScatter, type SwingResult } from './logic/swing';
 
 export const WOODCUTTING_SCENE = 'woodcutting';
 
@@ -15,19 +16,38 @@ export interface WoodcuttingDeps {
   feel: LiveTuning<WoodcuttingFeel>;
 }
 
+/** An axe swing in flight, from release to impact. */
+interface Swing {
+  /** Wind-up (0–1) the axe was released from. */
+  from: number;
+  /** Scene time of release. */
+  at: number;
+  result: SwingResult;
+  points: number;
+  /** How far (radians) this swing knocks the aim off. */
+  drift: number;
+}
+
+/**
+ * Felling one tree with the axe. In 'aim' (before the first swing) the fall direction follows
+ * the pull; the first swing locks it, and 'chop' swings only need the right wind-up.
+ */
+interface AxeWork {
+  tree: string;
+  /** Fall direction; the tree falls away from the axe. Undefined until the finger leaves the tree. */
+  angle?: number | undefined;
+  points: number;
+  /** Finger position while pulling, in screen pixels. */
+  pull?: Point | undefined;
+  held: boolean;
+  swing?: Swing | undefined;
+  startedAt: number;
+}
+
 type Phase =
   | { kind: 'pick' }
-  /** `angle` is undefined until the finger moves away from the tree. `held` is true while pressed. */
-  | {
-      kind: 'aim';
-      tree: string;
-      angle?: number | undefined;
-      /** Where the finger is while pulling, in screen pixels. */
-      pull?: { x: number; y: number } | undefined;
-      held: boolean;
-      startedAt: number;
-    }
-  | { kind: 'chop'; tree: string; angle: number; points: number; startedAt: number }
+  | ({ kind: 'aim' } & AxeWork)
+  | ({ kind: 'chop' } & AxeWork)
   | { kind: 'falling' }
   | { kind: 'cleared' };
 
@@ -49,18 +69,27 @@ const COLORS = {
   canopyEdge: 0x2b5628,
   trunk: 0x7a5230,
   stump: 0x5a3c22,
-  meter: 0x2a2f27,
-  good: 0x4f8a3c,
-  perfect: 0xd9b44a,
+  arc: 0x8a8f80,
+  good: 0x6fae4f,
+  perfect: 0xe8c04f,
+  handle: 0x9a6a3a,
+  blade: 0xc9ced4,
   pipEmpty: 0x4a5045,
   goodText: '#8fd16f',
   perfectText: '#f0cd5c',
 };
-/** Screen pixels the finger must move off a tree before it sets a direction. */
+/** Screen pixels the finger must move off a tree before it starts pulling the axe back. */
 const AIM_DEAD_ZONE = 24;
+/** Axe handle length, as a multiple of the canopy radius on screen. */
+const HANDLE_LENGTH = 2.6;
 /** Seconds a banked chain's logs take to be hauled off (fade out). */
 const HAUL_SECONDS = 0.5;
 const DEG = Math.PI / 180;
+
+/** Whole degrees in 0–359, for logs. */
+function degrees(radians: number): number {
+  return Math.round((((radians / DEG) % 360) + 360) % 360);
+}
 
 /** Domino felling, M3a feel prototype: one hand-made clearing. */
 export class WoodcuttingScene extends Phaser.Scene {
@@ -77,6 +106,8 @@ export class WoodcuttingScene extends Phaser.Scene {
   #now = 0;
   #frozenUntil = 0;
   #round = { startedAt: 0, felled: 0, logs: 0, ended: false };
+  /** Aim drift from sloppy swings; seeded per round and logged, so rounds can be replayed. */
+  #drift = new Rng(0);
 
   #graphics!: Phaser.GameObjects.Graphics;
   #hint!: Phaser.GameObjects.Text;
@@ -160,6 +191,7 @@ export class WoodcuttingScene extends Phaser.Scene {
   override update(_time: number, delta: number): void {
     if (performance.now() >= this.#frozenUntil) {
       this.#now += delta / 1000;
+      this.#advanceSwing();
       this.#advanceFall();
     }
     this.#draw();
@@ -172,11 +204,14 @@ export class WoodcuttingScene extends Phaser.Scene {
     this.#fallers = [];
     this.#fallen.clear();
     this.#round = { startedAt: Date.now(), felled: 0, logs: 0, ended: false };
+    const seed = Date.now() >>> 0;
+    this.#drift = new Rng(seed);
     this.#summary.setVisible(false);
     this.#setPhase({ kind: 'pick' });
     this.#deps.logger.log('woodcutting.roundStart', {
       clearing: this.#clearing.id,
       trees: this.#clearing.trees.length,
+      seed,
       feel: this.#feel,
     });
   }
@@ -198,9 +233,9 @@ export class WoodcuttingScene extends Phaser.Scene {
     // Lets the e2e test follow the round.
     document.body.dataset.woodcutting = phase.kind;
     const hints: Record<Phase['kind'], string> = {
-      pick: 'Touch a tree and pull back to aim',
-      aim: 'Pull away from where it should fall, then let go',
-      chop: 'Tap on gold for a perfect chop, green for a good one',
+      pick: 'Touch a tree and pull the axe back',
+      aim: 'Pull away from where it should fall. Let go in the gold',
+      chop: 'Pull back into the gold and let go to swing',
       falling: '',
       cleared: '',
     };
@@ -214,56 +249,69 @@ export class WoodcuttingScene extends Phaser.Scene {
     if (phase.kind === 'pick') {
       const tree = this.#treeAt(x, y);
       if (!tree) return;
-      this.#setPhase({ kind: 'aim', tree: tree.id, held: true, startedAt: this.#now });
+      this.#setPhase({ kind: 'aim', tree: tree.id, points: 0, held: true, startedAt: this.#now });
       this.#deps.logger.log('woodcutting.select', { tree: tree.id });
-    } else if (phase.kind === 'aim') {
-      // A second press aims again from wherever the finger is.
-      this.#phase = {
-        ...phase,
-        held: true,
-        pull: { x, y },
-        angle: this.#angleTo(phase.tree, x, y) ?? phase.angle,
-      };
-    } else if (phase.kind === 'chop') {
-      this.#chop(phase);
+    } else if ((phase.kind === 'aim' || phase.kind === 'chop') && !phase.swing) {
+      this.#phase = { ...phase, held: true };
+      this.#onDrag(x, y);
     }
   }
 
   #onDrag(x: number, y: number): void {
     const phase = this.#phase;
-    if (phase.kind !== 'aim' || !phase.held) return;
-    this.#phase = {
-      ...phase,
-      pull: { x, y },
-      angle: this.#angleTo(phase.tree, x, y) ?? phase.angle,
-    };
+    if ((phase.kind !== 'aim' && phase.kind !== 'chop') || !phase.held) return;
+    const angle =
+      phase.kind === 'aim' ? (this.#angleFrom(phase.tree, x, y) ?? phase.angle) : phase.angle;
+    this.#phase = { ...phase, pull: { x, y }, angle };
   }
 
   #onRelease(x: number, y: number): void {
     const phase = this.#phase;
-    if (phase.kind !== 'aim' || !phase.held) return;
-    const angle = this.#angleTo(phase.tree, x, y);
-    if (angle === undefined) {
-      // Let go on the tree itself: keep it selected and wait for a drag.
-      this.#phase = { ...phase, held: false, pull: undefined };
+    if ((phase.kind !== 'aim' && phase.kind !== 'chop') || !phase.held) return;
+    this.#onDrag(x, y);
+    const current = this.#phase;
+    if (current.kind !== 'aim' && current.kind !== 'chop') return;
+    const wound = this.#windUp(current);
+    if (wound === 0 || current.angle === undefined) {
+      // Let go on the tree itself: nothing to swing yet.
+      this.#phase = { ...current, held: false, pull: undefined };
       return;
     }
-    this.#setPhase({ kind: 'chop', tree: phase.tree, angle, points: 0, startedAt: this.#now });
-    this.#deps.logger.log('woodcutting.aim', {
-      tree: phase.tree,
-      angle: Math.round((((angle / DEG) % 360) + 360) % 360),
-      aimSeconds: Math.round((this.#now - phase.startedAt) * 10) / 10,
-    });
+    const feel = this.#feel;
+    const { result, points } = judgeSwing(wound, feel);
+    const drift = swingScatter(result, feel, this.#drift);
+    if (current.kind === 'aim') {
+      this.#deps.logger.log('woodcutting.aim', {
+        tree: current.tree,
+        angle: degrees(current.angle),
+        aimSeconds: Math.round((this.#now - current.startedAt) * 10) / 10,
+      });
+    }
+    this.#phase = {
+      ...current,
+      held: false,
+      pull: undefined,
+      swing: { from: wound, at: this.#now, result, points, drift },
+    };
   }
 
-  /**
-   * Pull-back aiming, like a slingshot: the tree falls away from the finger.
-   * Undefined while the finger is still on the tree.
-   */
-  #angleTo(treeId: string, x: number, y: number): number | undefined {
+  /** Pull-back aiming: the tree falls away from the finger (and the axe). */
+  #angleFrom(treeId: string, x: number, y: number): number | undefined {
     const base = toScreen(this.#fit(), this.#tree(treeId));
     if (Math.hypot(x - base.x, y - base.y) < AIM_DEAD_ZONE) return undefined;
     return Math.atan2(base.y - y, base.x - x);
+  }
+
+  /** How far the axe is wound up (0–1) right now. */
+  #windUp(work: AxeWork): number {
+    if (work.swing) {
+      const t = Math.min((this.#now - work.swing.at) / this.#feel.swingSeconds, 1);
+      return work.swing.from * (1 - t * t);
+    }
+    if (!work.held || !work.pull) return 0;
+    const base = toScreen(this.#fit(), this.#tree(work.tree));
+    const distance = Math.hypot(work.pull.x - base.x, work.pull.y - base.y);
+    return pullAmount(distance, AIM_DEAD_ZONE, this.#feel.maxPull * this.#fit().scale);
   }
 
   #treeAt(x: number, y: number): ClearingTree | undefined {
@@ -279,36 +327,52 @@ export class WoodcuttingScene extends Phaser.Scene {
     return best?.tree;
   }
 
-  #chop(phase: Extract<Phase, { kind: 'chop' }>): void {
+  /** Lands a swing once the axe reaches the tree. */
+  #advanceSwing(): void {
+    const phase = this.#phase;
+    if ((phase.kind !== 'aim' && phase.kind !== 'chop') || !phase.swing) return;
     const feel = this.#feel;
-    const position = meterPosition(this.#now - phase.startedAt, feel.meterSpeed);
-    const { result, points } = judgeChop(position, feel);
-    const total = phase.points + points;
+    const swing = phase.swing;
+    if (this.#now - swing.at < feel.swingSeconds || phase.angle === undefined) return;
+
+    const angle = phase.angle + swing.drift;
+    const total = phase.points + swing.points;
     const base = toScreen(this.#fit(), this.#tree(phase.tree));
     this.#deps.logger.log('woodcutting.chop', {
       tree: phase.tree,
-      result,
-      offset: Math.round(Math.abs(position - 0.5) * 1000) / 1000,
+      result: swing.result,
+      pull: Math.round(swing.from * 1000) / 1000,
+      offset: Math.round(Math.abs(swing.from - feel.swingTarget) * 1000) / 1000,
+      drift: degrees(swing.drift),
+      angle: degrees(angle),
       points: total,
     });
 
     const shake = feel.shakeStrength;
-    if (result === 'perfect') {
+    const drifted =
+      Math.abs(swing.drift) >= DEG ? ` · aim off ${Math.abs(degrees(swing.drift))}°` : '';
+    if (swing.result === 'perfect') {
       this.#play('perfect', 0.9);
       this.#chips.explode(18, base.x, base.y);
       if (shake > 0) this.cameras.main.shake(120, 0.008 * shake);
       this.#frozenUntil = performance.now() + feel.hitStopMs;
-      this.#flash(`Perfect! +${points}`, base.x, base.y - 36, COLORS.perfectText);
+      this.#flash(`Perfect! +${swing.points}`, base.x, base.y - 36, COLORS.perfectText);
     } else {
-      this.#play('chop', result === 'good' ? 0.8 : 0.5);
-      this.#chips.explode(result === 'good' ? 10 : 4, base.x, base.y);
-      if (shake > 0) this.cameras.main.shake(70, (result === 'good' ? 0.004 : 0.002) * shake);
-      if (result === 'good') this.#flash(`Good +${points}`, base.x, base.y - 36, COLORS.goodText);
-      else this.#flash('Glancing +0', base.x, base.y - 36, theme.muted);
+      this.#play('chop', swing.result === 'good' ? 0.8 : 0.55);
+      this.#chips.explode(swing.result === 'good' ? 10 : 4, base.x, base.y);
+      if (shake > 0) this.cameras.main.shake(80, (swing.result === 'good' ? 0.005 : 0.003) * shake);
+      if (swing.result === 'good') {
+        this.#flash(`Good +${swing.points}${drifted}`, base.x, base.y - 36, COLORS.goodText);
+      } else {
+        this.#flash(`Glancing +0${drifted}`, base.x, base.y - 36, theme.muted);
+      }
     }
 
-    if (total >= feel.chopPoints) this.#startChain(phase.tree, phase.angle);
-    else this.#phase = { ...phase, points: total };
+    if (total >= feel.chopPoints) {
+      this.#startChain(phase.tree, angle);
+    } else {
+      this.#setPhase({ ...phase, kind: 'chop', angle, points: total, swing: undefined });
+    }
   }
 
   // Falling
@@ -334,7 +398,7 @@ export class WoodcuttingScene extends Phaser.Scene {
     this.#play('creak', 0.7);
     this.#deps.logger.log('woodcutting.fell', {
       tree: treeId,
-      angle: Math.round((angle / DEG) % 360),
+      angle: degrees(angle),
       chain: steps.map((step) => step.tree),
       length: steps.length,
     });
@@ -462,46 +526,12 @@ export class WoodcuttingScene extends Phaser.Scene {
       const tree = this.#tree(phase.tree);
       const base = toScreen(fit, tree);
       g.lineStyle(3, theme.accentHex, 1).strokeCircle(base.x, base.y, canopy + 5);
-      if (phase.kind === 'aim' && phase.held && phase.pull) {
-        // Tether from the tree to the finger, so the pull reads like a rope or slingshot
-        g.lineStyle(3, theme.accentHex, 0.5).lineBetween(
-          base.x,
-          base.y,
-          phase.pull.x,
-          phase.pull.y,
-        );
-        g.fillStyle(theme.accentHex, 0.8).fillCircle(phase.pull.x, phase.pull.y, 6);
+      if (phase.angle !== undefined) {
+        this.#drawAimGuide(tree, phase.angle, canopy);
+        this.#drawAxe(phase, base, canopy);
       }
-      const angle = phase.angle;
-      if (angle !== undefined) {
-        const tip = toScreen(fit, fallTip(tree, angle));
-        // Exactly where the tree will reach, and the outline of its canopy when it lands
-        g.lineStyle(2, theme.fgHex, 0.45).lineBetween(base.x, base.y, tip.x, tip.y);
-        g.lineStyle(2, theme.fgHex, 0.35).strokeCircle(tip.x, tip.y, canopy);
-        // Arrow off the base
-        const arrowStart = canopy + 8;
-        const arrowEnd = canopy + 30;
-        const dx = Math.cos(angle);
-        const dy = Math.sin(angle);
-        const ax = base.x + dx * arrowEnd;
-        const ay = base.y + dy * arrowEnd;
-        g.lineStyle(4, theme.accentHex, 1).lineBetween(
-          base.x + dx * arrowStart,
-          base.y + dy * arrowStart,
-          ax,
-          ay,
-        );
-        g.fillStyle(theme.accentHex, 1).fillTriangle(
-          ax + dx * 10,
-          ay + dy * 10,
-          ax - dy * 7,
-          ay + dx * 7,
-          ax + dy * 7,
-          ay - dx * 7,
-        );
-      }
+      this.#drawProgress(phase.points, width, height);
     }
-    if (phase.kind === 'chop') this.#drawMeter(phase, width, height);
 
     this.#total.setPosition(width - 16, 70).setText(`Logs this round: ${this.#round.logs}`);
     this.#hint.setPosition(width / 2, height - 124);
@@ -531,32 +561,130 @@ export class WoodcuttingScene extends Phaser.Scene {
     g.lineStyle(2, COLORS.canopyEdge, alpha).strokeCircle(tip.x, tip.y, canopy);
   }
 
-  #drawMeter(phase: Extract<Phase, { kind: 'chop' }>, width: number, height: number): void {
+  /** Billiards-style guide: the ghost canopy where it first touches a tree, and where that tree goes. */
+  #drawAimGuide(tree: ClearingTree, angle: number, canopy: number): void {
+    const g = this.#graphics;
+    const fit = this.#fit();
+    const base = toScreen(fit, tree);
+    const preview = previewFall(this.#clearing, this.#standing, tree, angle, this.#feel);
+    const ghost = toScreen(fit, preview.ghost);
+    g.lineStyle(2, theme.fgHex, 0.45).lineBetween(base.x, base.y, ghost.x, ghost.y);
+    g.lineStyle(2, theme.fgHex, 0.55).strokeCircle(ghost.x, ghost.y, canopy);
+    if (preview.hit) {
+      const hitTree = this.#tree(preview.hit.tree);
+      const from = toScreen(fit, hitTree);
+      const length = hitTree.height * fit.scale * 0.6;
+      const dx = Math.cos(preview.hit.angle);
+      const dy = Math.sin(preview.hit.angle);
+      const end = { x: from.x + dx * length, y: from.y + dy * length };
+      g.lineStyle(2, COLORS.perfect, 0.7).lineBetween(from.x, from.y, end.x, end.y);
+      g.fillStyle(COLORS.perfect, 0.7).fillTriangle(
+        end.x + dx * 9,
+        end.y + dy * 9,
+        end.x - dy * 6,
+        end.y + dx * 6,
+        end.x + dy * 6,
+        end.y - dx * 6,
+      );
+    }
+  }
+
+  /**
+   * The axe behind the tree, on the side away from the fall. It pivots on the handle's end;
+   * pulling winds it back along an arc with green and gold bands.
+   */
+  #drawAxe(work: AxeWork, base: Point, canopy: number): void {
+    if (work.angle === undefined) return;
     const g = this.#graphics;
     const feel = this.#feel;
-    const barWidth = Math.min(width - 48, 320);
-    const barHeight = 26;
-    const left = (width - barWidth) / 2;
-    const top = height - 78;
-    g.fillStyle(COLORS.meter, 1).fillRoundedRect(left, top, barWidth, barHeight, 8);
-    const zone = (share: number, color: number) => {
-      const zoneWidth = barWidth * share;
-      g.fillStyle(color, 1).fillRect(left + (barWidth - zoneWidth) / 2, top, zoneWidth, barHeight);
+    const back = work.angle + Math.PI;
+    const handle = canopy * HANDLE_LENGTH;
+    const pivot = {
+      x: base.x + Math.cos(back) * (canopy + handle),
+      y: base.y + Math.sin(back) * (canopy + handle),
     };
-    zone(feel.timingWindow, COLORS.good);
-    zone(feel.perfectWindow, COLORS.perfect);
-    const cursorX = left + barWidth * meterPosition(this.#now - phase.startedAt, feel.meterSpeed);
-    g.fillStyle(theme.fgHex, 1).fillRect(cursorX - 2, top - 6, 4, barHeight + 12);
+    // At rest the head touches the back of the tree; winding up swings it round the pivot.
+    const restAngle = work.angle;
+    const wound = this.#windUp(work);
+    const arc = feel.windArc * DEG;
+    const headAngle = restAngle + wound * arc;
+    const head = {
+      x: pivot.x + Math.cos(headAngle) * handle,
+      y: pivot.y + Math.sin(headAngle) * handle,
+    };
 
-    // Chop progress pips
-    const pip = 10;
-    const gap = 6;
-    const pipsWidth = feel.chopPoints * pip + (feel.chopPoints - 1) * gap;
-    for (let i = 0; i < feel.chopPoints; i++) {
-      const filled = i < phase.points;
-      g.fillStyle(filled ? theme.accentHex : COLORS.pipEmpty, 1).fillCircle(
+    if (work.held || work.swing) {
+      const band = (from: number, to: number, color: number, alpha: number, width: number) => {
+        g.lineStyle(width, color, alpha);
+        g.beginPath();
+        g.arc(
+          pivot.x,
+          pivot.y,
+          handle,
+          restAngle + Math.max(from, 0) * arc,
+          restAngle + Math.min(to, 1) * arc,
+        );
+        g.strokePath();
+      };
+      band(0, 1, COLORS.arc, 0.35, 10);
+      band(
+        feel.swingTarget - feel.timingWindow / 2,
+        feel.swingTarget + feel.timingWindow / 2,
+        COLORS.good,
+        0.9,
+        14,
+      );
+      band(
+        feel.swingTarget - feel.perfectWindow / 2,
+        feel.swingTarget + feel.perfectWindow / 2,
+        COLORS.perfect,
+        1,
+        18,
+      );
+    }
+
+    // Handle, from the pivot (the hands) to the head
+    g.lineStyle(Math.max(4, canopy * 0.3), COLORS.handle, 1).lineBetween(
+      pivot.x,
+      pivot.y,
+      head.x,
+      head.y,
+    );
+    g.fillStyle(COLORS.handle, 1).fillCircle(pivot.x, pivot.y, Math.max(4, canopy * 0.3));
+    // Blade: sticks out sideways from the head, leading edge toward the tree
+    const along = { x: Math.cos(headAngle), y: Math.sin(headAngle) };
+    const side = { x: -along.y, y: along.x };
+    const bladeLength = canopy * 0.9;
+    const bladeWidth = canopy * 0.55;
+    const blade: Point[] = [
+      { x: head.x - along.x * bladeWidth * 0.5, y: head.y - along.y * bladeWidth * 0.5 },
+      { x: head.x + along.x * bladeWidth * 0.5, y: head.y + along.y * bladeWidth * 0.5 },
+      {
+        x: head.x + along.x * bladeWidth * 0.8 - side.x * bladeLength,
+        y: head.y + along.y * bladeWidth * 0.8 - side.y * bladeLength,
+      },
+      {
+        x: head.x - along.x * bladeWidth * 0.8 - side.x * bladeLength,
+        y: head.y - along.y * bladeWidth * 0.8 - side.y * bladeLength,
+      },
+    ];
+    g.fillStyle(COLORS.blade, 1).fillPoints(
+      blade.map((point) => new Phaser.Math.Vector2(point.x, point.y)),
+      true,
+    );
+  }
+
+  /** Chop points so far, as dots near the bottom. */
+  #drawProgress(points: number, width: number, height: number): void {
+    const g = this.#graphics;
+    const total = this.#feel.chopPoints;
+    const pip = 14;
+    const gap = 8;
+    const pipsWidth = total * pip + (total - 1) * gap;
+    for (let i = 0; i < total; i++) {
+      g.fillStyle(i < points ? theme.accentHex : COLORS.pipEmpty, 1).fillCircle(
         (width - pipsWidth) / 2 + i * (pip + gap) + pip / 2,
-        top - 20,
+        height - 76,
         pip / 2,
       );
     }

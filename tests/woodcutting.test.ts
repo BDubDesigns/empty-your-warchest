@@ -1,14 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { MemoryStore } from '../src/core';
+import { MemoryStore, Rng } from '../src/core';
 import type { Clearing } from '../src/data';
 import {
   fallProgress,
   fallTimeToReach,
   fallTip,
   fitClearing,
-  judgeChop,
-  meterPosition,
+  judgeSwing,
+  previewFall,
+  pullAmount,
   resolveChain,
+  swingScatter,
   treesHit,
   woodcuttingFeel,
 } from '../src/stations/woodcutting';
@@ -157,33 +159,79 @@ describe('the hand-made clearing', () => {
   });
 });
 
-describe('chop meter', () => {
+describe('axe swing', () => {
   const feel = data.woodcutting.feel;
 
-  it('bounces the cursor end to end', () => {
-    expect(meterPosition(0, 1)).toBe(0);
-    expect(meterPosition(0.5, 1)).toBe(0.5);
-    expect(meterPosition(1, 1)).toBe(1);
-    expect(meterPosition(1.25, 1)).toBe(0.75);
-    expect(meterPosition(2, 1)).toBe(0);
+  it('measures the wind-up from how far the finger is pulled back', () => {
+    expect(pullAmount(10, 24, 100)).toBe(0);
+    expect(pullAmount(74, 24, 100)).toBe(0.5);
+    expect(pullAmount(500, 24, 100)).toBe(1);
   });
 
-  it('judges perfect, good and miss from the windows in data', () => {
-    expect(judgeChop(0.5, feel)).toEqual({ result: 'perfect', points: feel.perfectPoints });
-    expect(judgeChop(0.5 + feel.perfectWindow / 2 + 0.01, feel)).toEqual({
+  it('judges perfect, good and glancing from the bands in data', () => {
+    expect(judgeSwing(feel.swingTarget, feel)).toEqual({
+      result: 'perfect',
+      points: feel.perfectPoints,
+    });
+    expect(judgeSwing(feel.swingTarget + feel.perfectWindow / 2 + 0.01, feel)).toEqual({
       result: 'good',
       points: feel.goodPoints,
     });
-    expect(judgeChop(0.5 + feel.timingWindow / 2 + 0.01, feel)).toEqual({
-      result: 'miss',
+    expect(judgeSwing(feel.swingTarget - feel.timingWindow / 2 - 0.01, feel)).toEqual({
+      result: 'glancing',
       points: 0,
     });
   });
 
-  it('follows the windows when they change', () => {
-    const wide = { ...feel, timingWindow: 0.9 };
-    expect(judgeChop(0.9, wide).result).toBe('good');
-    expect(judgeChop(0.9, feel).result).toBe('miss');
+  it('keeps the aim on a perfect swing and knocks it off on sloppy ones, within the limits in data', () => {
+    const rng = new Rng(1);
+    expect(swingScatter('perfect', feel, rng)).toBe(0);
+    for (let i = 0; i < 200; i++) {
+      expect(Math.abs(swingScatter('good', feel, rng))).toBeLessThanOrEqual(
+        (feel.goodScatter * Math.PI) / 180,
+      );
+      expect(Math.abs(swingScatter('glancing', feel, rng))).toBeLessThanOrEqual(
+        (feel.glancingScatter * Math.PI) / 180,
+      );
+    }
+  });
+
+  it('drifts the same way for the same seed', () => {
+    const drifts = (seed: number) => {
+      const rng = new Rng(seed);
+      return [swingScatter('good', feel, rng), swingScatter('glancing', feel, rng)];
+    };
+    expect(drifts(42)).toEqual(drifts(42));
+  });
+});
+
+describe('aim guide (billiards ghost)', () => {
+  const pair = clearing([
+    { id: 'a', x: 0, y: 100, height: 100 },
+    { id: 'b', x: 90, y: 105, height: 100 },
+  ]);
+
+  it('puts the ghost canopy where it first touches the nearest tree, on its near edge', () => {
+    const preview = previewFall(pair, all(pair), firstOf(pair.trees), RIGHT, STRAIGHT);
+    // Canopies of radius 5 touch at 10 apart: 5 off the line, so √(10² − 5²) ≈ 8.66 short of b.
+    expect(preview.ghost.x).toBeCloseTo(90 - Math.sqrt(75));
+    expect(preview.ghost.y).toBeCloseTo(100);
+    expect(Math.hypot(preview.ghost.x - 90, preview.ghost.y - 105)).toBeCloseTo(10);
+    expect(preview.hit?.tree).toBe('b');
+  });
+
+  it('shows which way the hit tree will go, matching the chain', () => {
+    const rules = { maxDeflection: 60 };
+    const preview = previewFall(pair, all(pair), firstOf(pair.trees), RIGHT, rules);
+    const chain = resolveChain(pair, all(pair), 'a', RIGHT, rules);
+    expect(preview.hit?.angle).toBeCloseTo(chain[1]?.angle ?? NaN);
+    expect(degrees(preview.hit?.angle ?? NaN)).toBe(30);
+  });
+
+  it('falls back to the full reach when nothing is in the way', () => {
+    const preview = previewFall(pair, all(pair), firstOf(pair.trees), LEFT, STRAIGHT);
+    expect(preview.hit).toBeUndefined();
+    expect(preview.ghost.x).toBeCloseTo(-100);
   });
 });
 
@@ -224,6 +272,11 @@ describe('clearing data', () => {
         raw.woodcutting.feel.perfectWindow = 0.8;
       }),
     ).toThrow('perfect window');
+    expect(() =>
+      dataWith((raw) => {
+        raw.woodcutting.feel.swingTarget = 0.95;
+      }),
+    ).toThrow('green band');
   });
 });
 

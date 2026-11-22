@@ -131,12 +131,22 @@ const clearingSchema = z.object({
 
 /** Feel numbers for the woodcutting mini game. The debug menu can override them live. */
 export const woodcuttingFeelSchema = z.object({
-  /** Passes per second the chop meter's cursor makes across the bar. */
-  meterSpeed: positive,
-  /** Share of the meter that counts as a good chop. */
+  /** How far you can pull the axe back from the tree, in clearing units. */
+  maxPull: positive,
+  /** Center of the gold band on the wind-up, as a share of the full pull (0–1). */
+  swingTarget: fraction,
+  /** Width of the green (good) band around swingTarget, as a share of the full pull. */
   timingWindow: fraction,
-  /** Share of the meter that counts as a perfect chop (inside the good window). */
+  /** Width of the gold (perfect) band, inside the green one. */
   perfectWindow: fraction,
+  /** Degrees the axe swings back around its handle at full pull. */
+  windArc: z.number().positive().max(180),
+  /** Seconds for the axe to swing from wound-up into the tree. */
+  swingSeconds: positive,
+  /** Most a good swing can knock the fall direction off, in degrees (perfect: never). */
+  goodScatter: z.number().min(0).max(90),
+  /** Most a glancing swing can knock the fall direction off, in degrees. */
+  glancingScatter: z.number().min(0).max(90),
   /** Chop points needed to fell a tree. */
   chopPoints: positiveInt,
   /** Points for a good chop; a perfect chop gets perfectPoints; a miss gets none. */

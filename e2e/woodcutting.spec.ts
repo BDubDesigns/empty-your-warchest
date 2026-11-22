@@ -28,6 +28,12 @@ async function touchDrag(page: Page, from: { x: number; y: number }, to: { x: nu
   await client.detach();
 }
 
+/** Screen distance from a tree that winds the axe up to the middle of the gold band. */
+function goldPull(scale: number): number {
+  const deadZone = 24;
+  return deadZone + woodcutting.feel.swingTarget * woodcutting.feel.maxPull * scale;
+}
+
 async function phase(page: Page): Promise<string | undefined> {
   return page.evaluate(() => document.body.dataset.woodcutting);
 }
@@ -53,19 +59,23 @@ test('a woodcutting turn: pick, aim, chop, fall, logs to the warchest', async ({
   if (!tree || !next) throw new Error('Clearing needs two trees');
   const from = toScreen(fit, tree);
   const toward = toScreen(fit, next);
-  // Touch the first tree and pull back, away from the second, to aim at it.
-  const pullTo = { x: from.x - (toward.x - from.x) * 0.5, y: from.y - (toward.y - from.y) * 0.5 };
-  await touchDrag(
-    page,
-    { x: box.x + from.x, y: box.y + from.y },
-    { x: box.x + pullTo.x, y: box.y + pullTo.y },
-  );
-  await expect(page.locator('body')).toHaveAttribute('data-woodcutting', 'chop');
-
-  // Chop until the tree goes down; misses score nothing, so this can take a few taps.
-  for (let taps = 0; taps < 80 && (await phase(page)) === 'chop'; taps++) {
-    await page.touchscreen.tap(box.x + box.width / 2, box.y + box.height / 2);
-    await page.waitForTimeout(90);
+  // Pull the axe back, away from the second tree, into the gold band; every release swings.
+  const dx = toward.x - from.x;
+  const dy = toward.y - from.y;
+  const length = Math.hypot(dx, dy);
+  const pull = goldPull(fit.scale);
+  const pullTo = { x: from.x - (dx / length) * pull, y: from.y - (dy / length) * pull };
+  for (
+    let swings = 0;
+    swings < 10 && (swings === 0 || /aim|chop/.test((await phase(page)) ?? ''));
+    swings++
+  ) {
+    await touchDrag(
+      page,
+      { x: box.x + from.x, y: box.y + from.y },
+      { x: box.x + pullTo.x, y: box.y + pullTo.y },
+    );
+    await page.waitForTimeout(400);
   }
   await expect(page.locator('body')).toHaveAttribute('data-woodcutting', /pick|cleared/, {
     timeout: 10_000,

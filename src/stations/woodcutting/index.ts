@@ -2,5 +2,6 @@
 
 export * from './feel';
 export * from './logic/chain';
+export * from './logic/fall';
 export * from './logic/layout';
-export * from './logic/meter';
+export * from './logic/swing';

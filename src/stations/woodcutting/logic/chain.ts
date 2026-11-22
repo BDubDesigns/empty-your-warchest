@@ -111,3 +111,35 @@ export function resolveChain(
   }
   return steps;
 }
+
+export interface FallPreview {
+  /** Where the falling canopy first touches another tree (the ghost ball), or the tip if nothing is hit. */
+  ghost: Point;
+  /** The first tree it would hit, and the way that tree would fall. */
+  hit?: { tree: string; angle: number };
+}
+
+/**
+ * The aim guide, like a billiards ghost ball: where the falling canopy first touches
+ * the nearest tree in its path, and which way that tree would be knocked.
+ */
+export function previewFall(
+  clearing: Clearing,
+  standing: ReadonlySet<string>,
+  tree: ClearingTree,
+  angle: number,
+  rules: ChainRules,
+): FallPreview {
+  const [first] = treesHit(clearing, standing, tree, angle);
+  if (!first) return { ghost: fallTip(tree, angle) };
+  return {
+    ghost: {
+      x: tree.x + Math.cos(angle) * first.contactAt,
+      y: tree.y + Math.sin(angle) * first.contactAt,
+    },
+    hit: {
+      tree: first.tree.id,
+      angle: angle + first.offset * ((rules.maxDeflection * Math.PI) / 180),
+    },
+  };
+}
