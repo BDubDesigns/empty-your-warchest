@@ -128,14 +128,8 @@ function checkReferences(data: GameData, ctx: z.RefinementCtx): void {
       'The perfect window must fit inside the timing window',
     );
   }
-  if (
-    feel.swingTarget - feel.timingWindow / 2 < 0 ||
-    feel.swingTarget + feel.timingWindow / 2 > 1
-  ) {
-    issue(
-      ['woodcutting', 'feel', 'swingTarget'],
-      'The green band must fit inside the full pull (0–1)',
-    );
+  if (feel.timingWindow >= 1) {
+    issue(['woodcutting', 'feel', 'timingWindow'], 'The green zone must be narrower than the bar');
   }
 }
 

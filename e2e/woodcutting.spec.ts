@@ -28,10 +28,24 @@ async function touchDrag(page: Page, from: { x: number; y: number }, to: { x: nu
   await client.detach();
 }
 
-/** Screen distance from a tree that winds the axe up to the middle of the gold band. */
-function goldPull(scale: number): number {
-  const deadZone = 24;
-  return deadZone + woodcutting.feel.swingTarget * woodcutting.feel.maxPull * scale;
+/** Pulls the axe back in the chop box, holds for `holdMs`, and lets go. */
+async function chop(
+  page: Page,
+  box: { x: number; y: number; width: number; height: number },
+  holdMs: number,
+) {
+  const client = await page.context().newCDPSession(page);
+  const start = { x: box.x + box.width * 0.5, y: box.y + box.height - 80 };
+  await client.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [start] });
+  for (let step = 1; step <= 4; step++) {
+    await client.send('Input.dispatchTouchEvent', {
+      type: 'touchMove',
+      touchPoints: [{ x: start.x - step * 25, y: start.y }],
+    });
+  }
+  await page.waitForTimeout(holdMs);
+  await client.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  await client.detach();
 }
 
 async function phase(page: Page): Promise<string | undefined> {
@@ -59,23 +73,22 @@ test('a woodcutting turn: pick, aim, chop, fall, logs to the warchest', async ({
   if (!tree || !next) throw new Error('Clearing needs two trees');
   const from = toScreen(fit, tree);
   const toward = toScreen(fit, next);
-  // Pull the axe back, away from the second tree, into the gold band; every release swings.
+  // Pull back on the first tree, away from the second, and let go: that cuts the notch.
   const dx = toward.x - from.x;
   const dy = toward.y - from.y;
   const length = Math.hypot(dx, dy);
-  const pull = goldPull(fit.scale);
-  const pullTo = { x: from.x - (dx / length) * pull, y: from.y - (dy / length) * pull };
-  for (
-    let swings = 0;
-    swings < 10 && (swings === 0 || /aim|chop/.test((await phase(page)) ?? ''));
-    swings++
-  ) {
-    await touchDrag(
-      page,
-      { x: box.x + from.x, y: box.y + from.y },
-      { x: box.x + pullTo.x, y: box.y + pullTo.y },
-    );
-    await page.waitForTimeout(400);
+  const pullTo = { x: from.x - (dx / length) * 60, y: from.y - (dy / length) * 60 };
+  await touchDrag(
+    page,
+    { x: box.x + from.x, y: box.y + from.y },
+    { x: box.x + pullTo.x, y: box.y + pullTo.y },
+  );
+  await expect(page.locator('body')).toHaveAttribute('data-woodcutting', 'chop');
+
+  // Chop in the box: hold for different times so some releases land in the green or yellow.
+  for (let chops = 0; chops < 40 && (await phase(page)) === 'chop'; chops++) {
+    await chop(page, box, (chops * 137) % 900);
+    await page.waitForTimeout(250);
   }
   await expect(page.locator('body')).toHaveAttribute('data-woodcutting', /pick|cleared/, {
     timeout: 10_000,

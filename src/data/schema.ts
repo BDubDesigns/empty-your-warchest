@@ -131,23 +131,19 @@ const clearingSchema = z.object({
 
 /** Feel numbers for the woodcutting mini game. The debug menu can override them live. */
 export const woodcuttingFeelSchema = z.object({
-  /** How far you can pull the axe back from the tree, in clearing units. */
-  maxPull: positive,
-  /** Center of the gold band on the wind-up, as a share of the full pull (0–1). */
-  swingTarget: fraction,
-  /** Width of the green (good) band around swingTarget, as a share of the full pull. */
+  /** Passes per second the chop bar's marker sweeps across while you hold the axe back. */
+  meterSpeed: positive,
+  /** Width of the green (good) zone around the yellow, as a share of the bar. */
   timingWindow: fraction,
-  /** Width of the gold (perfect) band, inside the green one. */
+  /** Width of the yellow (perfect) zone. It moves to a new spot after every chop. */
   perfectWindow: fraction,
-  /** Degrees the axe swings back around its handle at full pull. */
-  windArc: z.number().positive().max(180),
   /** Seconds for the axe to swing from wound-up into the tree. */
   swingSeconds: positive,
-  /** Most a good swing can knock the fall direction off, in degrees (perfect: never). */
+  /** Most a good chop can knock the fall direction off, in degrees (perfect: never). */
   goodScatter: z.number().min(0).max(90),
-  /** Most a glancing swing can knock the fall direction off, in degrees. */
+  /** Most a glancing chop can knock the fall direction off, in degrees. */
   glancingScatter: z.number().min(0).max(90),
-  /** Chop points needed to fell a tree. */
+  /** Chop points needed to fell a tree, after the notch cut that sets its direction. */
   chopPoints: positiveInt,
   /** Points for a good chop; a perfect chop gets perfectPoints; a miss gets none. */
   goodPoints: nonNegative,

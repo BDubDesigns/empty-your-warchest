@@ -7,8 +7,9 @@ import {
   fallTip,
   fitClearing,
   judgeSwing,
+  markerPosition,
+  nextTarget,
   previewFall,
-  pullAmount,
   resolveChain,
   swingScatter,
   treesHit,
@@ -159,28 +160,39 @@ describe('the hand-made clearing', () => {
   });
 });
 
-describe('axe swing', () => {
+describe('chop bar', () => {
   const feel = data.woodcutting.feel;
 
-  it('measures the wind-up from how far the finger is pulled back', () => {
-    expect(pullAmount(10, 24, 100)).toBe(0);
-    expect(pullAmount(74, 24, 100)).toBe(0.5);
-    expect(pullAmount(500, 24, 100)).toBe(1);
+  it('sweeps the marker end to end while the axe is held back', () => {
+    expect(markerPosition(0, 1)).toBe(0);
+    expect(markerPosition(0.5, 1)).toBe(0.5);
+    expect(markerPosition(1, 1)).toBe(1);
+    expect(markerPosition(1.25, 1)).toBe(0.75);
   });
 
-  it('judges perfect, good and glancing from the bands in data', () => {
-    expect(judgeSwing(feel.swingTarget, feel)).toEqual({
-      result: 'perfect',
-      points: feel.perfectPoints,
-    });
-    expect(judgeSwing(feel.swingTarget + feel.perfectWindow / 2 + 0.01, feel)).toEqual({
+  it('judges yellow, green and glancing around wherever the yellow zone is', () => {
+    expect(judgeSwing(0.3, 0.3, feel)).toEqual({ result: 'perfect', points: feel.perfectPoints });
+    expect(judgeSwing(0.3 + feel.perfectWindow / 2 + 0.01, 0.3, feel)).toEqual({
       result: 'good',
       points: feel.goodPoints,
     });
-    expect(judgeSwing(feel.swingTarget - feel.timingWindow / 2 - 0.01, feel)).toEqual({
+    expect(judgeSwing(0.3 + feel.timingWindow / 2 + 0.01, 0.3, feel)).toEqual({
       result: 'glancing',
       points: 0,
     });
+    expect(judgeSwing(0.8, 0.8, feel).result).toBe('perfect');
+  });
+
+  it('moves the yellow zone to a new spot each chop, always with room for the green', () => {
+    const rng = new Rng(9);
+    const spots = Array.from({ length: 50 }, () => nextTarget(feel, rng));
+    expect(new Set(spots.map((spot) => spot.toFixed(2))).size).toBeGreaterThan(10);
+    for (const spot of spots) {
+      expect(spot - feel.timingWindow / 2).toBeGreaterThanOrEqual(0);
+      expect(spot + feel.timingWindow / 2).toBeLessThanOrEqual(1);
+    }
+    const replay = new Rng(9);
+    expect(Array.from({ length: 50 }, () => nextTarget(feel, replay))).toEqual(spots);
   });
 
   it('keeps the aim on a perfect swing and knocks it off on sloppy ones, within the limits in data', () => {
@@ -274,9 +286,10 @@ describe('clearing data', () => {
     ).toThrow('perfect window');
     expect(() =>
       dataWith((raw) => {
-        raw.woodcutting.feel.swingTarget = 0.95;
+        raw.woodcutting.feel.timingWindow = 1;
+        raw.woodcutting.feel.perfectWindow = 0.1;
       }),
-    ).toThrow('green band');
+    ).toThrow('green zone');
   });
 });
 

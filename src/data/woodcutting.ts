@@ -33,11 +33,9 @@ export const woodcutting = {
     },
   ],
   feel: {
-    maxPull: 110,
-    swingTarget: 0.72,
-    timingWindow: 0.4,
+    meterSpeed: 1.1,
+    timingWindow: 0.32,
     perfectWindow: 0.1,
-    windArc: 110,
     swingSeconds: 0.12,
     goodScatter: 8,
     glancingScatter: 20,
