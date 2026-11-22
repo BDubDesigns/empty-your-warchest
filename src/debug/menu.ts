@@ -39,7 +39,13 @@ function section(title: string, ...children: (Node | string)[]): HTMLElement {
   ]);
 }
 
-function logFile(events: LogEvent[], buildLabel: string): File {
+/**
+ * `text` is the same JSON saved as .txt: Chrome on Android refuses to share .json files
+ * (they're not on its Web Share allow list), but plain text is allowed.
+ */
+type LogFileType = 'json' | 'text';
+
+function logFile(events: LogEvent[], buildLabel: string, type: LogFileType): File {
   const exportedAt = new Date();
   const stamp = exportedAt.toISOString().slice(0, 16).replace(/[-:]/g, '').replace('T', '-');
   const body = JSON.stringify(
@@ -47,7 +53,9 @@ function logFile(events: LogEvent[], buildLabel: string): File {
     null,
     2,
   );
-  return new File([body], `warchest-log-${stamp}.json`, { type: 'application/json' });
+  return type === 'json'
+    ? new File([body], `warchest-log-${stamp}.json`, { type: 'application/json' })
+    : new File([body], `warchest-log-${stamp}.json.txt`, { type: 'text/plain' });
 }
 
 /**
@@ -63,17 +71,32 @@ export function mountDebugMenu(root: HTMLElement, deps: DebugDeps): void {
     status.textContent = message;
   };
 
-  // Logs. Events are read when the menu opens, so the share sheet opens straight
-  // from the tap (phones only allow sharing right after a user gesture).
+  // Logs. Stored events are read when the menu opens, and new ones are added as
+  // they're logged, so the file can be built and shared straight from the tap
+  // (phones only allow sharing right after a user gesture).
   let events: LogEvent[] = [];
+  let loaded = false;
+  let loggedWhileLoading: LogEvent[] = [];
   const logCount = el('p', { textContent: 'Loading…' });
-  const exportFile = (): File => {
-    logger.log('debug.exportLogs', { events: events.length });
-    return logFile(events, deps.buildLabel);
+  const showLogCount = (): void => {
+    const sessions = new Set(events.map((event) => event.session)).size;
+    logCount.textContent = `${events.length} events from ${sessions} session${sessions === 1 ? '' : 's'}`;
+  };
+  logger.onLog((event) => {
+    if (!loaded) {
+      loggedWhileLoading.push(event);
+      return;
+    }
+    events.push(event);
+    showLogCount();
+  });
+  const exportFile = (type: LogFileType): File => {
+    logger.log('debug.exportLogs', { events: events.length + 1, as: type });
+    return logFile(events, deps.buildLabel, type);
   };
   const shareButton = el('button', { type: 'button', textContent: 'Share logs…', disabled: true });
   shareButton.addEventListener('click', () => {
-    const file = exportFile();
+    const file = exportFile('text');
     if (!canShareFile(file)) {
       say(`Sharing isn't available here; downloaded ${file.name} instead`);
       downloadFile(file);
@@ -95,17 +118,25 @@ export function mountDebugMenu(root: HTMLElement, deps: DebugDeps): void {
     disabled: true,
   });
   downloadButton.addEventListener('click', () => {
-    const file = exportFile();
+    const file = exportFile('json');
     downloadFile(file);
     say(`Downloaded ${file.name}`);
   });
   const refreshLogs = (): void => {
+    loaded = false;
+    loggedWhileLoading = [];
     logCount.textContent = 'Loading…';
+    shareButton.disabled = downloadButton.disabled = true;
     logger.readAll().then(
       (all) => {
-        events = all;
-        const sessions = new Set(all.map((event) => event.session)).size;
-        logCount.textContent = `${all.length} events from ${sessions} session${sessions === 1 ? '' : 's'}`;
+        // An event logged during the read may or may not be in `all`; add the ones that aren't.
+        const stored = new Set(all.map((event) => `${event.session}:${event.seq}`));
+        events = [
+          ...all,
+          ...loggedWhileLoading.filter((event) => !stored.has(`${event.session}:${event.seq}`)),
+        ];
+        loaded = true;
+        showLogCount();
         shareButton.disabled = downloadButton.disabled = false;
       },
       (error: unknown) => {
