@@ -44,3 +44,16 @@ describe('EventLogger', () => {
     expect(events.map((event) => event.session)).toEqual(['one', 'two']);
   });
 });
+
+describe('EventLogger listeners', () => {
+  it('hears every event as it is logged, until unsubscribed', () => {
+    const { logger } = testLogger();
+    const heard: string[] = [];
+    const stop = logger.onLog((event) => heard.push(event.type));
+    logger.log('debug.setLevel', { skill: 'woodcutting', level: 50 });
+    logger.log('debug.addItems');
+    stop();
+    logger.log('debug.skipTime');
+    expect(heard).toEqual(['debug.setLevel', 'debug.addItems']);
+  });
+});

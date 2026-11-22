@@ -37,6 +37,7 @@ export class EventLogger {
   readonly session: string;
   readonly #sink: EventSink;
   readonly #clock: Clock;
+  readonly #listeners = new Set<(event: LogEvent) => void>();
   #seq = 0;
   #pending: Promise<void> = Promise.resolve();
 
@@ -49,11 +50,18 @@ export class EventLogger {
   log(type: string, data?: Readonly<Record<string, unknown>>): void {
     const event: LogEvent = { seq: this.#seq++, t: this.#clock.now(), session: this.session, type };
     if (data !== undefined) event.data = data;
+    for (const listener of this.#listeners) listener(event);
     this.#pending = this.#pending
       .then(() => this.#sink.append(event))
       .catch((error: unknown) => {
         console.warn('Could not store log event', type, error);
       });
+  }
+
+  /** Calls `listener` with every event as it's logged. Returns a function that unsubscribes. */
+  onLog(listener: (event: LogEvent) => void): () => void {
+    this.#listeners.add(listener);
+    return () => this.#listeners.delete(listener);
   }
 
   /** Resolves once every event logged so far has been stored. */

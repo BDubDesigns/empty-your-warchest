@@ -59,3 +59,34 @@ test('debug menu adds items, sets levels, keeps them after reload, exports logs 
   await expect(page.getByRole('dialog', { name: 'Debug menu' })).toBeHidden();
   expect(errors).toEqual([]);
 });
+
+test('exported logs include debug actions taken since the menu was opened', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('body')).toHaveAttribute('data-screen', 'phaser');
+  await openDebug(page);
+  await expect(page.getByRole('button', { name: 'Download logs' })).toBeEnabled();
+
+  await page.getByLabel('Woodcutting level').fill('50');
+  await page.locator('[data-skill=woodcutting]').getByRole('button', { name: 'Set' }).tap();
+  await page.getByRole('button', { name: 'Add' }).tap();
+  await page.getByRole('button', { name: '+10 min' }).tap();
+  await page.getByRole('button', { name: 'Reset save' }).tap();
+  await page.getByRole('button', { name: 'Tap again to wipe the save' }).tap();
+
+  const [download] = await Promise.all([
+    page.waitForEvent('download'),
+    page.getByRole('button', { name: 'Download logs' }).tap(),
+  ]);
+  const exported = JSON.parse(await readFile(await download.path(), 'utf8')) as {
+    events: { type: string; data?: Record<string, unknown> }[];
+  };
+  const debugEvents = exported.events.filter((event) => event.type.startsWith('debug.'));
+  expect(debugEvents.map((event) => event.type)).toEqual([
+    'debug.setLevel',
+    'debug.addItems',
+    'debug.skipTime',
+    'debug.resetSave',
+    'debug.exportLogs',
+  ]);
+  expect(debugEvents[0]?.data).toEqual({ skill: 'woodcutting', level: 50 });
+});
