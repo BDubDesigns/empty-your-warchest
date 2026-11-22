@@ -1,3 +1,3 @@
-// Debug menu. Filled in by M1.
+// Debug menu. A small corner button during the prototype; removed before launch.
 
-export {};
+export { mountDebugMenu, type DebugDeps } from './menu';

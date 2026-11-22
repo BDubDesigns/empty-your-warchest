@@ -1,3 +1,5 @@
+import { mountDebugMenu } from '../debug';
+import { bootGame } from './boot';
 import { lazyScreen } from './screen';
 import { ScreenSwitcher } from './screenSwitcher';
 
@@ -12,13 +14,22 @@ function byId(id: string): HTMLElement {
 function showFatal(error: unknown): void {
   const message = document.createElement('pre');
   message.className = 'fatal';
-  message.textContent = `Something broke while starting a screen:\n${String(error)}`;
+  message.textContent = `Something broke:\n${error instanceof Error ? error.message : String(error)}`;
   byId('app').append(message);
 }
 
-/** Boots the app shell: one Phaser screen and one three.js screen, shown one at a time. */
-export function startApp(): void {
+/** Boots the game core, the debug menu, and the app shell's screens. */
+export async function startApp(): Promise<void> {
   byId('build-label').textContent = __BUILD_LABEL__;
+
+  try {
+    const booted = await bootGame(__BUILD_LABEL__);
+    mountDebugMenu(byId('app'), { ...booted, buildLabel: __BUILD_LABEL__ });
+  } catch (error) {
+    // Bad data or a broken save must fail loudly, not leave a half-working game.
+    showFatal(error);
+    return;
+  }
 
   const phaserElement = byId('screen-phaser');
   const threeElement = byId('screen-three');

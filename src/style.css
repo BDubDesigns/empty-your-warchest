@@ -113,3 +113,138 @@ body {
   white-space: pre-wrap;
   font-size: 13px;
 }
+
+/* Debug menu */
+
+.debug-toggle {
+  position: absolute;
+  top: calc(var(--safe-top) + 12px);
+  right: calc(var(--safe-right) + 12px);
+  min-height: 36px;
+  padding: 0 12px;
+  border: 1px solid var(--muted);
+  border-radius: 8px;
+  background: rgb(0 0 0 / 0.4);
+  color: var(--muted);
+  font:
+    600 13px system-ui,
+    sans-serif;
+  touch-action: manipulation;
+}
+
+.debug-panel {
+  position: absolute;
+  inset: 0;
+  overflow-y: auto;
+  padding: calc(var(--safe-top) + 12px) calc(var(--safe-right) + 16px)
+    calc(var(--safe-bottom) + 24px) calc(var(--safe-left) + 16px);
+  background: var(--bg);
+  font-size: 15px;
+  touch-action: pan-y;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.debug-panel[hidden],
+.debug-toggle[hidden] {
+  display: none;
+}
+
+.debug-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+}
+
+.debug-header h1 {
+  margin: 0;
+  font-size: 22px;
+}
+
+.debug-header p {
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.debug-section {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid #33382f;
+}
+
+.debug-section h2 {
+  margin: 0 0 8px;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+.debug-section p {
+  margin: 0 0 8px;
+}
+
+.debug-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.debug-panel button,
+.debug-panel select,
+.debug-panel input {
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid #4a5045;
+  border-radius: 8px;
+  background: #262b24;
+  color: var(--fg);
+  font: inherit;
+  touch-action: manipulation;
+}
+
+.debug-panel input {
+  width: 72px;
+}
+
+.debug-panel button:disabled {
+  opacity: 0.5;
+}
+
+.debug-panel .debug-danger {
+  border-color: #8a3030;
+  color: #f0b0a8;
+}
+
+.debug-close {
+  flex: none;
+}
+
+.debug-status {
+  min-height: 1.4em;
+  color: var(--accent);
+}
+
+.debug-list {
+  margin: 0;
+  padding-left: 20px;
+}
+
+.debug-row[data-skill] {
+  flex-wrap: nowrap;
+}
+
+.debug-skill-name {
+  flex: none;
+  width: 92px;
+}
+
+.debug-skill-level {
+  flex: 1;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 13px;
+}

@@ -1,0 +1,106 @@
+import { describe, expect, it } from 'vitest';
+import {
+  ManualClock,
+  MemoryStore,
+  SAVE_VERSION,
+  SaveStore,
+  type GameState,
+  type LoadResult,
+} from '../src/core';
+import { data, dataWith } from './helpers';
+
+const state: GameState = {
+  inventory: [
+    { item: 'log', count: 7 },
+    { item: 'spear', count: 2, quality: 'poor' },
+    { item: 'spear', count: 3, quality: 'perfect' },
+  ],
+  skills: { woodcutting: 1_154, fletching: 83, command: 0 },
+  lastSeenAt: 5_000,
+};
+
+function discardReason(result: LoadResult): string {
+  if (result.status !== 'discarded')
+    throw new Error(`Expected a discarded save, got ${result.status}`);
+  return result.reason;
+}
+
+function setup(source = data) {
+  const store = new MemoryStore();
+  const clock = new ManualClock(10_000);
+  return { store, clock, saves: new SaveStore(store, source, clock) };
+}
+
+describe('save/load', () => {
+  it('starts fresh when there is no save', () => {
+    const { saves } = setup();
+    const result = saves.load();
+    expect(result.status).toBe('new');
+    expect(result.state).toEqual({
+      inventory: [],
+      skills: { woodcutting: 0, fletching: 0, command: 0 },
+      lastSeenAt: 10_000,
+    });
+  });
+
+  it('round-trips the full state', () => {
+    const { saves } = setup();
+    saves.save(state);
+    expect(saves.load()).toEqual({ status: 'loaded', state });
+  });
+
+  it('survives a second round trip unchanged', () => {
+    const { store, saves } = setup();
+    saves.save(state);
+    const first = store.get('warchest.save');
+    const loaded = saves.load();
+    saves.save(loaded.state);
+    expect(store.get('warchest.save')).toBe(first);
+  });
+
+  it('discards a corrupt save', () => {
+    const { store, saves } = setup();
+    store.set('warchest.save', '{not json');
+    const result = saves.load();
+    expect(result.status).toBe('discarded');
+    expect(result.state.inventory).toEqual([]);
+  });
+
+  it('discards a save from another version', () => {
+    const { store, saves } = setup();
+    store.set('warchest.save', JSON.stringify({ version: SAVE_VERSION + 1, savedAt: 0, state }));
+    const result = saves.load();
+    expect(discardReason(result)).toContain('version');
+  });
+
+  it('discards a save that no longer fits the data', () => {
+    const { store, saves } = setup();
+    saves.save(state);
+    const changed = dataWith((raw) => {
+      raw.items = raw.items.filter((item) => item.id !== 'spear');
+      raw.recipes = raw.recipes.filter((recipe) => recipe.id !== 'harden_spear');
+      raw.units = [];
+      raw.levels = [];
+    });
+    const withoutSpears = new SaveStore(store, changed, new ManualClock(0));
+    expect(discardReason(withoutSpears.load())).toContain('spear');
+  });
+
+  it('discards a save when the skills in data change', () => {
+    const { store, saves } = setup();
+    saves.save(state);
+    const withMining = dataWith((raw) => {
+      raw.skills.push({ id: 'mining', name: 'Mining' });
+    });
+    const result = new SaveStore(store, withMining, new ManualClock(0)).load();
+    expect(discardReason(result)).toContain('mining');
+  });
+
+  it('reset deletes the save', () => {
+    const { store, saves } = setup();
+    saves.save(state);
+    saves.reset();
+    expect(store.get('warchest.save')).toBeNull();
+    expect(saves.load().status).toBe('new');
+  });
+});
