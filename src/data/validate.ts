@@ -1,0 +1,122 @@
+import { z } from 'zod';
+import { gameDataShape, type GameData } from './schema';
+
+type Path = (string | number)[];
+
+/** Checks that every reference between data files points at something that exists. */
+function checkReferences(data: GameData, ctx: z.RefinementCtx): void {
+  const issue = (path: Path, message: string): void => {
+    ctx.addIssue({ code: 'custom', path, message });
+  };
+
+  const ids = (key: keyof GameData, list: readonly { id: string }[]) => {
+    const seen = new Set<string>();
+    list.forEach((entry, index) => {
+      if (seen.has(entry.id)) issue([key, index, 'id'], `Duplicate id "${entry.id}"`);
+      seen.add(entry.id);
+    });
+    return seen;
+  };
+  const qualities = ids('qualities', data.qualities);
+  const skills = ids('skills', data.skills);
+  const itemIds = ids('items', data.items);
+  const stations = ids('stations', data.stations);
+  ids('recipes', data.recipes);
+  const units = ids('units', data.units);
+  const enemies = ids('enemies', data.enemies);
+  ids('levels', data.levels);
+
+  const tiered = new Set(data.items.filter((item) => item.tiered).map((item) => item.id));
+
+  const coversAllQualities = (path: Path, record: Record<string, number>): void => {
+    for (const quality of qualities) {
+      if (!(quality in record)) issue(path, `Missing a value for quality "${quality}"`);
+    }
+    for (const key of Object.keys(record)) {
+      if (!qualities.has(key)) issue(path, `Unknown quality "${key}"`);
+    }
+  };
+
+  data.stations.forEach((station, index) => {
+    if (!skills.has(station.skill)) {
+      issue(['stations', index, 'skill'], `Unknown skill "${station.skill}"`);
+    }
+  });
+
+  data.recipes.forEach((recipe, index) => {
+    if (!stations.has(recipe.station)) {
+      issue(['recipes', index, 'station'], `Unknown station "${recipe.station}"`);
+    }
+    for (const side of ['inputs', 'outputs'] as const) {
+      recipe[side].forEach((stack, stackIndex) => {
+        const path = ['recipes', index, side, stackIndex];
+        if (!itemIds.has(stack.item)) {
+          issue([...path, 'item'], `Unknown item "${stack.item}"`);
+          return;
+        }
+        if (stack.quality !== undefined) {
+          if (!tiered.has(stack.item)) {
+            issue([...path, 'quality'], `"${stack.item}" has no quality tiers`);
+          } else if (!qualities.has(stack.quality)) {
+            issue([...path, 'quality'], `Unknown quality "${stack.quality}"`);
+          }
+        } else if (side === 'inputs' && tiered.has(stack.item)) {
+          issue([...path, 'quality'], `Tiered input "${stack.item}" needs a quality`);
+        }
+      });
+    }
+  });
+
+  data.units.forEach((unit, index) => {
+    const path = ['units', index, 'weapon'];
+    if (!itemIds.has(unit.weapon.item)) {
+      issue([...path, 'item'], `Unknown item "${unit.weapon.item}"`);
+    } else if (!tiered.has(unit.weapon.item)) {
+      issue([...path, 'item'], `Weapon "${unit.weapon.item}" must be a tiered item`);
+    }
+    coversAllQualities([...path, 'damageByQuality'], unit.weapon.damageByQuality);
+  });
+
+  data.levels.forEach((level, index) => {
+    const path = ['levels', index];
+    if (!units.has(level.unit)) issue([...path, 'unit'], `Unknown unit "${level.unit}"`);
+    let previousAt = -1;
+    level.events.forEach((event, eventIndex) => {
+      const eventPath = [...path, 'events', eventIndex];
+      if (event.at < previousAt) issue([...eventPath, 'at'], 'Events must be in track order');
+      previousAt = event.at;
+      if (event.type === 'enemies' && !enemies.has(event.enemy)) {
+        issue([...eventPath, 'enemy'], `Unknown enemy "${event.enemy}"`);
+      }
+      if (event.type === 'gates') {
+        for (const side of ['left', 'right'] as const) {
+          const gate = event[side];
+          if (gate.flippable && (gate.op === 'add' || gate.op === 'multiply')) {
+            issue([...eventPath, side], 'Only negative gates (subtract, divide) can be flippable');
+          }
+        }
+      }
+    });
+    const walls = level.events.filter((event) => event.type === 'wall').length;
+    if (walls !== 1 || level.events.at(-1)?.type !== 'wall') {
+      issue([...path, 'events'], 'A level needs exactly one wall, as its last event');
+    }
+  });
+
+  coversAllQualities(['tuning', 'weaponRecoveryOnWin'], data.tuning.weaponRecoveryOnWin);
+}
+
+export const gameDataSchema = gameDataShape.superRefine(checkReferences);
+
+export class GameDataError extends Error {
+  override name = 'GameDataError';
+}
+
+/** Validates raw game data. Bad data throws with every problem listed, so it fails loudly at startup. */
+export function parseGameData(raw: unknown): GameData {
+  const result = gameDataSchema.safeParse(raw);
+  if (!result.success) {
+    throw new GameDataError(`Game data is invalid:\n${z.prettifyError(result.error)}`);
+  }
+  return result.data;
+}

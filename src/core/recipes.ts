@@ -1,0 +1,70 @@
+import type { Recipe } from '../data';
+import type { Inventory, Stack } from './inventory';
+
+/** What the mini game decided about one craft. */
+export interface CraftOutcome {
+  /** How many times the recipe runs (e.g. a full rack of staves). Default 1. */
+  batches?: number;
+  /** Tier for tiered outputs that the recipe leaves open (e.g. how well a spear was hardened). */
+  outputQuality?: string;
+  /** Multiplies outputs, e.g. 2 when a perfect trace splits two staves from one log. Default 1. */
+  outputMultiplier?: number;
+}
+
+export interface CraftResult {
+  consumed: Stack[];
+  produced: Stack[];
+  xp: number;
+}
+
+function wholeAtLeastOne(value: number, label: string): number {
+  if (!Number.isInteger(value) || value < 1) {
+    throw new RangeError(`${label} must be a whole number of at least 1, got ${value}`);
+  }
+  return value;
+}
+
+export function canCraft(inventory: Inventory, recipe: Recipe, batches = 1): boolean {
+  return recipe.inputs.every((input) =>
+    inventory.has(input.item, input.count * batches, input.quality),
+  );
+}
+
+/**
+ * Runs a recipe from data: takes its inputs out of the inventory and adds its outputs.
+ * Nothing changes if the inputs aren't there.
+ */
+export function craft(
+  inventory: Inventory,
+  recipe: Recipe,
+  outcome: CraftOutcome = {},
+): CraftResult {
+  const batches = wholeAtLeastOne(outcome.batches ?? 1, 'batches');
+  const multiplier = wholeAtLeastOne(outcome.outputMultiplier ?? 1, 'outputMultiplier');
+
+  const consumed = recipe.inputs.map((input) => ({ ...input, count: input.count * batches }));
+  const missing = consumed.filter(
+    (stack) => !inventory.has(stack.item, stack.count, stack.quality),
+  );
+  if (missing.length > 0) {
+    const list = missing.map((stack) => `${stack.count} ${stack.item}`).join(', ');
+    throw new Error(`Can't run "${recipe.id}": missing ${list}`);
+  }
+
+  const produced = recipe.outputs.map((output): Stack => {
+    const quality =
+      output.quality ?? (inventory.isTiered(output.item) ? outcome.outputQuality : undefined);
+    if (inventory.isTiered(output.item) && quality === undefined) {
+      throw new Error(
+        `"${recipe.id}" makes tiered "${output.item}"; the outcome needs an outputQuality`,
+      );
+    }
+    return { item: output.item, count: output.count * batches * multiplier, quality };
+  });
+
+  // Reading each output's count throws on a bad item or tier, before anything is changed.
+  for (const stack of produced) inventory.count(stack.item, stack.quality);
+  for (const stack of consumed) inventory.remove(stack.item, stack.count, stack.quality);
+  for (const stack of produced) inventory.add(stack.item, stack.count, stack.quality);
+  return { consumed, produced, xp: recipe.xp * batches };
+}
