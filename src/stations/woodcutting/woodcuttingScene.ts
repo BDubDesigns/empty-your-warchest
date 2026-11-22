@@ -18,7 +18,15 @@ export interface WoodcuttingDeps {
 type Phase =
   | { kind: 'pick' }
   /** `angle` is undefined until the finger moves away from the tree. `held` is true while pressed. */
-  | { kind: 'aim'; tree: string; angle?: number | undefined; held: boolean; startedAt: number }
+  | {
+      kind: 'aim';
+      tree: string;
+      angle?: number | undefined;
+      /** Where the finger is while pulling, in screen pixels. */
+      pull?: { x: number; y: number } | undefined;
+      held: boolean;
+      startedAt: number;
+    }
   | { kind: 'chop'; tree: string; angle: number; points: number; startedAt: number }
   | { kind: 'falling' }
   | { kind: 'cleared' };
@@ -190,8 +198,8 @@ export class WoodcuttingScene extends Phaser.Scene {
     // Lets the e2e test follow the round.
     document.body.dataset.woodcutting = phase.kind;
     const hints: Record<Phase['kind'], string> = {
-      pick: 'Touch a tree and drag to aim',
-      aim: 'Drag toward where it should fall, then let go',
+      pick: 'Touch a tree and pull back to aim',
+      aim: 'Pull away from where it should fall, then let go',
       chop: 'Tap on gold for a perfect chop, green for a good one',
       falling: '',
       cleared: '',
@@ -210,7 +218,12 @@ export class WoodcuttingScene extends Phaser.Scene {
       this.#deps.logger.log('woodcutting.select', { tree: tree.id });
     } else if (phase.kind === 'aim') {
       // A second press aims again from wherever the finger is.
-      this.#phase = { ...phase, held: true, angle: this.#angleTo(phase.tree, x, y) ?? phase.angle };
+      this.#phase = {
+        ...phase,
+        held: true,
+        pull: { x, y },
+        angle: this.#angleTo(phase.tree, x, y) ?? phase.angle,
+      };
     } else if (phase.kind === 'chop') {
       this.#chop(phase);
     }
@@ -219,7 +232,11 @@ export class WoodcuttingScene extends Phaser.Scene {
   #onDrag(x: number, y: number): void {
     const phase = this.#phase;
     if (phase.kind !== 'aim' || !phase.held) return;
-    this.#phase = { ...phase, angle: this.#angleTo(phase.tree, x, y) ?? phase.angle };
+    this.#phase = {
+      ...phase,
+      pull: { x, y },
+      angle: this.#angleTo(phase.tree, x, y) ?? phase.angle,
+    };
   }
 
   #onRelease(x: number, y: number): void {
@@ -228,7 +245,7 @@ export class WoodcuttingScene extends Phaser.Scene {
     const angle = this.#angleTo(phase.tree, x, y);
     if (angle === undefined) {
       // Let go on the tree itself: keep it selected and wait for a drag.
-      this.#phase = { ...phase, held: false };
+      this.#phase = { ...phase, held: false, pull: undefined };
       return;
     }
     this.#setPhase({ kind: 'chop', tree: phase.tree, angle, points: 0, startedAt: this.#now });
@@ -239,11 +256,14 @@ export class WoodcuttingScene extends Phaser.Scene {
     });
   }
 
-  /** Direction from a tree to the finger, or undefined while the finger is still on the tree. */
+  /**
+   * Pull-back aiming, like a slingshot: the tree falls away from the finger.
+   * Undefined while the finger is still on the tree.
+   */
   #angleTo(treeId: string, x: number, y: number): number | undefined {
     const base = toScreen(this.#fit(), this.#tree(treeId));
     if (Math.hypot(x - base.x, y - base.y) < AIM_DEAD_ZONE) return undefined;
-    return Math.atan2(y - base.y, x - base.x);
+    return Math.atan2(base.y - y, base.x - x);
   }
 
   #treeAt(x: number, y: number): ClearingTree | undefined {
@@ -442,6 +462,16 @@ export class WoodcuttingScene extends Phaser.Scene {
       const tree = this.#tree(phase.tree);
       const base = toScreen(fit, tree);
       g.lineStyle(3, theme.accentHex, 1).strokeCircle(base.x, base.y, canopy + 5);
+      if (phase.kind === 'aim' && phase.held && phase.pull) {
+        // Tether from the tree to the finger, so the pull reads like a rope or slingshot
+        g.lineStyle(3, theme.accentHex, 0.5).lineBetween(
+          base.x,
+          base.y,
+          phase.pull.x,
+          phase.pull.y,
+        );
+        g.fillStyle(theme.accentHex, 0.8).fillCircle(phase.pull.x, phase.pull.y, 6);
+      }
       const angle = phase.angle;
       if (angle !== undefined) {
         const tip = toScreen(fit, fallTip(tree, angle));

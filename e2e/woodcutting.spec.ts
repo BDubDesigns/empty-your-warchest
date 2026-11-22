@@ -53,11 +53,12 @@ test('a woodcutting turn: pick, aim, chop, fall, logs to the warchest', async ({
   if (!tree || !next) throw new Error('Clearing needs two trees');
   const from = toScreen(fit, tree);
   const toward = toScreen(fit, next);
-  // Touch the first tree and drag toward the second to aim at it.
+  // Touch the first tree and pull back, away from the second, to aim at it.
+  const pullTo = { x: from.x - (toward.x - from.x) * 0.5, y: from.y - (toward.y - from.y) * 0.5 };
   await touchDrag(
     page,
     { x: box.x + from.x, y: box.y + from.y },
-    { x: box.x + toward.x, y: box.y + toward.y },
+    { x: box.x + pullTo.x, y: box.y + pullTo.y },
   );
   await expect(page.locator('body')).toHaveAttribute('data-woodcutting', 'chop');
 
@@ -123,4 +124,38 @@ test('the live tuning panel changes feel values and logs it', async ({ page }) =
     }),
   );
   expect(exported.events.map((event) => event.type)).toContain('debug.tuneReset');
+});
+
+test('pulling back aims the opposite way', async ({ page }) => {
+  if (!treeLine || !clearing) throw new Error('Missing tree line or clearing in data');
+  await page.goto('/');
+  await expect(page.locator('body')).toHaveAttribute('data-view', 'camp');
+  let box = await canvasBox(page);
+  await page.touchscreen.tap(
+    box.x + box.width * treeLine.camp.x,
+    box.y + box.height * treeLine.camp.y,
+  );
+  await expect(page.locator('body')).toHaveAttribute('data-woodcutting', 'pick');
+  box = await canvasBox(page);
+  const fit = fitClearing(box.width, box.height, clearing);
+  const [tree] = clearing.trees;
+  if (!tree) throw new Error('Clearing has no trees');
+  const from = toScreen(fit, tree);
+  // Pull straight up: the tree should be aimed straight down (90°).
+  await touchDrag(
+    page,
+    { x: box.x + from.x, y: box.y + from.y },
+    { x: box.x + from.x, y: box.y + from.y - 60 },
+  );
+  await expect(page.locator('body')).toHaveAttribute('data-woodcutting', 'chop');
+
+  await page.getByRole('button', { name: 'Back to camp' }).tap();
+  await page.getByRole('button', { name: 'Open debug menu' }).tap();
+  const download = page.getByRole('button', { name: 'Download logs' });
+  await expect(download).toBeEnabled();
+  const [file] = await Promise.all([page.waitForEvent('download'), download.tap()]);
+  const exported = JSON.parse(await readFile(await file.path(), 'utf8')) as {
+    events: { type: string; data?: { angle?: number } }[];
+  };
+  expect(exported.events.find((event) => event.type === 'woodcutting.aim')?.data?.angle).toBe(90);
 });
