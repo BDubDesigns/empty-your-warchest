@@ -63,6 +63,18 @@ describe('WoodcuttingRound', () => {
     expect(round.logs).toBe(16);
     expect(events).toContainEqual({ type: 'banked', trees: 4, logs: 16 });
     expect(events.filter((event) => event.type === 'landed')).toHaveLength(4);
+    // Each tree the chain knocks over is hit once, before it lands.
+    const order = events.flatMap((event) =>
+      event.type === 'hit' || event.type === 'landed' ? [`${event.type} ${event.step.tree}`] : [],
+    );
+    expect(order.filter((entry) => entry.startsWith('hit'))).toEqual([
+      'hit a2',
+      'hit a3',
+      'hit a4',
+    ]);
+    for (const tree of ['a2', 'a3', 'a4']) {
+      expect(order.indexOf(`hit ${tree}`)).toBeLessThan(order.indexOf(`landed ${tree}`));
+    }
 
     const types = (await logger.readAll()).map((event) => event.type);
     expect(types).toEqual(

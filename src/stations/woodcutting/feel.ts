@@ -19,6 +19,18 @@ export const woodcuttingTunables: readonly Tunable[] = [
   { key: 'chainDelay', label: 'Chain delay (s)', min: 0, max: 0.6, step: 0.02 },
   { key: 'shakeStrength', label: 'Shake strength', min: 0, max: 3, step: 0.1 },
   { key: 'hitStopMs', label: 'Hit-stop (ms)', min: 0, max: 200, step: 10 },
+  { key: 'buzzChopMs', label: 'Vibrate: chop (ms)', min: 0, max: 60, step: 1 },
+  { key: 'buzzPerfectMs', label: 'Vibrate: perfect chop (ms)', min: 0, max: 60, step: 1 },
+  { key: 'buzzHitMs', label: 'Vibrate: tree hits tree (ms)', min: 0, max: 60, step: 1 },
+  { key: 'buzzLandMs', label: 'Vibrate: landing (ms)', min: 0, max: 60, step: 1 },
+  {
+    key: 'buzzLandPerTreeMs',
+    label: 'Vibrate: landing, + per tree (ms)',
+    min: 0,
+    max: 20,
+    step: 1,
+  },
+  { key: 'buzzLandMaxMs', label: 'Vibrate: landing, max (ms)', min: 0, max: 100, step: 1 },
 ];
 
 export function woodcuttingFeel(

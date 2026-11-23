@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { Game } from '../core';
 import type { GameData } from '../data';
+import type { Haptics } from './haptics';
 import { loadModel } from './models';
 import { warchestRows } from '../camp/warchestRows';
 import { Sfx } from './sfx';
@@ -31,12 +32,11 @@ const LID_OPEN = 1.7;
  * chest's wobble rings for a moment. */
 const LID_SPRING = { stiffness: 220, damping: 16 };
 const WOBBLE_SPRING = { stiffness: 380, damping: 6 };
-/** Short buzzes on phones that support them, in ms. */
-const BUZZ = { open: 12, slam: 8 };
-
-/** A short buzz, where the phone supports it (iPhones don't). */
-function buzz(ms: number): void {
-  if ('vibrate' in navigator) navigator.vibrate(ms);
+export interface HudDeps {
+  game: Game;
+  /** The item this station collects, which the chest counts. */
+  item: string;
+  haptics: Haptics;
 }
 
 /** A point on the screen, in CSS pixels from the HUD's top-left corner. */
@@ -71,6 +71,7 @@ export class WarchestHud {
   readonly #element: HTMLElement;
   readonly #game: Game;
   readonly #item: string;
+  readonly #haptics: Haptics;
   readonly #pour: GameData['warchest']['pour'];
   readonly #renderer: THREE.WebGLRenderer;
   readonly #scene = new THREE.Scene();
@@ -106,12 +107,13 @@ export class WarchestHud {
 
   private constructor(
     element: HTMLElement,
-    deps: { game: Game; item: string },
+    deps: HudDeps,
     models: { chest: THREE.Object3D; log: THREE.Object3D },
   ) {
     this.#element = element;
     this.#game = deps.game;
     this.#item = deps.item;
+    this.#haptics = deps.haptics;
     this.#pour = deps.game.data.warchest.pour;
     this.#sfx.load(SOUNDS);
 
@@ -185,7 +187,7 @@ export class WarchestHud {
     this.#resize();
   }
 
-  static async create(element: HTMLElement, deps: { game: Game; item: string }) {
+  static async create(element: HTMLElement, deps: HudDeps) {
     const [chest, log] = await Promise.all([loadModel(MODELS.chest), loadModel(MODELS.log)]);
     return new WarchestHud(element, deps, { chest, log });
   }
@@ -267,7 +269,7 @@ export class WarchestHud {
     this.#lidVelocity += 4;
     this.#bump = 1.2;
     this.#kick(9);
-    buzz(BUZZ.open);
+    this.#haptics.pulse(this.#game.data.warchest.haptics.openMs);
     this.#panel.open(this.#rows(), this.#chestPoint());
     this.#sfx.play('panel-open', 0.5);
     this.#anchor.dataset.open = 'true';
@@ -298,7 +300,7 @@ export class WarchestHud {
       this.#sfx.play('chest-close', 0.6);
       this.#bump = 1.4;
       this.#kick(4);
-      buzz(BUZZ.slam);
+      this.#haptics.pulse(this.#game.data.warchest.haptics.slamMs);
     }
     this.#start();
   }

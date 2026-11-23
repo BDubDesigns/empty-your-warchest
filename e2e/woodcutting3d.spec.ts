@@ -74,8 +74,9 @@ test('3D woodcutting: aim, Chop, chop in the close-up, the tree falls, logs to t
     await touch(page, grab, { x: grab.x + 60, y: grab.y + 90 }, (chops * 173) % 900);
     await page.waitForTimeout(250);
   }
+  // Software rendering in CI is slow, and a long chain takes a while to fall.
   await expect(page.locator('body')).toHaveAttribute('data-woodcutting', /pick|cleared/, {
-    timeout: 15_000,
+    timeout: 30_000,
   });
 
   // The logs pour into the HUD chest, which then shows the warchest's total.

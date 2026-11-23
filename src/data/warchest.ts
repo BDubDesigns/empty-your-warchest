@@ -11,4 +11,5 @@ export const warchest = {
     arcHeight: 0.35,
     closeDelay: 0.6,
   },
+  haptics: { openMs: 12, slamMs: 8 },
 } satisfies GameDataInput['warchest'];
