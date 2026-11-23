@@ -72,3 +72,9 @@ test('the level bar shows the woodcutting level and flashes when it goes up', as
   await expect(bar).toHaveText(/Woodcutting 13/);
   await expect(bar).toHaveClass(/skill-bar-up/);
 });
+
+test('the first random clearing has a cabin and warns about it once', async ({ page }) => {
+  test.setTimeout(60_000);
+  await openTreeLineAt(page, 1);
+  await expect(page.locator('.w3d-hint')).toHaveText(/cabin/);
+});

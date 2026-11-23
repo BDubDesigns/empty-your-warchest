@@ -472,6 +472,10 @@ body:not([data-view='camp']) #build-label {
   color: var(--muted);
 }
 
+.w3d-danger {
+  color: #f0705c;
+}
+
 @keyframes w3d-rise {
   from {
     transform: translateY(0);
@@ -1205,4 +1209,10 @@ body:not([data-view='camp']) #build-label {
   .skill-bar-fill {
     transition: none;
   }
+}
+
+/* The one-time cabin and rocks hint, the first clearing with them. */
+.w3d-hint.w3d-hint-warn {
+  color: #ffd2c8;
+  font-weight: 700;
 }
