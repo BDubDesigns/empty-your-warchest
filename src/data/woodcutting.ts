@@ -5,6 +5,11 @@ import type { GameDataInput } from './schema';
 export const woodcutting = {
   recipe: 'fell_tree',
   chainExponent: 2,
+  comboCallouts: [
+    { trees: 4, text: 'Nice!' },
+    { trees: 5, text: 'Huge!' },
+    { trees: 6, text: 'Paul Bunyan!' },
+  ],
   clearings: [
     {
       id: 'first_clearing',
@@ -48,9 +53,9 @@ export const woodcutting = {
     fullPullPoints: 3,
     perfectBonus: 1,
     fineAimStep: 1,
-    fallSeconds: 0.9,
+    fallSeconds: 1.5,
     fallEase: 2.5,
-    chainDelay: 0.12,
+    chainDelay: 0.22,
     shakeStrength: 1,
     hitStopMs: 70,
   },

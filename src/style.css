@@ -502,13 +502,40 @@ body:not([data-view='camp']) #build-label {
   position: absolute;
   left: 0;
   right: 0;
-  top: 38%;
+  top: 34%;
+  display: grid;
+  justify-items: center;
   text-align: center;
-  font:
-    900 42px system-ui,
-    sans-serif;
-  text-shadow: 0 3px 6px rgb(0 0 0 / 0.8);
+  color: var(--combo-color, #fff);
+  text-shadow:
+    0 3px 6px rgb(0 0 0 / 0.8),
+    0 0 18px rgb(0 0 0 / 0.35);
   opacity: 0;
+  pointer-events: none;
+}
+
+.w3d-count {
+  font:
+    900 var(--combo-size, 42px) system-ui,
+    sans-serif;
+  line-height: 1.05;
+}
+
+.w3d-callout {
+  font:
+    900 calc(var(--combo-size, 42px) * 0.6) system-ui,
+    sans-serif;
+}
+
+.w3d-callout:empty {
+  display: none;
+}
+
+.w3d-worth {
+  font:
+    800 calc(var(--combo-size, 42px) * 0.5) system-ui,
+    sans-serif;
+  color: #f0cd5c;
 }
 
 .w3d-pop {
@@ -517,7 +544,7 @@ body:not([data-view='camp']) #build-label {
 
 @keyframes w3d-pop {
   0% {
-    transform: scale(1.5);
+    transform: scale(var(--combo-pop, 1.5));
     opacity: 1;
   }
   20% {

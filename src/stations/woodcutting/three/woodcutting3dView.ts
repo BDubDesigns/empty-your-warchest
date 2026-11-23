@@ -7,7 +7,7 @@ import type { EventLogger, Game, LiveTuning } from '../../../core';
 import type { Clearing, ClearingTree, WoodcuttingFeel } from '../../../data';
 import { fallTip, previewFall, trunkAngles, type FallStep, type Point } from '../logic/chain';
 import { fallTilt } from '../logic/fall';
-import { WoodcuttingRound, type RoundEvent } from '../logic/round';
+import { WoodcuttingRound, chainLogs, type RoundEvent } from '../logic/round';
 
 export interface Woodcutting3DDeps {
   game: Game;
@@ -52,6 +52,8 @@ const SOUNDS: Record<string, string> = Object.fromEntries(
     'land-3',
   ].map((name) => [name, `audio/woodcutting/${name}.mp3`]),
 );
+/** The chain counter's colour by length: 2 trees, 3, 4, 5, 6, 7+. */
+const COMBO_COLORS = ['#ffffff', '#fbe7a6', '#f6cf5a', '#f4a63a', '#f07f2c', '#ee5b2a'];
 const COLORS = {
   sky: 0xa9cfe0,
   grass: 0x5d8c46,
@@ -403,6 +405,13 @@ export class Woodcutting3DView implements ScreenView {
   }
 
   #buildTrees(): void {
+    // Switching tree style mid-round rebuilds every tree: keep which ones are already down (and
+    // being hauled off), or they'd pop back up looking standing when they aren't.
+    const fallen = new Map(
+      [...this.#trees.values()].flatMap((visual) =>
+        visual.fallen ? [[visual.tree.id, { ...visual.fallen }] as const] : [],
+      ),
+    );
     for (const carver of this.#carvers.values()) carver.dispose();
     this.#carvers.clear();
     for (const visual of this.#trees.values()) this.#scene.remove(visual.root);
@@ -433,7 +442,8 @@ export class Woodcutting3DView implements ScreenView {
       stump.visible = false;
       root.add(stump);
       this.#scene.add(root);
-      this.#trees.set(tree.id, { tree, root, trunks, stump });
+      const down = fallen.get(tree.id);
+      this.#trees.set(tree.id, { tree, root, trunks, stump, ...(down ? { fallen: down } : {}) });
     }
   }
 
@@ -1099,9 +1109,15 @@ export class Woodcutting3DView implements ScreenView {
           this.#burst('dust', this.#world(fallTip(visual.tree, trunk), 0.2), 10);
         }
       }
-      this.#play(`land-${1 + Math.floor(Math.random() * 3)}`, 0.85);
-      this.#shake = Math.min(0.05 + event.step.depth * 0.02, 0.15) * feel.shakeStrength;
-      if (event.count > 1) this.#showCounter(event.count);
+      // Every tree a chain adds lands heavier: a deeper thud and more shake.
+      const combo = event.count;
+      this.#play(
+        `land-${1 + Math.floor(Math.random() * 3)}`,
+        Math.min(0.85 + combo * 0.05, 1),
+        -Math.min((combo - 1) * 90, 450),
+      );
+      this.#shake = Math.min(0.05 + combo * 0.025, 0.22) * feel.shakeStrength;
+      if (combo > 1) this.#showCounter(combo);
     } else if (event.type === 'banked') {
       for (const visual of this.#trees.values()) {
         if (visual.fallen && visual.fallen.sinkAt === undefined)
@@ -1112,15 +1128,16 @@ export class Woodcutting3DView implements ScreenView {
         trees > 1 && logs === trees * trees
           ? `${trees} × ${trees} = ${logs} logs!`
           : `+${logs} log${logs === 1 ? '' : 's'}`;
-      this.#flash(sum, trees > 1 ? 'perfect' : 'good');
+      // Bigger chains, bigger payout.
+      this.#flash(sum, trees > 1 ? 'perfect' : 'good', Math.min(22 + (trees - 1) * 4, 40));
     } else {
       this.#ui.summaryText.textContent = `${this.#round.felled} trees · ${this.#round.logs} logs to the warchest`;
       this.#ui.summary.hidden = false;
     }
   }
 
-  #play(name: string, volume: number): void {
-    this.#sfx.play(name, volume, (Math.random() - 0.5) * 240);
+  #play(name: string, volume: number, pitchCents = 0): void {
+    this.#sfx.play(name, volume, pitchCents + (Math.random() - 0.5) * 240);
   }
 
   #burst(kind: 'chip' | 'dust', at: THREE.Vector3, count: number, toward?: THREE.Vector3): void {
@@ -1429,8 +1446,9 @@ export class Woodcutting3DView implements ScreenView {
     this.#element.dataset.trees = JSON.stringify(positions);
   }
 
-  #flash(message: string, tone: 'perfect' | 'good' | 'glancing'): void {
+  #flash(message: string, tone: 'perfect' | 'good' | 'glancing', size = 22): void {
     const flash = document.createElement('div');
+    flash.style.fontSize = `${size}px`;
     flash.className = `w3d-flash w3d-${tone}`;
     flash.textContent = message;
     this.#ui.flashes.append(flash);
@@ -1439,9 +1457,31 @@ export class Woodcutting3DView implements ScreenView {
     }, 900);
   }
 
+  /**
+   * The chain counter: it grows, warms from white to gold to orange, shows the logs the chain
+   * is worth so far (they go up by the square), and shouts a callout from data as it gets long.
+   */
   #showCounter(trees: number): void {
-    const counter = this.#ui.counter;
-    counter.textContent = `${trees} trees!`;
+    const { counter } = this.#ui;
+    const { chainExponent, comboCallouts } = this.#deps.game.data.woodcutting;
+    const callout = comboCallouts.filter((entry) => trees >= entry.trees).at(-1);
+    const logs = chainLogs(trees, chainExponent);
+    counter.replaceChildren(
+      ...[
+        ['w3d-count', `${trees} trees!`],
+        ['w3d-callout', callout?.text ?? ''],
+        ['w3d-worth', `${logs} logs`],
+      ].map(([className, text]) => {
+        const line = document.createElement('div');
+        line.className = className ?? '';
+        line.textContent = text ?? '';
+        return line;
+      }),
+    );
+    const level = Math.min(trees - 2, 5);
+    counter.style.setProperty('--combo-size', `${42 + level * 9}px`);
+    counter.style.setProperty('--combo-color', COMBO_COLORS[level] ?? '#ffffff');
+    counter.style.setProperty('--combo-pop', `${1.5 + level * 0.15}`);
     // Restart the pop animation.
     counter.classList.remove('w3d-pop');
     counter.getBoundingClientRect();

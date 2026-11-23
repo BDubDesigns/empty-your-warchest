@@ -6,11 +6,11 @@ test('the live tuning panel changes feel values and logs it', async ({ page }) =
   await expect(page.locator('body')).toHaveAttribute('data-view', 'camp');
   await page.getByRole('button', { name: 'Open debug menu' }).tap();
   const slider = page.getByLabel('Fall time (s)');
-  await slider.fill('1.5');
-  await expect(page.locator('.debug-tune', { hasText: 'Fall time (s)' })).toContainText('1.5 •');
+  await slider.fill('2');
+  await expect(page.locator('.debug-tune', { hasText: 'Fall time (s)' })).toContainText('2 •');
   await page.reload();
   await page.getByRole('button', { name: 'Open debug menu' }).tap();
-  await expect(page.locator('.debug-tune', { hasText: 'Fall time (s)' })).toContainText('1.5 •');
+  await expect(page.locator('.debug-tune', { hasText: 'Fall time (s)' })).toContainText('2 •');
   await page.getByRole('button', { name: 'Reset to data' }).tap();
   await expect(page.locator('.debug-tune', { hasText: 'Fall time (s)' })).not.toContainText('•');
 
@@ -22,7 +22,7 @@ test('the live tuning panel changes feel values and logs it', async ({ page }) =
   expect(exported.events).toContainEqual(
     expect.objectContaining({
       type: 'debug.tune',
-      data: { group: 'woodcutting', key: 'fallSeconds', value: 1.5 },
+      data: { group: 'woodcutting', key: 'fallSeconds', value: 2 },
     }),
   );
   expect(exported.events.map((event) => event.type)).toContain('debug.tuneReset');
