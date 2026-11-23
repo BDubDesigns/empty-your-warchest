@@ -72,6 +72,8 @@ const AIM_DEAD_ZONE = 14;
 const FULL_PULL = 120;
 /** Seconds for the camera to move between the overview and the chop close-up. */
 const CAMERA_MOVE = 0.6;
+/** How much of a model's outermost leaf spread counts as its canopy when sizing it to the rules. */
+const CANOPY_FILL = 0.9;
 /** Chase camera while a chain falls: how high it looks down, how quickly it follows (per second), the
  * closest it comes, how early it starts framing a tree that's about to be hit, and how long it holds
  * on the result before going back to the overview. */
@@ -345,6 +347,41 @@ export class Woodcutting3DView implements ScreenView {
     this.#scene.add(patch);
   }
 
+  /**
+   * A tree model sized to match the rules: its top reaches `reach` (the tree's height to its
+   * canopy's centre, plus the canopy radius, so where it lands is where the rules say it reaches)
+   * and its canopy is `radius` wide each way (the rules' canopy). Stretched up or slimmed as
+   * needed, so what you see touch is what the chain counts.
+   */
+  #treeModel(source: THREE.Object3D, reach: number, radius: number): THREE.Group {
+    const model = source.clone(true);
+    const box = new THREE.Box3().setFromObject(model);
+    const size = box.getSize(new THREE.Vector3());
+    const center = box.getCenter(new THREE.Vector3());
+    const leaves = new THREE.Box3();
+    model.traverse((child) => {
+      if (!(child instanceof THREE.Mesh)) return;
+      const materials = [child.material as THREE.Material | THREE.Material[]].flat();
+      if (!materials.some((material) => /bark/i.test(material.name))) leaves.expandByObject(child);
+    });
+    const leafSize = (leaves.isEmpty() ? box : leaves).getSize(new THREE.Vector3());
+    // Leaf edges are ragged, so the canopy reads a little narrower than its outermost leaves.
+    const canopy = ((leafSize.x + leafSize.z) / 4) * CANOPY_FILL;
+    const tall = reach / Math.max(size.y, 0.001);
+    const wide = radius / Math.max(canopy, 0.001);
+    model.scale.set(wide, tall, wide);
+    model.position.set(-center.x * wide, -box.min.y * tall, -center.z * wide);
+    model.traverse((child) => {
+      if (child instanceof THREE.Mesh) {
+        child.castShadow = true;
+        child.receiveShadow = true;
+      }
+    });
+    const holder = new THREE.Group();
+    holder.add(model);
+    return holder;
+  }
+
   /** A copy of `source`, scaled to `height` tall, standing on y = 0 and centered on its trunk. */
   #modelOfHeight(source: THREE.Object3D, height: number): THREE.Group {
     const model = source.clone(true);
@@ -385,7 +422,8 @@ export class Woodcutting3DView implements ScreenView {
         }
         const source = sources[(seed + i) % sources.length] ?? sources[0];
         if (!source) throw new Error('No tree models loaded');
-        const model = this.#modelOfHeight(source, tree.height * SCALE * (forks > 1 ? 0.85 : 1));
+        const canopy = this.#clearing.canopyRadius;
+        const model = this.#treeModel(source, (tree.height + canopy) * SCALE, canopy * SCALE);
         model.rotation.y = ((seed % 360) + i * 137) * DEG;
         pivot.add(model);
         root.add(pivot);
@@ -809,7 +847,7 @@ export class Woodcutting3DView implements ScreenView {
       const visual = this.#trees.get(faller.step.tree);
       if (!visual) continue;
       const { tree } = visual;
-      const height = tree.height * SCALE;
+      const height = (tree.height + this.#clearing.canopyRadius) * SCALE;
       const tilt = fallTilt(
         Math.max(round.now - faller.start, 0) / feel.fallSeconds,
         feel.fallEase,
