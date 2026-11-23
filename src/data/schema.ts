@@ -112,10 +112,18 @@ const clearingSchema = z.object({
   width: positive,
   height: positive,
   /**
-   * Radius of every tree's canopy. Collisions use exactly what's drawn: a falling tree
-   * knocks over any standing tree its canopy or trunk touches on the way down.
+   * Radius of every tree's canopy. A falling tree knocks over a standing tree when its canopy
+   * reaches that tree's trunk (as it would in 3D: a standing tree's canopy is up in the air,
+   * out of reach of a tree falling past it, so it's the trunk that gets hit).
    */
   canopyRadius: positive,
+  /** Radius of every tree's trunk, for those hits. */
+  trunkRadius: positive,
+  /**
+   * Where the canopy starts up the tree (share of its height); below that it's bare trunk, so a
+   * falling tree's lower part only knocks over trunks it actually touches.
+   */
+  canopyStart: z.number().min(0).max(1),
   trees: z
     .array(
       z.object({

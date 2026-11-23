@@ -33,8 +33,13 @@ const DOWN = Math.PI / 2;
 const LEFT = Math.PI;
 
 /** Canopies of radius 5: two canopies touch when centers are within 10. */
-function clearing(trees: Clearing['trees'], canopyRadius = 5): Clearing {
-  return { id: 'test', width: 500, height: 500, canopyRadius, trees };
+function clearing(
+  trees: Clearing['trees'],
+  canopyRadius = 5,
+  trunkRadius = 5,
+  canopyStart = 0,
+): Clearing {
+  return { id: 'test', width: 500, height: 500, canopyRadius, trunkRadius, canopyStart, trees };
 }
 
 const all = (c: Clearing) => new Set(c.trees.map((tree) => tree.id));
@@ -70,7 +75,7 @@ describe('chain resolution', () => {
     expect(ids(resolveChain(row, standing, 'a', RIGHT))).toEqual(['a']);
   });
 
-  it('hits any tree whose canopy the falling canopy touches, inclusive', () => {
+  it('hits any tree whose trunk the falling canopy touches, inclusive', () => {
     const near = clearing([
       { id: 'a', x: 0, y: 0, height: 100 },
       { id: 'edge', x: 50, y: 10, height: 50 },
@@ -91,6 +96,41 @@ describe('chain resolution', () => {
       18,
     );
     expect(ids(resolveChain(landing, all(landing), 'faller', DOWN))).toEqual(['faller', 'under']);
+  });
+
+  it('hits a trunk, not a canopy: a standing canopy alone is out of reach', () => {
+    // Canopies (radius 18) would overlap at 30 apart, but the trunk is beyond canopy + trunk.
+    const apart = clearing(
+      [
+        { id: 'faller', x: 0, y: 0, height: 100 },
+        { id: 'beside', x: 60, y: 30, height: 100 },
+        { id: 'touched', x: 80, y: 20, height: 100 },
+      ],
+      18,
+      4,
+    );
+    expect(
+      treesHit(apart, all(apart), firstOf(apart.trees), RIGHT).map((hit) => hit.tree.id),
+    ).toEqual(['touched']);
+  });
+
+  it('only the bare trunk sweeps below the canopy', () => {
+    const low = clearing(
+      [
+        { id: 'faller', x: 0, y: 0, height: 100 },
+        { id: 'byBase', x: 10, y: 20, height: 100 },
+        { id: 'byTrunk', x: 15, y: 6, height: 100 },
+        { id: 'byCanopy', x: 50, y: 15, height: 100 },
+      ],
+      18,
+      4,
+      0.3,
+    );
+    expect(
+      treesHit(low, all(low), firstOf(low.trees), RIGHT)
+        .map((hit) => hit.tree.id)
+        .sort(),
+    ).toEqual(['byCanopy', 'byTrunk']);
   });
 
   it('branches when one tree hits two, nearest first', () => {
