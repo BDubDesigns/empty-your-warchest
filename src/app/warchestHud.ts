@@ -209,6 +209,11 @@ export class WarchestHud {
     };
   }
 
+  /** Nothing on its way in: every deposit has landed. */
+  get settled(): boolean {
+    return this.#held === 0 && this.#flights.length === 0;
+  }
+
   /** Finishes any pour at once and shuts the panel (e.g. leaving the station). */
   settle(): void {
     for (const flight of this.#flights) this.#scene.remove(flight.mesh);

@@ -9,7 +9,10 @@ import type { EventLogger, Game, LiveChoice, LiveTuning } from '../../../core';
 import type { Clearing, ClearingTree, WoodcuttingFeel } from '../../../data';
 import { fallTip, previewFall, trunkAngles, type FallStep, type Point } from '../logic/chain';
 import { fallTilt } from '../logic/fall';
-import { WoodcuttingRound, chainLogs, type RoundEvent } from '../logic/round';
+import { WoodcuttingRound, type RoundEvent } from '../logic/round';
+import { chainLogs } from '../logic/score';
+import type { ClearingPicker } from '../clearingPicker';
+import type { ClearingPlan } from '../logic/generate';
 import type { TreeStyle } from '../treeStyle';
 
 export interface Woodcutting3DDeps {
@@ -19,6 +22,10 @@ export interface Woodcutting3DDeps {
   /** Which trees to draw; picked in the debug menu. */
   treeStyle: LiveChoice<TreeStyle>;
   haptics: Haptics;
+  /** Picks each round's clearing: the tutorial first, then random ones. */
+  clearings: ClearingPicker;
+  /** Leaves the station (the round summary's Back to camp). */
+  onLeave: () => void;
 }
 
 interface Models {
@@ -33,6 +40,9 @@ const SCALE = 1 / 30;
 /** Frames (while aiming) to judge the detailed trees by, and the median frame time that's too slow. */
 const FALLBACK_FRAMES = 90;
 const FALLBACK_MS = 25;
+/** When the summary's first star pops in, and the gap before each of the others (ms). */
+const STAR_DELAY_MS = 450;
+const STAR_STAGGER_MS = 380;
 const MODELS = {
   kenney: ['tree_default', 'tree_oak', 'tree_detailed'].map((name) => `models/kenney/${name}.glb`),
   quaternius: ['CommonTree_1', 'CommonTree_3', 'Pine_1'].map(
@@ -53,6 +63,7 @@ const SOUNDS: Record<string, string> = Object.fromEntries(
     'land-1',
     'land-2',
     'land-3',
+    'star',
   ].map((name) => [name, `audio/woodcutting/${name}.mp3`]),
 );
 /** The chain counter's colour by length: 2 trees, 3, 4, 5, 6, 7+. */
@@ -160,7 +171,9 @@ function treeSeed(id: string): number {
 export class Woodcutting3DView implements ScreenView {
   readonly #element: HTMLElement;
   readonly #deps: Woodcutting3DDeps;
-  readonly #clearing: Clearing;
+  /** This round's clearing; every generated one shares the tutorial clearing's size. */
+  #clearing: Clearing;
+  #plan: ClearingPlan | undefined;
   readonly #renderer: THREE.WebGLRenderer;
   readonly #scene = new THREE.Scene();
   readonly #camera = new THREE.PerspectiveCamera(42, 1, 0.1, 200);
@@ -170,6 +183,11 @@ export class Woodcutting3DView implements ScreenView {
   readonly #hud: WarchestHud;
   /** A banked chain waiting for the camera to settle on the overview before its logs pour. */
   #pendingPour: { deposit: Deposit; trees: string[] } | undefined;
+  /** The clearing is cleared: the summary shows once the last logs are in the chest. */
+  #summaryPending = false;
+  #summaryTimers: number[] = [];
+  /** The longest chain banked this round, for the summary. */
+  #bestChain = 0;
   readonly #timer = new THREE.Timer();
   readonly #raycaster = new THREE.Raycaster();
   readonly #groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
@@ -216,8 +234,11 @@ export class Woodcutting3DView implements ScreenView {
     this.#element = element;
     this.#deps = deps;
     this.#models = models;
-    const [clearing] = deps.game.data.woodcutting.clearings;
-    if (!clearing) throw new Error('No woodcutting clearing in data');
+    const { woodcutting } = deps.game.data;
+    const clearing = woodcutting.clearings.find(
+      (entry) => entry.id === woodcutting.tutorialClearing,
+    );
+    if (!clearing) throw new Error('No woodcutting tutorial clearing in data');
     this.#clearing = clearing;
     this.#style = deps.treeStyle.value;
     this.#styleChosen = deps.treeStyle.picked;
@@ -233,7 +254,7 @@ export class Woodcutting3DView implements ScreenView {
     this.#ui = this.buildUi();
     this.#guides = this.buildGuides();
     this.#axe = this.#buildAxe();
-    this.#buildTrees();
+    this.#buildTrees({ keepFallen: false });
     this.#sfx.load(SOUNDS);
     this.#listen();
     deps.treeStyle.onChange((style) => {
@@ -264,6 +285,10 @@ export class Woodcutting3DView implements ScreenView {
   // ScreenView
 
   start(): void {
+    const { game } = this.#deps;
+    const plan = this.#deps.clearings.next();
+    this.#plan = plan;
+    this.#clearing = plan.clearing;
     this.#resize();
     this.#round = new WoodcuttingRound(
       this.#clearing,
@@ -272,7 +297,6 @@ export class Woodcutting3DView implements ScreenView {
         feel: () => this.#deps.feel.values,
         chainExponent: this.#deps.game.data.woodcutting.chainExponent,
         bank: (batches) => {
-          const { game } = this.#deps;
           const result = game.craft(game.data.woodcutting.recipe, { batches }, { awardXp: false });
           return result.produced.reduce((sum, stack) => sum + stack.count, 0);
         },
@@ -280,10 +304,13 @@ export class Woodcutting3DView implements ScreenView {
           this.#onEvent(event);
         },
         view: '3d',
+        stars: { par: plan.par, ...game.data.woodcutting.stars },
       },
       Date.now() >>> 0,
     );
-    this.#resetTrees();
+    this.#buildTrees({ keepFallen: false });
+    this.#bestChain = 0;
+    this.#summaryPending = false;
     this.#frameTimes = [];
     this.#cameraPose = this.#overview;
     this.#cameraFrom = this.#cameraTo = undefined;
@@ -298,8 +325,12 @@ export class Woodcutting3DView implements ScreenView {
   stop(): void {
     this.#renderer.setAnimationLoop(null);
     this.#pendingPour = undefined;
+    this.#summaryPending = false;
+    for (const timer of this.#summaryTimers) window.clearTimeout(timer);
+    this.#summaryTimers = [];
     this.#hud.settle();
     this.#round.exit();
+    this.#deps.clearings.finished();
     this.#logPerformance();
     delete document.body.dataset.woodcutting;
     this.#lastPhase = '';
@@ -409,12 +440,13 @@ export class Woodcutting3DView implements ScreenView {
     return holder;
   }
 
-  #buildTrees(): void {
+  /** Builds this round's trees. `keepFallen` for a style switch mid-round; a new round starts fresh. */
+  #buildTrees({ keepFallen }: { keepFallen: boolean }): void {
     // Switching tree style mid-round rebuilds every tree: keep which ones are already down (and
     // being hauled off), or they'd pop back up looking standing when they aren't.
     const fallen = new Map(
       [...this.#trees.values()].flatMap((visual) =>
-        visual.fallen ? [[visual.tree.id, { ...visual.fallen }] as const] : [],
+        !keepFallen ? [] : visual.fallen ? [[visual.tree.id, { ...visual.fallen }] as const] : [],
       ),
     );
     for (const carver of this.#carvers.values()) carver.dispose();
@@ -449,24 +481,6 @@ export class Woodcutting3DView implements ScreenView {
       this.#scene.add(root);
       const down = fallen.get(tree.id);
       this.#trees.set(tree.id, { tree, root, trunks, stump, ...(down ? { fallen: down } : {}) });
-    }
-  }
-
-  #resetTrees(): void {
-    if (this.#carvers.size > 0) {
-      // Carved and broken trees are rebuilt from the models rather than patched back.
-      this.#buildTrees();
-      return;
-    }
-    for (const visual of this.#trees.values()) {
-      delete visual.fallen;
-      visual.stump.visible = false;
-      for (const trunk of visual.trunks) {
-        trunk.visible = true;
-        trunk.quaternion.identity();
-        trunk.scale.setScalar(1);
-        trunk.position.y = 0;
-      }
     }
   }
 
@@ -1138,10 +1152,41 @@ export class Woodcutting3DView implements ScreenView {
         .filter((visual) => visual.fallen && visual.fallen.sinkAt === undefined)
         .map((visual) => visual.tree.id);
       this.#pendingPour = { deposit: this.#hud.hold(event.logs), trees };
+      this.#bestChain = Math.max(this.#bestChain, event.trees);
     } else {
-      this.#ui.summaryText.textContent = `${this.#round.felled} trees · ${this.#round.logs} logs to the warchest`;
-      this.#ui.summary.hidden = false;
+      this.#deps.clearings.finished();
+      this.#summaryPending = true;
     }
+  }
+
+  /** The round's result: logs against par, then the stars pop in one by one. */
+  #showSummary(): void {
+    const ui = this.#ui;
+    const round = this.#round;
+    const plan = this.#plan;
+    const earned = round.stars;
+    ui.summaryText.textContent = `${String(round.logs)} logs · par ${String(round.par ?? '?')} · best chain ${String(this.#bestChain)}`;
+    ui.summarySeed.textContent =
+      plan?.seed === undefined ? 'Tutorial clearing' : `Clearing #${String(plan.seed)}`;
+    ui.summary.dataset.stars = String(earned);
+    ui.summary.hidden = false;
+    const feel = round.feel;
+    ui.stars.forEach((star, index) => {
+      star.className = 'w3d-star';
+      this.#summaryTimers.push(
+        window.setTimeout(
+          () => {
+            const on = index < earned;
+            star.classList.add(on ? 'w3d-star-on' : 'w3d-star-off');
+            if (!on) return;
+            // Each star rings a little higher and buzzes a little longer.
+            this.#sfx.play('star', 0.6, index * 300);
+            this.#deps.haptics.pulse(feel.buzzChopMs + index * 6);
+          },
+          STAR_DELAY_MS + index * STAR_STAGGER_MS,
+        ),
+      );
+    });
   }
 
   #play(name: string, volume: number, pitchCents = 0): void {
@@ -1224,6 +1269,10 @@ export class Woodcutting3DView implements ScreenView {
     this.#updateParticles(dt);
     this.#updateCamera(realDt);
     this.#startPendingPour();
+    if (this.#summaryPending && !this.#pendingPour && this.#hud.settled) {
+      this.#summaryPending = false;
+      this.#showSummary();
+    }
     this.#updateUi();
     this.#renderer.render(this.#scene, this.#camera);
   }
@@ -1359,16 +1408,22 @@ export class Woodcutting3DView implements ScreenView {
     const counter = el('div', 'w3d-counter');
     const summary = el('div', 'w3d-summary');
     const summaryTitle = el('div', 'w3d-summary-title', 'Clearing cleared!');
+    const starRow = el('div', 'w3d-stars');
+    const stars = [0, 1, 2].map(() => el('span', 'w3d-star', '★'));
+    starRow.append(...stars);
     const summaryText = el('div', 'w3d-summary-text');
-    const again = button(
-      'New round',
-      () => {
-        this.stop();
-        this.start();
-      },
-      true,
-    );
-    summary.append(summaryTitle, summaryText, again);
+    const summarySeed = el('div', 'w3d-summary-seed');
+    const leave = button('Back to camp', () => {
+      this.#deps.onLeave();
+    });
+    leave.classList.add('w3d-secondary');
+    const next = button('Next clearing', () => {
+      this.stop();
+      this.start();
+    });
+    const summaryButtons = el('div', 'w3d-summary-buttons');
+    summaryButtons.append(leave, next);
+    summary.append(summaryTitle, starRow, summaryText, summarySeed, summaryButtons);
     summary.hidden = true;
     root.append(perf, hint, panel, flashes, counter, summary);
     this.#element.append(root);
@@ -1387,6 +1442,8 @@ export class Woodcutting3DView implements ScreenView {
       counter,
       summary,
       summaryText,
+      summarySeed,
+      stars,
     };
   }
 
@@ -1530,7 +1587,7 @@ export class Woodcutting3DView implements ScreenView {
   #applyStyle(style: TreeStyle): void {
     if (style === this.#style) return;
     this.#style = style;
-    this.#buildTrees();
+    this.#buildTrees({ keepFallen: true });
     // Mid-chop the notch was rebuilt away with the old trees: cut it again.
     const phase = this.#round.phase;
     if (phase.kind === 'chop' && phase.points > 0) {

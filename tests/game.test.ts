@@ -21,6 +21,20 @@ describe('Game', () => {
     });
   });
 
+  it('remembers one-time things, saves them, and tells listeners once', () => {
+    const { game } = newGame();
+    let changes = 0;
+    game.onChange(() => (changes += 1));
+    expect(game.hasDone('tutorial.woodcutting')).toBe(false);
+    game.markDone('tutorial.woodcutting');
+    game.markDone('tutorial.woodcutting');
+    expect(game.hasDone('tutorial.woodcutting')).toBe(true);
+    expect(changes).toBe(1);
+    expect(game.snapshot().done).toEqual(['tutorial.woodcutting']);
+    game.replaceState(newGameState(data, 0));
+    expect(game.hasDone('tutorial.woodcutting')).toBe(false);
+  });
+
   it('logs level-ups', async () => {
     const { game, logger } = newGame();
     game.addXp('woodcutting', 83);

@@ -35,6 +35,7 @@ export async function startApp(): Promise<void> {
       ...booted,
       tuning: [booted.feel.woodcutting],
       choices: [booted.choices.treeStyle, booted.choices.vibration],
+      clearings: booted.clearings,
       buildLabel: __BUILD_LABEL__,
     });
   } catch (error) {
@@ -42,7 +43,7 @@ export async function startApp(): Promise<void> {
     showFatal(error);
     return;
   }
-  const { game, logger, clock, feel, choices, haptics } = booted;
+  const { game, logger, clock, feel, choices, haptics, clearings } = booted;
 
   const phaserElement = byId('screen-phaser');
   const threeElement = byId('screen-three');
@@ -76,6 +77,8 @@ export async function startApp(): Promise<void> {
           feel: feel.woodcutting,
           treeStyle: choices.treeStyle,
           haptics,
+          clearings,
+          onLeave: run((): Promise<void> => navigation.back()),
         });
       }),
       three: lazyScreen(threeElement, async () => {

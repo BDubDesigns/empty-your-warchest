@@ -121,6 +121,21 @@ function checkReferences(data: GameData, ctx: z.RefinementCtx): void {
       }
     });
   });
+  if (!woodcutting.clearings.some((clearing) => clearing.id === woodcutting.tutorialClearing)) {
+    issue(
+      ['woodcutting', 'tutorialClearing'],
+      `Unknown clearing "${woodcutting.tutorialClearing}"`,
+    );
+  }
+  const generator = woodcutting.generator;
+  for (const key of ['trees', 'height', 'forkSpread'] as const) {
+    if (generator[key].min > generator[key].max) {
+      issue(['woodcutting', 'generator', key], 'min must not be more than max');
+    }
+  }
+  if (woodcutting.stars.two > woodcutting.stars.three) {
+    issue(['woodcutting', 'stars'], 'Two stars must not need more than three');
+  }
   const feel = woodcutting.feel;
   if (feel.perfectWindow > feel.timingWindow) {
     issue(

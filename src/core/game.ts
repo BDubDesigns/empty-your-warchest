@@ -14,6 +14,7 @@ export class Game {
   #inventory: Inventory;
   #xp: Map<string, number>;
   #lastSeenAt: number;
+  #done: Set<string>;
 
   constructor(data: GameData, state: GameState, logger: EventLogger) {
     this.data = data;
@@ -22,6 +23,7 @@ export class Game {
     this.#inventory = new Inventory(data, state.inventory);
     this.#xp = new Map(Object.entries(state.skills));
     this.#lastSeenAt = state.lastSeenAt;
+    this.#done = new Set(state.done);
   }
 
   get inventory(): Inventory {
@@ -34,6 +36,18 @@ export class Game {
 
   set lastSeenAt(time: number) {
     this.#lastSeenAt = time;
+    this.#changed();
+  }
+
+  /** Whether the player has done a one-time thing, e.g. 'tutorial.woodcutting'. */
+  hasDone(key: string): boolean {
+    return this.#done.has(key);
+  }
+
+  markDone(key: string): void {
+    if (this.#done.has(key)) return;
+    this.#done.add(key);
+    this.#logger.log('game.done', { key });
     this.#changed();
   }
 
@@ -96,6 +110,7 @@ export class Game {
     this.#inventory = new Inventory(this.data, state.inventory);
     this.#xp = new Map(Object.entries(state.skills));
     this.#lastSeenAt = state.lastSeenAt;
+    this.#done = new Set(state.done);
     this.#changed();
   }
 
@@ -105,6 +120,7 @@ export class Game {
       inventory,
       skills: Object.fromEntries(this.data.skills.map((skill) => [skill.id, this.xp(skill.id)])),
       lastSeenAt: this.#lastSeenAt,
+      done: [...this.#done],
     };
   }
 

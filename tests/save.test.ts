@@ -17,6 +17,7 @@ const state: GameState = {
   ],
   skills: { woodcutting: 1_154, fletching: 83, command: 0 },
   lastSeenAt: 5_000,
+  done: ['tutorial.woodcutting'],
 };
 
 function discardReason(result: LoadResult): string {
@@ -40,7 +41,16 @@ describe('save/load', () => {
       inventory: [],
       skills: { woodcutting: 0, fletching: 0, command: 0 },
       lastSeenAt: 10_000,
+      done: [],
     });
+  });
+
+  it('loads a save from before one-time flags existed', () => {
+    const { store, saves } = setup();
+    const older: Partial<GameState> = { ...state };
+    delete older.done;
+    store.set('warchest.save', JSON.stringify({ version: SAVE_VERSION, savedAt: 1, state: older }));
+    expect(saves.load()).toEqual({ status: 'loaded', state: { ...state, done: [] } });
   });
 
   it('round-trips the full state', () => {

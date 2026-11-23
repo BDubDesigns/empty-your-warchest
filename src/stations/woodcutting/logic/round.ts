@@ -3,6 +3,7 @@ import type { Clearing, WoodcuttingFeel } from '../../../data';
 import { angleBeforeLift, nudgeAim, type AimSample } from './aim';
 import { resolveChain, type FallStep } from './chain';
 import { fallTimeToReach } from './fall';
+import { chainLogs, starsFor, type StarThresholds } from './score';
 import {
   chopDamage,
   judgeSwing,
@@ -93,11 +94,8 @@ export interface RoundHooks {
   onEvent?: (event: RoundEvent) => void;
   /** Which view is playing, for the logs (e.g. '3d'). */
   view: string;
-}
-
-/** Logs a chain of `trees` is worth: trees^exponent, as a whole number (at least 1). */
-export function chainLogs(trees: number, exponent: number): number {
-  return Math.max(1, Math.round(trees ** exponent));
+  /** The clearing's par and the star thresholds, for the round's stars. */
+  stars?: StarThresholds & { par: number };
 }
 
 /**
@@ -129,6 +127,16 @@ export class WoodcuttingRound {
     return this.#hooks.feel();
   }
 
+  /** 0–3 stars for the logs banked so far against par (0 without a par). */
+  get stars(): number {
+    const stars = this.#hooks.stars;
+    return stars ? starsFor(this.logs, stars.par, stars) : 0;
+  }
+
+  get par(): number | undefined {
+    return this.#hooks.stars?.par;
+  }
+
   start(seed: number): void {
     this.#rng = new Rng(seed);
     this.standing = new Set(this.clearing.trees.map((tree) => tree.id));
@@ -142,6 +150,7 @@ export class WoodcuttingRound {
       clearing: this.clearing.id,
       trees: this.clearing.trees.length,
       seed,
+      par: this.par,
       view: this.#hooks.view,
       feel: this.feel,
     });
@@ -415,6 +424,8 @@ export class WoodcuttingRound {
       view: this.#hooks.view,
       felled: this.felled,
       logs: this.logs,
+      par: this.par,
+      stars: this.stars,
       standing: this.standing.size,
       seconds: Math.round((this.now - this.#startedAt) * 10) / 10,
     });
