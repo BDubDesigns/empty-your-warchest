@@ -1,22 +1,24 @@
 import { describe, expect, it } from 'vitest';
 import type { Clearing } from '../src/data';
 import {
-  fallPath,
+  afterChain,
   hitsCabin,
   previewFall,
-  resolveChain,
+  resolveFall,
+  rollBoulder,
 } from '../src/stations/woodcutting/logic/chain';
+import { rollDistance, rollTime } from '../src/stations/woodcutting/logic/fall';
 import { generateClearing } from '../src/stations/woodcutting/logic/generate';
 import { WoodcuttingRound, type RoundEvent } from '../src/stations/woodcutting';
 import { data, testLogger } from './helpers';
 
 const RIGHT = 0;
-const degrees = (radians: number) => (radians * 180) / Math.PI;
+const DOWN = Math.PI / 2;
 
-/** Canopies of radius 20 from the base up, trunks of 5, rocks of 6. */
+/** Canopies of radius 20 from the base up, trunks of 5, boulders of 10 that roll 150. */
 function clearing(
   trees: Clearing['trees'],
-  hazards: Pick<Clearing, 'rocks'> & Partial<Pick<Clearing, 'cabin'>>,
+  hazards: Partial<Pick<Clearing, 'boulders' | 'cabin'>> = {},
 ): Clearing {
   return {
     id: 'test',
@@ -25,55 +27,93 @@ function clearing(
     canopyRadius: 20,
     trunkRadius: 5,
     canopyStart: 0,
-    maxRockTurn: 40,
+    boulderRoll: 150,
+    boulderBounce: 0.5,
     trees,
+    boulders: [],
     ...hazards,
   };
 }
 
-const rock = (y: number) => ({ id: 'rock', x: 50, y, radius: 6, height: 10 });
 const all = (c: Clearing) => new Set(c.trees.map((tree) => tree.id));
 const ids = (steps: { tree: string }[]) => steps.map((step) => step.tree);
 
-describe('rocks', () => {
+describe('boulders', () => {
+  // A tree falls right into a boulder; trees stand far down the boulder's line, out of any
+  // tree's reach from the chopped one.
   const trees = [
-    { id: 'a', x: 0, y: 100, height: 100 },
-    // Straight on past the rock.
-    { id: 'behind', x: 95, y: 100, height: 100 },
-    // On the line the tree slides onto, turned about 17° up off the rock.
-    { id: 'bank', x: 91, y: 72, height: 100 },
+    { id: 'a', x: 100, y: 100, height: 60 },
+    { id: 'far', x: 260, y: 100, height: 60 },
+    { id: 'side', x: 100, y: 300, height: 60 },
   ];
+  const boulder = { id: 'b', x: 150, y: 100, radius: 10 };
 
-  it('a clipped rock turns the tree away just enough to slide off, onto a bank shot', () => {
-    const c = clearing(trees, { rocks: [rock(112)] });
-    const a = trees[0] as Clearing['trees'][number];
-    const { path } = fallPath(c, all(c), a, RIGHT);
-    expect(path.rock?.id).toBe('rock');
-    expect(path.stop).toBeUndefined();
-    // The rock is below the line (clockwise on screen), so the tree turns counter-clockwise.
-    expect(degrees(path.landAngle)).toBeCloseTo(-16.9, 0);
-    const steps = resolveChain(c, all(c), 'a', RIGHT);
-    expect(ids(steps)).toContain('bank');
-    expect(ids(steps)).not.toContain('behind');
+  it('a falling tree knocks a boulder rolling, and it knocks over trees past the tree’s reach', () => {
+    const c = clearing(trees, { boulders: [boulder] });
+    const chain = resolveFall(c, all(c), 'a', RIGHT);
+    expect(chain.rolls).toHaveLength(1);
+    const [roll] = chain.rolls;
+    expect(roll?.boulder).toBe('b');
+    // Dead on: it carries straight on.
+    expect(roll?.angle).toBeCloseTo(RIGHT, 5);
+    expect(ids(chain.steps)).toEqual(['a', 'far']);
+    const far = chain.steps[1];
+    expect(far?.hitBy).toBe('b');
+    expect(far?.byBoulder).toBe(true);
+    // It stays where it stopped.
+    const moved = afterChain(c, chain).boulders[0];
+    expect(moved?.x).toBeCloseTo(300, 0);
   });
 
-  it('a dead-on rock stops the tree, and nothing past it is hit', () => {
-    const c = clearing(trees, { rocks: [rock(102)] });
-    const steps = resolveChain(c, all(c), 'a', RIGHT);
-    expect(ids(steps)).toEqual(['a']);
-    const path = steps[0]?.paths[0];
-    expect(path?.stop).toMatchObject({ on: 'rock', id: 'rock' });
-    // It rests on the rock, not flat on the ground.
-    expect(path?.stop?.tilt).toBeLessThan(Math.PI / 2);
-    expect(path?.landAngle).toBe(RIGHT);
+  it('bounces off the fence like a cushion, angle in = angle out', () => {
+    const c = clearing([{ id: 'a', x: 50, y: 400, height: 60 }], {
+      boulders: [{ id: 'b', x: 450, y: 400, radius: 10 }],
+    });
+    const result = rollBoulder(c, new Set(), c.boulders[0] as never, Math.PI / 4, 150, []);
+    // It reaches the right-hand fence after ~57, bounces back left, keeping half what's left.
+    expect(result.path).toHaveLength(3);
+    const [start, wall, end] = result.path;
+    expect(wall?.x).toBeCloseTo(490, 0);
+    expect((end?.x ?? 0) - (wall?.x ?? 0)).toBeLessThan(0);
+    expect((end?.y ?? 0) - (wall?.y ?? 0)).toBeGreaterThan(0);
+    expect(start).toEqual({ x: 450, y: 400 });
+    expect(result.natural).toBeLessThan(150);
   });
 
-  it('the aim guide shows the slide and where it lands', () => {
-    const c = clearing(trees, { rocks: [rock(112)] });
-    const preview = previewFall(c, all(c), trees[0] as Clearing['trees'][number], RIGHT);
-    expect(preview.path.rock?.id).toBe('rock');
-    expect(preview.hit?.tree).toBe('bank');
+  it('a boulder that hits another stops and sets it rolling', () => {
+    const c = clearing([{ id: 'a', x: 100, y: 100, height: 60 }], {
+      boulders: [boulder, { id: 'b2', x: 220, y: 100, radius: 10 }],
+    });
+    const chain = resolveFall(c, all(c), 'a', RIGHT);
+    expect(chain.rolls.map((roll) => roll.boulder)).toEqual(['b', 'b2']);
+    expect(chain.rolls[0]?.to.x).toBeCloseTo(200, 0);
+    expect(chain.rolls[1]?.byBoulder).toBe(true);
+  });
+
+  it('a boulder rolled into the cabin is a crash', () => {
+    const c = clearing(trees.slice(0, 1), {
+      boulders: [boulder],
+      cabin: { x: 230, y: 100, width: 20, depth: 60, height: 30 },
+    });
+    const chain = resolveFall(c, all(c), 'a', RIGHT);
+    expect(chain.rolls[0]?.cabin).toBe(true);
+    expect(hitsCabin(chain)).toBe(true);
+    expect(previewFall(c, all(c), trees[0] as never, RIGHT).danger).toBe(true);
+  });
+
+  it('the aim guide shows the boulder it would set rolling and where it stops', () => {
+    const c = clearing(trees, { boulders: [boulder] });
+    const preview = previewFall(c, all(c), trees[0] as never, RIGHT);
+    expect(preview.roll?.boulder).toBe('b');
+    expect(preview.roll?.path.at(-1)?.x).toBeCloseTo(300, 0);
     expect(preview.danger).toBe(false);
+  });
+
+  it('rolls slow evenly to a stop', () => {
+    expect(rollTime(0, 100, 50)).toBe(0);
+    expect(rollTime(100, 100, 50)).toBeCloseTo(4);
+    expect(rollDistance(rollTime(75, 100, 50), 100, 50, 100)).toBeCloseTo(75);
+    expect(rollDistance(10, 100, 50, 60)).toBe(60);
   });
 });
 
@@ -85,23 +125,23 @@ describe('the cabin', () => {
   ];
 
   it('stops a tree that reaches it, and the chain is marked as a crash', () => {
-    const c = clearing(trees, { rocks: [], cabin });
-    const steps = resolveChain(c, all(c), 'a', RIGHT);
-    expect(ids(steps)).toEqual(['a']);
-    expect(steps[0]?.paths[0]?.stop?.on).toBe('cabin');
-    expect(hitsCabin(steps)).toBe(true);
-    expect(hitsCabin(resolveChain(c, all(c), 'a', Math.PI))).toBe(false);
+    const c = clearing(trees, { cabin });
+    const chain = resolveFall(c, all(c), 'a', RIGHT);
+    expect(ids(chain.steps)).toEqual(['a']);
+    expect(chain.steps[0]?.paths[0]?.cabin).toBeDefined();
+    expect(hitsCabin(chain)).toBe(true);
+    expect(hitsCabin(resolveFall(c, all(c), 'a', DOWN))).toBe(false);
   });
 
   it('turns the aim guide red', () => {
-    const c = clearing(trees, { rocks: [], cabin });
+    const c = clearing(trees, { cabin });
     const a = trees[0] as Clearing['trees'][number];
     expect(previewFall(c, all(c), a, RIGHT).danger).toBe(true);
-    expect(previewFall(c, all(c), a, Math.PI).danger).toBe(false);
+    expect(previewFall(c, all(c), a, DOWN).danger).toBe(false);
   });
 
   it('loses the chain: no logs banked, and the round ends', async () => {
-    const c = clearing(trees, { rocks: [], cabin });
+    const c = clearing(trees, { cabin });
     const { logger } = testLogger();
     const events: RoundEvent[] = [];
     let banked = 0;
@@ -145,8 +185,55 @@ describe('the cabin', () => {
   });
 });
 
+describe('a round with a boulder', () => {
+  it('waits for the boulder to stop, banks the trees it knocked, and leaves it where it stopped', () => {
+    const c = clearing(
+      [
+        { id: 'a', x: 100, y: 100, height: 60 },
+        { id: 'far', x: 260, y: 100, height: 60 },
+        { id: 'other', x: 100, y: 400, height: 60 },
+      ],
+      { boulders: [{ id: 'b', x: 150, y: 100, radius: 10 }] },
+    );
+    const { logger } = testLogger();
+    const events: RoundEvent[] = [];
+    const feel = data.woodcutting.feel;
+    const round = new WoodcuttingRound(
+      c,
+      {
+        logger,
+        feel: () => feel,
+        chainExponent: 2,
+        bank: (n) => n,
+        onEvent: (e) => events.push(e),
+        view: 'test',
+      },
+      1,
+    );
+    round.touchTree('a');
+    round.aimTo(RIGHT);
+    round.tick(0.5);
+    round.releaseAim();
+    round.chop();
+    while (round.phase.kind === 'chop') {
+      const phase = round.phase;
+      round.grab();
+      round.setPull(1);
+      round.tick(phase.target / feel.meterSpeed);
+      round.releaseAxe();
+      round.tick(feel.swingSeconds);
+    }
+    for (let i = 0; i < 400 && round.phase.kind === 'falling'; i++) round.tick(0.05);
+    expect(round.phase.kind).toBe('pick');
+    expect(round.logs).toBe(4);
+    const types = events.map((event) => event.type);
+    expect(types.indexOf('roll')).toBeLessThan(types.indexOf('banked'));
+    expect(round.clearing.boulders[0]?.x).toBeCloseTo(300, 0);
+  });
+});
+
 describe('random clearings with hazards', () => {
-  it('always have a cabin at the top, left or right edge, rocks, and trees clear of both', () => {
+  it('always have a cabin at the top, left or right edge, boulders, and trees clear of both', () => {
     const { generator } = data.woodcutting;
     for (let seed = 1; seed <= 15; seed++) {
       const { clearing: c } = generateClearing(data.woodcutting, seed);
@@ -158,12 +245,12 @@ describe('random clearings with hazards', () => {
         cabin.x + cabin.width / 2 >= c.width - generator.cabin.edgeInset;
       expect(nearEdge).toBe(true);
       expect(cabin.y + cabin.depth / 2).toBeLessThan(c.height - generator.cabin.edgeInset);
-      expect(c.rocks.length).toBeGreaterThanOrEqual(generator.rocks.count.min);
-      expect(c.rocks.length).toBeLessThanOrEqual(generator.rocks.count.max);
+      expect(c.boulders.length).toBeGreaterThanOrEqual(generator.boulders.count.min);
+      expect(c.boulders.length).toBeLessThanOrEqual(generator.boulders.count.max);
       for (const tree of c.trees) {
-        for (const r of c.rocks) {
-          expect(Math.hypot(tree.x - r.x, tree.y - r.y)).toBeGreaterThanOrEqual(
-            r.radius + c.trunkRadius + generator.rocks.gap,
+        for (const b of c.boulders) {
+          expect(Math.hypot(tree.x - b.x, tree.y - b.y)).toBeGreaterThanOrEqual(
+            b.radius + c.trunkRadius + generator.boulders.gap,
           );
         }
         const toCabin = Math.hypot(
@@ -179,6 +266,6 @@ describe('random clearings with hazards', () => {
     const one = generateClearing(data.woodcutting, 42).clearing;
     const two = generateClearing(data.woodcutting, 42).clearing;
     expect(two.cabin).toEqual(one.cabin);
-    expect(two.rocks).toEqual(one.rocks);
+    expect(two.boulders).toEqual(one.boulders);
   });
 });

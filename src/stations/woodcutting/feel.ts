@@ -17,6 +17,7 @@ export const woodcuttingTunables: readonly Tunable[] = [
   { key: 'fallSeconds', label: 'Fall time (s)', min: 0.3, max: 2.5, step: 0.05 },
   { key: 'fallEase', label: 'Fall acceleration', min: 1, max: 4, step: 0.1 },
   { key: 'chainDelay', label: 'Chain delay (s)', min: 0, max: 0.6, step: 0.02 },
+  { key: 'boulderSpeed', label: 'Boulder speed', min: 60, max: 500, step: 10 },
   { key: 'shakeStrength', label: 'Shake strength', min: 0, max: 3, step: 0.1 },
   { key: 'hitStopMs', label: 'Hit-stop (ms)', min: 0, max: 200, step: 10 },
   { key: 'buzzChopMs', label: 'Vibrate: chop (ms)', min: 0, max: 60, step: 1 },

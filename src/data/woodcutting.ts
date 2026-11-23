@@ -39,8 +39,10 @@ export const woodcutting = {
         { id: 'd2', x: 170, y: 300, height: 90 },
         { id: 'd3', x: 300, y: 610, height: 90 },
       ],
-      // The tutorial has no hazards; random clearings bring the cabin and rocks.
-      maxRockTurn: 40,
+      // The tutorial has no hazards; random clearings bring the cabin and boulders. A boulder rolls
+      // about a tree and a half, and keeps 80% of what's left each time it bounces off the fence.
+      boulderRoll: 160,
+      boulderBounce: 0.8,
     },
   ],
   tutorialClearing: 'first_clearing',
@@ -57,8 +59,8 @@ export const woodcutting = {
     aimSamples: 120,
     // About two trees wide, at an edge.
     cabin: { width: 96, depth: 64, height: 60, gap: 24, edgeInset: 8 },
-    // Two trunks wide, knee high.
-    rocks: { count: { min: 1, max: 3 }, radius: 14, height: 12, gap: 26 },
+    // Big enough to read beside a tree: a little smaller than a canopy.
+    boulders: { count: { min: 1, max: 3 }, radius: 20, gap: 26 },
   },
   // Par comes from trying every fall direction, so it finds chains people often miss: stars are
   // given well short of it.
@@ -86,6 +88,7 @@ export const woodcutting = {
     fallSeconds: 1.5,
     fallEase: 2.5,
     chainDelay: 0.22,
+    boulderSpeed: 220,
     shakeStrength: 1,
     hitStopMs: 70,
     buzzChopMs: 10,

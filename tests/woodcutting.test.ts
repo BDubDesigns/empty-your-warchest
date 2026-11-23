@@ -47,8 +47,9 @@ function clearing(
     trunkRadius,
     canopyStart,
     trees,
-    rocks: [],
-    maxRockTurn: 40,
+    boulders: [],
+    boulderRoll: 160,
+    boulderBounce: 0.8,
   };
 }
 

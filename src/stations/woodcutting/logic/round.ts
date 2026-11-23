@@ -1,8 +1,16 @@
 import { Rng, type EventLogger } from '../../../core';
 import type { Clearing, WoodcuttingFeel } from '../../../data';
 import { angleBeforeLift, nudgeAim, type AimSample } from './aim';
-import { hitsCabin, resolveChain, type FallStep } from './chain';
-import { fallTimeToReach, fallTimeToTilt } from './fall';
+import {
+  afterChain,
+  hitsCabin,
+  resolveFall,
+  type BoulderRoll,
+  type Chain,
+  type FallStep,
+  type Point,
+} from './chain';
+import { fallTimeToReach, fallTimeToTilt, rollTime } from './fall';
 import { chainLogs, starBonusLogs, starsFor, type StarBonus, type StarThresholds } from './score';
 import {
   chopDamage,
@@ -68,23 +76,32 @@ export interface RoundFaller {
   start: number;
   /** Round time (s) when the tree that knocks it over first touches it (hit trees only). */
   contact: number | undefined;
-  /** Round time (s) when it's down: on the ground, or resting on a rock or the cabin. */
+  /** Round time (s) when it's down: on the ground, or leaning on the cabin. */
   end: number;
   touched: boolean;
   landed: boolean;
 }
 
+export interface RoundRoller {
+  roll: BoulderRoll;
+  /** Round time (s) when it's knocked rolling, and when it stops. */
+  start: number;
+  end: number;
+}
+
 /** Things a view plays effects for. */
 export type RoundEvent =
   | { type: 'impact'; tree: string; swing: RoundSwing; angle: number; points: number }
-  | { type: 'fell'; steps: FallStep[] }
+  | { type: 'fell'; steps: FallStep[]; rolls: BoulderRoll[] }
   /** A falling tree's canopy reaches the next tree's trunk, knocking it over. */
   | { type: 'hit'; step: FallStep }
   | { type: 'landed'; step: FallStep; count: number }
-  /** A trunk slides off a rock (`stop` false) or comes to rest on it (`stop` true). */
-  | { type: 'rock'; step: FallStep; rock: string; stop: boolean }
-  /** A falling tree crashes into the cabin. */
-  | { type: 'crash'; step: FallStep }
+  /** A boulder is knocked rolling. */
+  | { type: 'roll'; roll: BoulderRoll }
+  /** A rolling boulder bounces off the fence. */
+  | { type: 'bounce'; boulder: string; at: Point }
+  /** A falling tree (`step`) or a rolling boulder (`boulder`) crashes into the cabin. */
+  | { type: 'crash'; step?: FallStep; boulder?: string }
   | { type: 'banked'; trees: number; logs: number }
   /** A chain that crashed into the cabin: its logs never reach the warchest. */
   | { type: 'lost'; trees: number; logs: number }
@@ -113,7 +130,10 @@ export interface RoundHooks {
  * logging. A view feeds it input and time, and draws its state.
  */
 export class WoodcuttingRound {
-  readonly clearing: Clearing;
+  /** The clearing as it is now: boulders stay where they rolled to. */
+  clearing: Clearing;
+  /** The round's clearing as it started. */
+  readonly startClearing: Clearing;
   phase: RoundPhase = { kind: 'pick' };
   standing = new Set<string>();
   fallers: RoundFaller[] = [];
@@ -127,13 +147,17 @@ export class WoodcuttingRound {
   #startedAt = 0;
   #bonusClaimed = false;
   #bonusLogs = 0;
-  /** Rock touches and the cabin crash still to come in the falling chain, by round time. */
+  /** Boulders rolling in the falling chain. */
+  rollers: RoundRoller[] = [];
+  #chain: Chain | undefined;
+  /** Boulder rolls, bounces and the cabin crash still to come in the falling chain, by round time. */
   #moments: { at: number; event: RoundEvent }[] = [];
   /** Logs lost to the cabin this round. */
   lostLogs = 0;
 
   constructor(clearing: Clearing, hooks: RoundHooks, seed: number) {
     this.clearing = clearing;
+    this.startClearing = clearing;
     this.#hooks = hooks;
     this.#rng = new Rng(seed);
     this.start(seed);
@@ -185,7 +209,10 @@ export class WoodcuttingRound {
   start(seed: number): void {
     this.#rng = new Rng(seed);
     this.standing = new Set(this.clearing.trees.map((tree) => tree.id));
+    this.clearing = this.startClearing;
     this.fallers = [];
+    this.rollers = [];
+    this.#chain = undefined;
     this.#moments = [];
     this.felled = 0;
     this.logs = 0;
@@ -400,83 +427,99 @@ export class WoodcuttingRound {
 
   #fell(treeId: string, angle: number): void {
     // The chain is decided here, before anything moves; views only play it back.
-    const steps = resolveChain(this.clearing, this.standing, treeId, angle);
+    const chain = resolveFall(this.clearing, this.standing, treeId, angle);
+    const { steps, rolls } = chain;
     const feel = this.feel;
+    const speed = feel.boulderSpeed;
     const heights = new Map(this.clearing.trees.map((tree) => [tree.id, tree.height]));
-    const starts = new Map<string, number>();
+    const naturals = new Map(rolls.map((roll) => [roll.boulder, roll.natural]));
+    const treeStarts = new Map<string, number>([[treeId, this.now]]);
+    const rollStarts = new Map<string, number>();
+    // When whatever knocked something over reached it: a tree's canopy, or a rolling boulder.
+    const reached = (hitBy: string | undefined, byBoulder: boolean | undefined, hitAt = 0) => {
+      if (hitBy === undefined) return this.now;
+      if (byBoulder) {
+        const start = rollStarts.get(hitBy);
+        return start === undefined
+          ? undefined
+          : start + rollTime(hitAt, naturals.get(hitBy) ?? 0, speed);
+      }
+      const start = treeStarts.get(hitBy);
+      return start === undefined
+        ? undefined
+        : start + fallTimeToReach(hitAt, heights.get(hitBy) ?? 1, feel.fallEase) * feel.fallSeconds;
+    };
+    // Trees and boulders knock each other in any order, so settle the times in passes.
+    for (let pass = 0; pass <= steps.length + rolls.length; pass++) {
+      for (const step of steps) {
+        if (treeStarts.has(step.tree)) continue;
+        const at = reached(step.hitBy, step.byBoulder, step.hitAt);
+        if (at !== undefined) treeStarts.set(step.tree, at + feel.chainDelay);
+      }
+      for (const roll of rolls) {
+        if (rollStarts.has(roll.boulder)) continue;
+        const at = reached(roll.hitBy, roll.byBoulder, roll.hitAt);
+        if (at !== undefined) rollStarts.set(roll.boulder, at);
+      }
+    }
     this.fallers = steps.map((step) => {
-      const hitterStart = step.hitBy === undefined ? undefined : starts.get(step.hitBy);
-      const start =
-        hitterStart === undefined || step.hitBy === undefined
-          ? this.now
-          : hitterStart +
-            fallTimeToReach(step.hitAt ?? 0, heights.get(step.hitBy) ?? 1, feel.fallEase) *
-              feel.fallSeconds +
-            feel.chainDelay;
-      starts.set(step.tree, start);
+      const start = treeStarts.get(step.tree) ?? this.now;
       const contact = step.hitBy === undefined ? undefined : start - feel.chainDelay;
-      // Down when its last trunk is: a trunk stopped on something rests partway over.
+      // Down when its last trunk is: one that crashed into the cabin leans on it, partway over.
       const share = Math.max(
         ...step.paths.map((path) =>
-          path.stop ? fallTimeToTilt(path.stop.tilt, feel.fallEase) : 1,
+          path.cabin ? fallTimeToTilt(path.cabin.tilt, feel.fallEase) : 1,
         ),
       );
-      return {
-        step,
-        start,
-        contact,
-        end: start + share * feel.fallSeconds,
-        touched: false,
-        landed: false,
-      };
+      const end = start + share * feel.fallSeconds;
+      return { step, start, contact, end, touched: false, landed: false };
     });
-    this.#moments = this.fallers
-      .flatMap((faller) =>
-        faller.step.paths.flatMap((path) => {
-          const at = (tilt: number) =>
-            faller.start + fallTimeToTilt(tilt, feel.fallEase) * feel.fallSeconds;
-          const moments: { at: number; event: RoundEvent }[] = [];
-          if (path.rock) {
-            moments.push({
-              at: at(path.rock.tilt),
-              event: { type: 'rock', step: faller.step, rock: path.rock.id, stop: false },
-            });
-          }
-          if (path.stop) {
-            moments.push({
-              at: at(path.stop.tilt),
-              event:
-                path.stop.on === 'cabin'
-                  ? { type: 'crash', step: faller.step }
-                  : { type: 'rock', step: faller.step, rock: path.stop.id ?? '', stop: true },
-            });
-          }
-          return moments;
-        }),
-      )
-      .sort((a, b) => a.at - b.at);
+    this.rollers = rolls.map((roll) => {
+      const start = rollStarts.get(roll.boulder) ?? this.now;
+      return { roll, start, end: start + rollTime(roll.distance, roll.natural, speed) };
+    });
+    const moments: { at: number; event: RoundEvent }[] = [];
+    for (const faller of this.fallers) {
+      if (faller.step.paths.some((path) => path.cabin)) {
+        moments.push({ at: faller.end, event: { type: 'crash', step: faller.step } });
+      }
+    }
+    for (const roller of this.rollers) {
+      const { roll } = roller;
+      moments.push({ at: roller.start, event: { type: 'roll', roll } });
+      let rolled = 0;
+      roll.path.slice(1, -1).forEach((point, index) => {
+        const from = roll.path[index] ?? point;
+        rolled += Math.hypot(point.x - from.x, point.y - from.y);
+        moments.push({
+          at: roller.start + rollTime(rolled, roll.natural, speed),
+          event: { type: 'bounce', boulder: roll.boulder, at: point },
+        });
+      });
+      if (roll.cabin) {
+        moments.push({ at: roller.end, event: { type: 'crash', boulder: roll.boulder } });
+      }
+    }
+    this.#moments = moments.sort((a, b) => a.at - b.at);
+    this.#chain = chain;
     for (const step of steps) this.standing.delete(step.tree);
     this.phase = { kind: 'falling' };
-    const paths = steps.flatMap((step) => step.paths.map((path) => ({ tree: step.tree, path })));
     this.#log('woodcutting.fell', {
       tree: treeId,
       angle: degrees(angle),
       chain: steps.map((step) => step.tree),
       forked: steps.filter((step) => step.trunks.length > 1).map((step) => step.tree),
       length: steps.length,
-      rockSlides: paths
-        .filter(({ path }) => path.rock)
-        .map(({ tree, path }) => ({
-          tree,
-          rock: path.rock?.id,
-          turn: Math.round((path.landAngle - path.angle) / DEG),
-        })),
-      rockStops: paths
-        .filter(({ path }) => path.stop?.on === 'rock')
-        .map(({ tree, path }) => ({ tree, rock: path.stop?.id })),
-      cabin: hitsCabin(steps),
+      rolls: rolls.map((roll) => ({
+        boulder: roll.boulder,
+        distance: Math.round(roll.distance),
+        bounces: roll.path.length - 2,
+        trees: steps.filter((step) => step.hitBy === roll.boulder && step.byBoulder).length,
+        cabin: roll.cabin,
+      })),
+      cabin: hitsCabin(chain),
     });
-    this.#hooks.onEvent?.({ type: 'fell', steps });
+    this.#hooks.onEvent?.({ type: 'fell', steps, rolls });
   }
 
   #advanceFall(): void {
@@ -498,14 +541,23 @@ export class WoodcuttingRound {
       const moment = this.#moments.shift();
       if (moment) this.#hooks.onEvent?.(moment.event);
     }
-    if (this.fallers.length > 0 && this.fallers.every((faller) => faller.landed)) this.#settle();
+    if (
+      this.fallers.length > 0 &&
+      this.fallers.every((faller) => faller.landed) &&
+      this.rollers.every((roller) => this.now >= roller.end)
+    )
+      this.#settle();
   }
 
   /** The falling chain is down: bank it, or lose it if it crashed into the cabin. */
   #settle(): void {
     if (this.fallers.length === 0) return;
     this.#moments = [];
-    if (hitsCabin(this.fallers.map((faller) => faller.step))) this.#lose();
+    const chain = this.#chain;
+    this.#chain = undefined;
+    this.rollers = [];
+    if (chain) this.clearing = afterChain(this.clearing, chain);
+    if (chain && hitsCabin(chain)) this.#lose();
     else this.#bank();
   }
 

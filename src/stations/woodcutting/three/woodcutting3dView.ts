@@ -7,18 +7,11 @@ import { loadModel } from '../../../app/models';
 import { Sfx } from '../../../app/sfx';
 import { SkillBar, type XpDeposit } from '../../../app/skillBar';
 import { WarchestHud, type Deposit, type ScreenPoint } from '../../../app/warchestHud';
-import type { EventLogger, Game, LiveChoice, LiveTuning } from '../../../core';
+import { Rng, type EventLogger, type Game, type LiveChoice, type LiveTuning } from '../../../core';
 import type { Clearing, ClearingTree, WoodcuttingFeel } from '../../../data';
-import {
-  fallTip,
-  previewFall,
-  trunkAngles,
-  type FallStep,
-  type Point,
-  type TrunkPath,
-} from '../logic/chain';
-import { fallTilt } from '../logic/fall';
-import { WoodcuttingRound, type RoundEvent } from '../logic/round';
+import { fallTip, previewFall, trunkAngles, type FallStep, type Point } from '../logic/chain';
+import { fallTilt, rollDistance } from '../logic/fall';
+import { WoodcuttingRound, type RoundEvent, type RoundRoller } from '../logic/round';
 import { chainLogs } from '../logic/score';
 import type { ClearingPicker } from '../clearingPicker';
 import type { FastFall } from '../fastFall';
@@ -48,7 +41,6 @@ interface Models {
   quaternius: THREE.Object3D[];
   stump: THREE.Object3D;
   axe: THREE.Object3D;
-  rocks: THREE.Object3D[];
 }
 
 /** World units per clearing unit: the 360×640 clearing becomes 12×21 units. */
@@ -68,7 +60,6 @@ const MODELS = {
   ),
   stump: 'models/kenney/stump_round.glb',
   axe: 'models/kenney/tool-axe.glb',
-  rocks: ['A', 'B', 'C'].map((name) => `models/kenney/rock_large${name}.glb`),
 };
 const SOUNDS: Record<string, string> = Object.fromEntries(
   [
@@ -108,7 +99,14 @@ const COLORS = {
   door: 0x4a2f1f,
   window: 0xf3e2a0,
   chimney: 0x8a8378,
+  fence: 0x8b6a45,
+  boulder: 0x9a968c,
 };
+/** The fence: how tall, and posts about this far apart (clearing units). */
+const FENCE_HEIGHT = 0.42;
+const FENCE_POST_SPACING = 60;
+/** Boulders are drawn a little less tall than wide. */
+const BOULDER_SQUAT = 0.8;
 /** Seconds a hit cabin rocks for, and the summary waits after the crash callout. */
 const CABIN_SHAKE_SECONDS = 0.6;
 const CRASH_SUMMARY_DELAY = 1.1;
@@ -165,8 +163,8 @@ interface TreeVisual {
   trunks: THREE.Group[];
   stump: THREE.Object3D;
   /**
-   * Trunk directions once it has fallen, how far each tipped (less than flat if it's resting on a
-   * rock or the cabin), and when it started sinking away.
+   * Trunk directions once it has fallen, how far each tipped (less than flat if it's leaning on
+   * the cabin), and when it started sinking away.
    */
   fallen?: { trunks: number[]; tilts: number[]; sinkAt?: number };
   /** Set once the chopped tree has broken at its notch: the trunks tip from this height. */
@@ -276,11 +274,19 @@ export class Woodcutting3DView implements ScreenView {
   /** A scratch camera for working out framings, so the real one is never disturbed. */
   readonly #framer = new THREE.PerspectiveCamera(42, 1, 0.1, 200);
   #frame = 0;
-  /** This round's rocks and cabin. */
+  /** This round's boulders, cabin and the fence. */
   readonly #hazards = new THREE.Group();
   #cabin: { group: THREE.Group; hitAt: number | undefined } | undefined;
-  /** Outlines of this round's rocks, shown while aiming. */
-  #rockRings: THREE.Mesh[] = [];
+  /**
+   * This round's boulders: where each sits (`holder`), its tumble (`spinner`, `turned` once it's
+   * stopped), and an outline shown while aiming.
+   */
+  #boulders = new Map<
+    string,
+    { holder: THREE.Group; spinner: THREE.Group; turned: THREE.Quaternion; ring: THREE.Mesh }
+  >();
+  /** Boulders rolling right now. */
+  #rolling: RoundRoller[] = [];
   /** The cabin hint is up this round (the first clearing with one). */
   #hazardHint = false;
   /** Round time before which the summary waits (after a cabin crash, so its callout shows). */
@@ -336,15 +342,14 @@ export class Woodcutting3DView implements ScreenView {
     const recipe = game.data.recipes.find((entry) => entry.id === game.data.woodcutting.recipe);
     const item = recipe?.outputs[0]?.item;
     if (!item) throw new Error('The woodcutting recipe makes nothing');
-    const [kenney, quaternius, stump, axe, rocks, hud] = await Promise.all([
+    const [kenney, quaternius, stump, axe, hud] = await Promise.all([
       Promise.all(MODELS.kenney.map(loadModel)),
       Promise.all(MODELS.quaternius.map(loadModel)),
       loadModel(MODELS.stump),
       loadModel(MODELS.axe),
-      Promise.all(MODELS.rocks.map(loadModel)),
       WarchestHud.create(element, { game, item, haptics: deps.haptics }),
     ]);
-    return new Woodcutting3DView(element, deps, { kenney, quaternius, stump, axe, rocks }, hud);
+    return new Woodcutting3DView(element, deps, { kenney, quaternius, stump, axe }, hud);
   }
 
   // ScreenView
@@ -473,39 +478,34 @@ export class Woodcutting3DView implements ScreenView {
   }
 
   /**
-   * This round's rocks and cabin, sized to the rules: each rock fills its radius and height, and
-   * the cabin its footprint and height, so what a falling tree touches is what counts.
+   * This round's boulders and cabin, sized to the rules: each boulder fills its radius, and the
+   * cabin its footprint and height, so what a falling tree touches is what counts.
    */
   #buildHazards(): void {
     this.#hazards.clear();
-    this.#rockRings = [];
+    this.#boulders.clear();
+    this.#rolling = [];
     this.#cabin = undefined;
-    this.#clearing.rocks.forEach((rock, index) => {
-      const source = this.#models.rocks[index % this.#models.rocks.length];
-      if (!source) return;
-      const model = source.clone(true);
-      const box = new THREE.Box3().setFromObject(model);
-      const size = box.getSize(new THREE.Vector3());
-      const center = box.getCenter(new THREE.Vector3());
-      const wide = (rock.radius * 2 * SCALE) / Math.max(size.x, size.z, 0.001);
-      const tall = (rock.height * SCALE) / Math.max(size.y, 0.001);
-      model.scale.set(wide, tall, wide);
-      model.position.set(-center.x * wide, -box.min.y * tall, -center.z * wide);
-      model.traverse((child) => {
-        if (child instanceof THREE.Mesh) {
-          child.castShadow = true;
-          child.receiveShadow = true;
-        }
-      });
+    this.#buildFence();
+    this.#clearing.boulders.forEach((boulder, index) => {
+      const model = this.#boulderModel(boulder.radius * SCALE, treeSeed(boulder.id) + index);
+      const diameter = boulder.radius * 2 * SCALE;
+      const spinner = new THREE.Group();
+      spinner.add(model);
+      spinner.position.y = (diameter * BOULDER_SQUAT) / 2;
+      const turned = new THREE.Quaternion().setFromAxisAngle(
+        new THREE.Vector3(0, 1, 0),
+        treeSeed(boulder.id + String(this.#plan?.seed ?? 0)) % 6,
+      );
+      spinner.quaternion.copy(turned);
       const holder = new THREE.Group();
-      holder.add(model);
-      holder.position.copy(this.#world(rock));
-      holder.rotation.y = treeSeed(rock.id + String(this.#plan?.seed ?? 0)) % 6;
+      holder.add(spinner);
+      holder.position.copy(this.#world(boulder));
       this.#hazards.add(holder);
-      // While aiming, an outline drawn over the trees, so a rock behind a canopy still shows.
-      const radius = rock.radius * SCALE;
+      // While aiming, an outline drawn over the trees, so a boulder behind a canopy still shows.
+      const radius = boulder.radius * SCALE;
       const ring = new THREE.Mesh(
-        new THREE.RingGeometry(radius * 0.95, radius * 1.15, 24).rotateX(-Math.PI / 2),
+        new THREE.RingGeometry(radius * 0.95, radius * 1.15, 28).rotateX(-Math.PI / 2),
         new THREE.MeshBasicMaterial({
           color: COLORS.guide,
           transparent: true,
@@ -515,10 +515,10 @@ export class Woodcutting3DView implements ScreenView {
         }),
       );
       ring.renderOrder = 9;
-      ring.position.copy(this.#world(rock, 0.03));
+      ring.position.copy(this.#world(boulder, 0.03));
       ring.visible = false;
       this.#hazards.add(ring);
-      this.#rockRings.push(ring);
+      this.#boulders.set(boulder.id, { holder, spinner, turned, ring });
     });
     const cabin = this.#clearing.cabin;
     if (cabin) {
@@ -527,6 +527,81 @@ export class Woodcutting3DView implements ScreenView {
       this.#hazards.add(group);
       this.#cabin = { group, hitAt: undefined };
     }
+  }
+
+  /**
+   * A boulder: a chunky low-poly stone, centred on its middle so it can tumble as it rolls, a
+   * little lumpy (seeded, so each one keeps its shape) and a little squat.
+   */
+  #boulderModel(radius: number, seed: number): THREE.Mesh {
+    const geometry = new THREE.IcosahedronGeometry(radius, 1);
+    const position = geometry.getAttribute('position');
+    const rng = new Rng(seed);
+    // Shared corners move together, so the faces stay closed.
+    const bumps = new Map<string, number>();
+    for (let index = 0; index < position.count; index++) {
+      const key = [position.getX(index), position.getY(index), position.getZ(index)]
+        .map((value) => value.toFixed(3))
+        .join(',');
+      let bump = bumps.get(key);
+      if (bump === undefined) {
+        bump = 0.85 + rng.range(0, 0.25);
+        bumps.set(key, bump);
+      }
+      position.setXYZ(
+        index,
+        position.getX(index) * bump,
+        position.getY(index) * bump * BOULDER_SQUAT,
+        position.getZ(index) * bump,
+      );
+    }
+    geometry.computeVertexNormals();
+    const mesh = new THREE.Mesh(
+      geometry,
+      new THREE.MeshLambertMaterial({ color: COLORS.boulder, flatShading: true }),
+    );
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    return mesh;
+  }
+
+  /**
+   * A split-rail fence around the clearing, the cushion boulders bounce off. Built from boxes:
+   * posts, and two rails between each pair.
+   */
+  #buildFence(): void {
+    const { width, height } = this.#clearing;
+    const material = new THREE.MeshLambertMaterial({ color: COLORS.fence });
+    const corners = [
+      { x: 0, y: 0 },
+      { x: width, y: 0 },
+      { x: width, y: height },
+      { x: 0, y: height },
+    ];
+    corners.forEach((from, index) => {
+      const to = corners[(index + 1) % corners.length] ?? from;
+      const length = Math.hypot(to.x - from.x, to.y - from.y);
+      const posts = Math.max(Math.round(length / FENCE_POST_SPACING), 1);
+      const angle = Math.atan2(to.y - from.y, to.x - from.x);
+      for (let post = 0; post < posts; post++) {
+        const at = this.#world({
+          x: from.x + ((to.x - from.x) * post) / posts,
+          y: from.y + ((to.y - from.y) * post) / posts,
+        });
+        const upright = new THREE.Mesh(new THREE.BoxGeometry(0.09, FENCE_HEIGHT, 0.09), material);
+        upright.position.set(at.x, FENCE_HEIGHT / 2, at.z);
+        upright.castShadow = true;
+        this.#hazards.add(upright);
+      }
+      const middle = this.#world({ x: (from.x + to.x) / 2, y: (from.y + to.y) / 2 });
+      for (const rail of [0.45, 0.85]) {
+        const bar = new THREE.Mesh(new THREE.BoxGeometry(length * SCALE, 0.05, 0.05), material);
+        bar.position.set(middle.x, FENCE_HEIGHT * rail, middle.z);
+        bar.rotation.y = -angle;
+        bar.castShadow = true;
+        this.#hazards.add(bar);
+      }
+    });
   }
 
   /**
@@ -763,11 +838,8 @@ export class Woodcutting3DView implements ScreenView {
       hitHead: flat(new THREE.ShapeGeometry(arrowShape), COLORS.gold, 0.95),
       /** Where the knocked tree's canopy will land. */
       hitLand: flat(new THREE.RingGeometry(canopy - 0.05, canopy + 0.03, 40), COLORS.gold, 0.9),
-      /** Off a rock: the line it starts down, faint, up to where it touches the rock. */
-      was: strip(COLORS.guide, 0.3),
-      hitWas: strip(COLORS.gold, 0.35),
-      /** Stopped on a rock or the cabin: a bar across where it comes to rest. */
-      stop: strip(COLORS.guide, 0.95),
+      /** A boulder it sets rolling: one line per leg between fence bounces. */
+      rollLegs: Array.from({ length: 6 }, () => strip(COLORS.gold, 0.85)),
     }));
     return {
       selection: flat(new THREE.RingGeometry(canopy + 0.12, canopy + 0.24, 40), COLORS.accent, 1),
@@ -785,25 +857,6 @@ export class Woodcutting3DView implements ScreenView {
     mesh.visible = true;
   }
 
-  /** Off a rock: the faint line the trunk starts down, up to the rock, if the guide goes past it. */
-  #showSlide(mesh: THREE.Mesh, tree: Point, path: TrunkPath, shown: number, width: number): void {
-    if (!path.rock || shown <= path.rock.at * SCALE) return;
-    const base = this.#world(tree);
-    const at = base
-      .clone()
-      .addScaledVector(
-        new THREE.Vector3(Math.cos(path.angle), 0, Math.sin(path.angle)),
-        path.rock.at * SCALE,
-      );
-    this.#placeStrip(mesh, base, at, width);
-  }
-
-  /** A bar across the fall line where a trunk comes to rest on a rock or the cabin. */
-  #placeStop(mesh: THREE.Mesh, at: THREE.Vector3, angle: number): void {
-    const across = new THREE.Vector3(-Math.sin(angle), 0, Math.cos(angle)).multiplyScalar(0.35);
-    this.#placeStrip(mesh, at.clone().sub(across), at.clone().add(across), 0.1);
-  }
-
   #updateGuides(): void {
     const { selection, tether, sets } = this.#guides;
     selection.visible = tether.visible = false;
@@ -813,13 +866,11 @@ export class Woodcutting3DView implements ScreenView {
         set.hitLine.visible =
         set.hitHead.visible =
         set.hitLand.visible =
-        set.was.visible =
-        set.hitWas.visible =
-        set.stop.visible =
           false;
+    for (const set of sets) for (const leg of set.rollLegs) leg.visible = false;
     const phase = this.#round.phase;
-    for (const ring of this.#rockRings) ring.visible = phase.kind === 'aim';
-    // What the guide warns of, for the e2e test: the cabin, a rock slide or stop.
+    for (const boulder of this.#boulders.values()) boulder.ring.visible = phase.kind === 'aim';
+    // What the guide shows, for the e2e test: the cabin, or a boulder set rolling.
     delete this.#element.dataset.guide;
     // The ground guides are for the overview; the chop close-up stays clean.
     if (phase.kind !== 'aim') return;
@@ -835,43 +886,59 @@ export class Woodcutting3DView implements ScreenView {
     trunkAngles(tree, phase.angle).forEach((trunk, index) => {
       const set = sets[index];
       if (!set) return;
-      const preview = previewFall(this.#clearing, this.#round.standing, tree, trunk);
+      const preview = previewFall(this.#round.clearing, this.#round.standing, tree, trunk);
       // Red: what the guide shows reaches the cabin.
       const tint = (mesh: THREE.Mesh, color: number) => {
         (mesh.material as THREE.MeshBasicMaterial).color.setHex(
           preview.danger ? COLORS.danger : color,
         );
       };
-      for (const mesh of [set.line, set.ghost, set.was, set.stop]) tint(mesh, COLORS.guide);
-      for (const mesh of [set.hitLine, set.hitHead, set.hitLand, set.hitWas])
+      for (const mesh of [set.line, set.ghost]) tint(mesh, COLORS.guide);
+      for (const mesh of [set.hitLine, set.hitHead, set.hitLand, ...set.rollLegs])
         tint(mesh, COLORS.gold);
-      const path = preview.path;
       this.#element.dataset.guide = preview.danger
         ? 'cabin'
-        : path.stop
-          ? 'stop'
-          : path.rock
-            ? 'slide'
-            : (this.#element.dataset.guide ?? 'clear');
+        : preview.roll
+          ? 'roll'
+          : (this.#element.dataset.guide ?? 'clear');
       const ghost = this.#world(preview.ghost);
       this.#placeStrip(set.line, base, ghost, 0.06);
       set.ghost.position.set(ghost.x, 0.05, ghost.z);
       set.ghost.visible = true;
-      this.#showSlide(set.was, tree, path, Math.hypot(ghost.x - base.x, ghost.z - base.z), 0.05);
-      if (!preview.hit && path.stop) this.#placeStop(set.stop, ghost, path.landAngle);
+      const canopy = this.#clearing.canopyRadius * SCALE;
+      if (preview.roll) {
+        // The boulder's roll, bounce by bounce, an arrow where it stops and its outline there.
+        const points = preview.roll.path.map((point) => this.#world(point));
+        const legs = points.slice(1).map((to, index) => ({ from: points[index] ?? to, to }));
+        legs.forEach(({ from, to }, index) => {
+          const mesh = set.rollLegs[index];
+          if (mesh) this.#placeStrip(mesh, from, to, 0.08);
+        });
+        const last = legs[legs.length - 1];
+        if (last) {
+          const angle = Math.atan2(last.to.z - last.from.z, last.to.x - last.from.x);
+          set.hitHead.position.set(last.to.x, 0.05, last.to.z);
+          set.hitHead.rotation.set(0, -angle, 0);
+          set.hitHead.visible = true;
+          set.hitLand.position.set(last.to.x, 0.05, last.to.z);
+          set.hitLand.scale.setScalar((preview.roll.radius * SCALE) / canopy);
+          set.hitLand.visible = true;
+        }
+        return;
+      }
+      set.hitLand.scale.setScalar(1);
       if (preview.hit) {
         const hitTree = this.#trees.get(preview.hit.tree)?.tree;
         if (!hitTree) return;
         const from = this.#world(hitTree);
-        // The knocked tree's whole fall: a line to where its top lands (or it stops), and its
-        // landing ring.
+        // The knocked tree's whole fall: a line to where its top lands (or it meets the cabin),
+        // and its landing ring.
         const hitPath = preview.hit.path;
-        const angle = hitPath.landAngle;
+        const angle = hitPath.angle;
         const direction = new THREE.Vector3(Math.cos(angle), 0, Math.sin(angle));
-        const land = hitPath.stop
-          ? from.clone().addScaledVector(direction, hitPath.stop.at * SCALE)
+        const land = hitPath.cabin
+          ? from.clone().addScaledVector(direction, hitPath.cabin.at * SCALE)
           : this.#world(fallTip(hitTree, angle));
-        const canopy = this.#clearing.canopyRadius * SCALE;
         const lineEnd = land.clone().addScaledVector(direction, -canopy - 0.25);
         this.#placeStrip(set.hitLine, from, lineEnd, 0.08);
         set.hitHead.position.set(lineEnd.x, 0.05, lineEnd.z);
@@ -879,8 +946,6 @@ export class Woodcutting3DView implements ScreenView {
         set.hitHead.visible = true;
         set.hitLand.position.set(land.x, 0.05, land.z);
         set.hitLand.visible = true;
-        this.#showSlide(set.hitWas, hitTree, hitPath, Infinity, 0.06);
-        if (hitPath.stop) this.#placeStop(set.stop, land, angle);
       }
     });
   }
@@ -1133,7 +1198,7 @@ export class Woodcutting3DView implements ScreenView {
 
   /**
    * Where the chase camera wants to be: framing the trees falling right now (base, top and where
-   * each lands). When the chain splits it widens to keep both paths; as trees land it closes in
+   * each lands) and boulders rolling. When the chain splits it widens to keep both paths; as trees land it closes in
    * on whatever is still going.
    */
   #chaseGoal(side: THREE.Vector3): CameraPose | undefined {
@@ -1175,6 +1240,13 @@ export class Woodcutting3DView implements ScreenView {
           points.push(point.clone().add(across), point.clone().sub(across));
         }
       }
+    }
+    // Boulders rolling now (or about to be): where each is and the rest of its roll.
+    for (const roller of round.rollers) {
+      if (round.now < roller.start - CHASE_LOOKAHEAD || round.now > roller.end) continue;
+      const visual = this.#boulders.get(roller.roll.boulder);
+      if (visual) points.push(visual.holder.position.clone());
+      for (const point of roller.roll.path) points.push(this.#world(point));
     }
     if (points.length === 0) return undefined;
     const direction = side
@@ -1392,7 +1464,7 @@ export class Woodcutting3DView implements ScreenView {
         if (visual) {
           visual.fallen = {
             trunks: step.trunks,
-            tilts: step.paths.map((path) => path.stop?.tilt ?? Math.PI / 2),
+            tilts: step.paths.map((path) => path.cabin?.tilt ?? Math.PI / 2),
           };
         }
         const carver = this.#carvers.get(step.tree);
@@ -1414,8 +1486,8 @@ export class Woodcutting3DView implements ScreenView {
       const visual = this.#trees.get(event.step.tree);
       if (visual) {
         event.step.paths.forEach((path) => {
-          if (!path.stop) {
-            this.#burst('dust', this.#world(fallTip(visual.tree, path.landAngle), 0.2), 10);
+          if (!path.cabin) {
+            this.#burst('dust', this.#world(fallTip(visual.tree, path.angle), 0.2), 10);
           }
         });
       }
@@ -1431,12 +1503,20 @@ export class Woodcutting3DView implements ScreenView {
         Math.min(feel.buzzLandMs + (combo - 1) * feel.buzzLandPerTreeMs, feel.buzzLandMaxMs),
       );
       if (combo > 1) this.#showCounter(combo);
-    } else if (event.type === 'rock') {
-      const rock = this.#clearing.rocks.find((entry) => entry.id === event.rock);
-      if (rock) this.#burst('dust', this.#world(rock, rock.height * SCALE), event.stop ? 12 : 7);
-      this.#play(`rock-${1 + Math.floor(Math.random() * 2)}`, event.stop ? 0.8 : 0.55);
-      this.#deps.haptics.pulse(event.stop ? feel.buzzLandMs : feel.buzzHitMs);
+    } else if (event.type === 'roll') {
+      // Knocked rolling: a heavy stone knock, a puff of dust, and a buzz.
+      const roller = this.#round.rollers.find((entry) => entry.roll === event.roll);
+      if (roller) this.#rolling.push(roller);
+      this.#burst('dust', this.#world(event.roll.from, 0.2), 10);
+      this.#play(`rock-${1 + Math.floor(Math.random() * 2)}`, 0.85, -150);
+      this.#deps.haptics.pulse(feel.buzzLandMs);
+    } else if (event.type === 'bounce') {
+      // Off the fence: a wooden knock.
+      this.#burst('chip', this.#world(event.at, 0.3), 6);
+      this.#play(`chop-${2 + Math.floor(Math.random() * 2)}`, 0.6, -300);
+      this.#deps.haptics.pulse(feel.buzzHitMs);
     } else if (event.type === 'crash') {
+      if (event.boulder) this.#settleBoulder(event.boulder);
       const cabin = this.#clearing.cabin;
       if (cabin) {
         const at = this.#world(cabin, cabin.height * SCALE * 0.6);
@@ -1770,6 +1850,7 @@ export class Woodcutting3DView implements ScreenView {
       this.#cameraPhase = kind;
     }
     this.#updateTrees();
+    this.#updateBoulders();
     this.#updateCabin();
     this.#updateGuides();
     this.#updateAxe();
@@ -1844,18 +1925,65 @@ export class Woodcutting3DView implements ScreenView {
   }
 
   /**
-   * Which way a trunk points as it tips: its fall direction, turning onto its new line once it
-   * touches a rock it slides off, and all the way round by the time it's down.
+   * Rolling boulders: each one moves along its roll (bounces and all) and tumbles as it goes,
+   * slowing to a stop. Their outlines follow them.
    */
-  #trunkYaw(path: TrunkPath, tilt: number): number {
-    if (!path.rock) return path.angle;
-    const end = path.stop?.tilt ?? Math.PI / 2;
-    const share = Math.min(
-      Math.max((tilt - path.rock.tilt) / Math.max(end - path.rock.tilt, 0.01), 0),
-      1,
-    );
-    const eased = 1 - (1 - share) ** 2;
-    return path.angle + (path.landAngle - path.angle) * eased;
+  #updateBoulders(): void {
+    const round = this.#round;
+    const speed = round.feel.boulderSpeed;
+    for (const roller of [...this.#rolling]) {
+      const visual = this.#boulders.get(roller.roll.boulder);
+      if (!visual) continue;
+      const { roll } = roller;
+      const rolled = rollDistance(
+        Math.max(round.now - roller.start, 0),
+        roll.natural,
+        speed,
+        roll.distance,
+      );
+      // Walk the legs: where it is now, and the tumble so far (a turn of rolled ÷ radius about
+      // the axis square to each leg).
+      const radius =
+        (round.clearing.boulders.find((b) => b.id === roll.boulder)?.radius ?? 1) * SCALE;
+      const spin = new THREE.Quaternion();
+      let left = rolled;
+      let at = roll.path[0] ?? roll.from;
+      for (let index = 1; index < roll.path.length; index++) {
+        const to = roll.path[index] ?? at;
+        const length = Math.hypot(to.x - at.x, to.y - at.y);
+        const step = Math.min(left, length);
+        const direction = new THREE.Vector3(to.x - at.x, 0, to.y - at.y).normalize();
+        const axis = new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), direction);
+        if (axis.lengthSq() > 0) {
+          spin.premultiply(
+            new THREE.Quaternion().setFromAxisAngle(axis.normalize(), (step * SCALE) / radius),
+          );
+        }
+        const share = length > 0 ? step / length : 0;
+        const point = { x: at.x + (to.x - at.x) * share, y: at.y + (to.y - at.y) * share };
+        left -= step;
+        at = point;
+        if (left <= 0) break;
+      }
+      visual.holder.position.copy(this.#world(at));
+      visual.ring.position.copy(this.#world(at, 0.03));
+      visual.spinner.quaternion.copy(spin.multiply(visual.turned));
+      if (round.now >= roller.end) this.#settleBoulder(roll.boulder);
+    }
+  }
+
+  /** A boulder has stopped: keep its tumble, and stop moving it. */
+  #settleBoulder(id: string): void {
+    const visual = this.#boulders.get(id);
+    const index = this.#rolling.findIndex((roller) => roller.roll.boulder === id);
+    if (index < 0) return;
+    const roller = this.#rolling[index];
+    this.#rolling.splice(index, 1);
+    if (!visual || !roller) return;
+    visual.turned.copy(visual.spinner.quaternion);
+    const to = this.#world(roller.roll.to);
+    visual.holder.position.copy(to);
+    visual.ring.position.set(to.x, 0.03, to.z);
   }
 
   /** A hit cabin rocks on its base for a moment; it's hidden if it blocks the chop close-up. */
@@ -1888,8 +2016,8 @@ export class Woodcutting3DView implements ScreenView {
           : 0;
         visual.trunks.forEach((trunk, index) => {
           const path = faller.step.paths[index];
-          const trunkTilt = Math.min(tilt, path?.stop?.tilt ?? Math.PI / 2);
-          this.#tip(trunk, path ? this.#trunkYaw(path, trunkTilt) : faller.step.angle, trunkTilt);
+          const trunkTilt = Math.min(tilt, path?.cabin?.tilt ?? Math.PI / 2);
+          this.#tip(trunk, path?.angle ?? faller.step.angle, trunkTilt);
           // A tree broken at its notch tips over the stump, then its butt drops to the ground.
           if (visual.brokenAt !== undefined)
             trunk.position.y = visual.brokenAt * (1 - Math.sin(trunkTilt));
@@ -2071,7 +2199,7 @@ export class Woodcutting3DView implements ScreenView {
       };
       ui.hint.textContent =
         this.#hazardHint && phase.kind === 'pick'
-          ? "Don't fell onto the cabin! Clip a rock to bank a shot"
+          ? "Don't fell onto the cabin! Knock a boulder to roll it through trees"
           : (hints[phase.kind] ?? '');
       ui.hint.classList.toggle('w3d-hint-warn', this.#hazardHint && phase.kind === 'pick');
     }
