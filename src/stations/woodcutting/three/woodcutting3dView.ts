@@ -815,7 +815,15 @@ export class Woodcutting3DView implements ScreenView {
         feel.fallEase,
       );
       const base = this.#world(tree);
-      points.push(base);
+      // Room around the stump too, so it never sits right at the edge.
+      for (const [dx, dz] of [
+        [1, 0],
+        [-1, 0],
+        [0, 1],
+        [0, -1],
+      ] as const) {
+        points.push(base.clone().add(new THREE.Vector3(dx, 0, dz).multiplyScalar(canopy * 0.6)));
+      }
       for (const angle of faller.step.trunks) {
         const along = new THREE.Vector3(Math.cos(angle), 0, Math.sin(angle));
         const across = new THREE.Vector3(-along.z, 0, along.x).multiplyScalar(canopy);
@@ -865,8 +873,8 @@ export class Woodcutting3DView implements ScreenView {
       const xs = spots.map((spot) => spot.x);
       const ys = spots.map((spot) => spot.y);
       return (
-        Math.min(...xs) >= 24 &&
-        Math.max(...xs) <= width - 24 &&
+        Math.min(...xs) >= 36 &&
+        Math.max(...xs) <= width - 36 &&
         Math.max(...ys) - Math.min(...ys) <= band.bottom - band.top
       );
     };
