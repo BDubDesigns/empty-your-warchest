@@ -41,9 +41,9 @@ export function fallTip(tree: ClearingTree, angle: number): Point {
 }
 
 /**
- * Standing trees a tree falling at `angle` knocks over, nearest first. The falling canopy
- * sweeps from the base to the tip, so a standing tree is hit when the two canopies touch:
- * its center is within two canopy radii of the fall line.
+ * Standing trees a tree falling at `angle` knocks over, nearest first. A standing tree is hit
+ * when the falling tree touches its trunk: within canopy + trunk radius of the leafy part of the
+ * fall line, or trunk + trunk of the bare trunk below the canopy.
  */
 export function treesHit(
   clearing: Clearing,
@@ -51,7 +51,9 @@ export function treesHit(
   tree: ClearingTree,
   angle: number,
 ): Hit[] {
-  const reach = clearing.canopyRadius * 2;
+  const reach = clearing.canopyRadius + clearing.trunkRadius;
+  const bare = clearing.trunkRadius * 2;
+  const canopyFrom = tree.height * clearing.canopyStart;
   const dx = Math.cos(angle);
   const dy = Math.sin(angle);
   const hits: Hit[] = [];
@@ -63,11 +65,15 @@ export function treesHit(
     if (along <= 0) continue;
     // Signed distance from the fall line; positive is clockwise of it on screen.
     const side = dx * relY - dy * relX;
-    const clamped = Math.min(along, tree.height);
-    const distance = Math.hypot(relX - dx * clamped, relY - dy * clamped);
-    if (distance > reach) continue;
-    const contactAt = Math.max(0, along - Math.sqrt(Math.max(reach * reach - side * side, 0)));
-    hits.push({ tree: other, along, contactAt, offset: Math.max(-1, Math.min(1, side / reach)) });
+    const toSegment = (from: number, to: number) => {
+      const clamped = Math.min(Math.max(along, from), to);
+      return Math.hypot(relX - dx * clamped, relY - dy * clamped);
+    };
+    const byCanopy = toSegment(canopyFrom, tree.height) <= reach;
+    if (!byCanopy && toSegment(0, canopyFrom) > bare) continue;
+    const radius = byCanopy ? reach : bare;
+    const contactAt = Math.max(0, along - Math.sqrt(Math.max(radius * radius - side * side, 0)));
+    hits.push({ tree: other, along, contactAt, offset: Math.max(-1, Math.min(1, side / radius)) });
   }
   return hits.sort((a, b) => a.contactAt - b.contactAt || a.tree.id.localeCompare(b.tree.id));
 }

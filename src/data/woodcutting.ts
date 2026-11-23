@@ -10,7 +10,9 @@ export const woodcutting = {
       id: 'first_clearing',
       width: 360,
       height: 640,
-      canopyRadius: 18,
+      canopyRadius: 28,
+      trunkRadius: 7,
+      canopyStart: 0.3,
       trees: [
         // A diagonal run that chains when aimed down-right.
         { id: 'a1', x: 70, y: 110, height: 100 },

@@ -5,7 +5,7 @@ import type { ScreenView } from '../../../app/screen';
 import { Sfx } from '../../../app/sfx';
 import type { EventLogger, Game, LiveTuning } from '../../../core';
 import type { Clearing, ClearingTree, WoodcuttingFeel } from '../../../data';
-import { fallTip, previewFall, trunkAngles, type Point } from '../logic/chain';
+import { fallTip, previewFall, trunkAngles, type FallStep, type Point } from '../logic/chain';
 import { fallTilt } from '../logic/fall';
 import { WoodcuttingRound, type RoundEvent } from '../logic/round';
 
@@ -72,6 +72,20 @@ const AIM_DEAD_ZONE = 14;
 const FULL_PULL = 120;
 /** Seconds for the camera to move between the overview and the chop close-up. */
 const CAMERA_MOVE = 0.6;
+/** How much of a model's outermost leaf spread counts as its canopy when sizing it to the rules. */
+const CANOPY_FILL = 0.9;
+/** Chase camera while a chain falls: how high it looks down, how quickly it follows (per second), the
+ * closest it comes, how early it starts framing a tree that's about to be hit, and how long it holds
+ * on the result before going back to the overview. */
+const CHASE_ELEVATION = 60 * (Math.PI / 180);
+/** The chase looks at the fall a little from the side (toward the overview), so the arc shows. */
+const CHASE_TURN = 35 * (Math.PI / 180);
+/** Seconds the close-up holds after the felling chop, to watch the tree start to go. */
+const CHASE_DELAY = 0.35;
+const CHASE_FOLLOW = 5;
+const CHASE_MIN_DISTANCE = 6;
+const CHASE_LOOKAHEAD = 0.3;
+const CHASE_HOLD = 0.9;
 /** Seconds a banked tree takes to sink away (hauled off). */
 const HAUL_SECONDS = 0.6;
 /** Rough trunk radius of the tree models after scaling, for where the axe bites. */
@@ -193,6 +207,12 @@ export class Woodcutting3DView implements ScreenView {
   #tether: THREE.Vector3 | undefined;
   #lastPhase = '';
   #cameraPhase = '';
+  /** The pose drawn last frame, which the chase camera eases on from. */
+  #shownPose: CameraPose | undefined;
+  /** While a chain falls: the side it's watched from (level, toward the camera), and when to stop. */
+  #chase: { side: THREE.Vector3; startAt: number; last?: CameraPose; endAt?: number } | undefined;
+  /** A scratch camera for working out framings, so the real one is never disturbed. */
+  readonly #framer = new THREE.PerspectiveCamera(42, 1, 0.1, 200);
   #frame = 0;
 
   private constructor(element: HTMLElement, deps: Woodcutting3DDeps, models: Models) {
@@ -327,6 +347,41 @@ export class Woodcutting3DView implements ScreenView {
     this.#scene.add(patch);
   }
 
+  /**
+   * A tree model sized to match the rules: its top reaches `reach` (the tree's height to its
+   * canopy's centre, plus the canopy radius, so where it lands is where the rules say it reaches)
+   * and its canopy is `radius` wide each way (the rules' canopy). Stretched up or slimmed as
+   * needed, so what you see touch is what the chain counts.
+   */
+  #treeModel(source: THREE.Object3D, reach: number, radius: number): THREE.Group {
+    const model = source.clone(true);
+    const box = new THREE.Box3().setFromObject(model);
+    const size = box.getSize(new THREE.Vector3());
+    const center = box.getCenter(new THREE.Vector3());
+    const leaves = new THREE.Box3();
+    model.traverse((child) => {
+      if (!(child instanceof THREE.Mesh)) return;
+      const materials = [child.material as THREE.Material | THREE.Material[]].flat();
+      if (!materials.some((material) => /bark/i.test(material.name))) leaves.expandByObject(child);
+    });
+    const leafSize = (leaves.isEmpty() ? box : leaves).getSize(new THREE.Vector3());
+    // Leaf edges are ragged, so the canopy reads a little narrower than its outermost leaves.
+    const canopy = ((leafSize.x + leafSize.z) / 4) * CANOPY_FILL;
+    const tall = reach / Math.max(size.y, 0.001);
+    const wide = radius / Math.max(canopy, 0.001);
+    model.scale.set(wide, tall, wide);
+    model.position.set(-center.x * wide, -box.min.y * tall, -center.z * wide);
+    model.traverse((child) => {
+      if (child instanceof THREE.Mesh) {
+        child.castShadow = true;
+        child.receiveShadow = true;
+      }
+    });
+    const holder = new THREE.Group();
+    holder.add(model);
+    return holder;
+  }
+
   /** A copy of `source`, scaled to `height` tall, standing on y = 0 and centered on its trunk. */
   #modelOfHeight(source: THREE.Object3D, height: number): THREE.Group {
     const model = source.clone(true);
@@ -367,7 +422,8 @@ export class Woodcutting3DView implements ScreenView {
         }
         const source = sources[(seed + i) % sources.length] ?? sources[0];
         if (!source) throw new Error('No tree models loaded');
-        const model = this.#modelOfHeight(source, tree.height * SCALE * (forks > 1 ? 0.85 : 1));
+        const canopy = this.#clearing.canopyRadius;
+        const model = this.#treeModel(source, (tree.height + canopy) * SCALE, canopy * SCALE);
         model.rotation.y = ((seed % 360) + i * 137) * DEG;
         pivot.add(model);
         root.add(pivot);
@@ -722,15 +778,174 @@ export class Woodcutting3DView implements ScreenView {
     };
   }
 
+  // Chase camera
+
+  /** The felling chop: watch the chain from behind the chopped tree instead of cutting away. */
+  #startChase(first: FallStep | undefined): void {
+    const frame = first && this.#closeUpFrame(first.tree, first.angle);
+    if (!frame) {
+      this.#moveCamera(this.#overview);
+      return;
+    }
+    this.#cameraFrom = this.#cameraTo = undefined;
+    this.#cameraPose = this.#shownPose ?? this.#cameraPose;
+    // From behind the tree, turned a little toward the overview's side of the clearing.
+    const turned = (sign: number) => frame.back.clone().applyAxisAngle(frame.up, sign * CHASE_TURN);
+    const left = turned(1);
+    const right = turned(-1);
+    const side = left.z >= right.z ? left : right;
+    this.#chase = { side, startAt: this.#round.now + CHASE_DELAY };
+  }
+
+  /**
+   * Eases toward a framing of the trees falling right now. Once the last one has landed, holds a
+   * moment on it, then heads back to the overview.
+   */
+  #followChase(dt: number): CameraPose | undefined {
+    const chase = this.#chase;
+    if (!chase) return undefined;
+    const goal = this.#chaseGoal(chase.side) ?? chase.last;
+    if (goal) chase.last = goal;
+    if (this.#round.fallers.length === 0) chase.endAt ??= this.#round.now + CHASE_HOLD;
+    if (chase.endAt !== undefined && this.#round.now >= chase.endAt) {
+      this.#chase = undefined;
+      this.#moveCamera(this.#overview);
+      return this.#cameraPose;
+    }
+    const from = this.#shownPose ?? this.#overview;
+    if (!goal || this.#round.now < chase.startAt) return from;
+    // Orbit rather than slide: ease the look-at point, the viewing direction and the distance
+    // separately, so the camera swings out around the action instead of cutting through canopies.
+    const k = 1 - Math.exp(-CHASE_FOLLOW * dt);
+    const target = from.target.clone().lerp(goal.target, k);
+    const fromOffset = from.position.clone().sub(from.target);
+    const goalOffset = goal.position.clone().sub(goal.target);
+    const distance = fromOffset.length() + (goalOffset.length() - fromOffset.length()) * k;
+    const direction = fromOffset.normalize().lerp(goalOffset.normalize(), k).normalize();
+    const pose: CameraPose = {
+      position: target.clone().addScaledVector(direction, distance),
+      target,
+      offsetY: from.offsetY + (goal.offsetY - from.offsetY) * k,
+    };
+    this.#cameraPose = pose;
+    return pose;
+  }
+
+  /**
+   * Where the chase camera wants to be: framing the trees falling right now (base, top and where
+   * each lands). When the chain splits it widens to keep both paths; as trees land it closes in
+   * on whatever is still going.
+   */
+  #chaseGoal(side: THREE.Vector3): CameraPose | undefined {
+    const round = this.#round;
+    const feel = round.feel;
+    const points: THREE.Vector3[] = [];
+    const canopy = this.#clearing.canopyRadius * SCALE * 1.3;
+    for (const faller of round.fallers) {
+      // Only trees falling right now (and one about to be hit), not ones already down.
+      if (faller.landed || round.now < faller.start - CHASE_LOOKAHEAD) continue;
+      const visual = this.#trees.get(faller.step.tree);
+      if (!visual) continue;
+      const { tree } = visual;
+      const height = (tree.height + this.#clearing.canopyRadius) * SCALE;
+      const tilt = fallTilt(
+        Math.max(round.now - faller.start, 0) / feel.fallSeconds,
+        feel.fallEase,
+      );
+      const base = this.#world(tree);
+      // Room around the stump too, so it never sits right at the edge.
+      for (const [dx, dz] of [
+        [1, 0],
+        [-1, 0],
+        [0, 1],
+        [0, -1],
+      ] as const) {
+        points.push(base.clone().add(new THREE.Vector3(dx, 0, dz).multiplyScalar(canopy * 0.6)));
+      }
+      for (const angle of faller.step.trunks) {
+        const along = new THREE.Vector3(Math.cos(angle), 0, Math.sin(angle));
+        const across = new THREE.Vector3(-along.z, 0, along.x).multiplyScalar(canopy);
+        const top = base
+          .clone()
+          .addScaledVector(along, height * Math.sin(tilt))
+          .setY(height * Math.cos(tilt));
+        const tip = this.#world(fallTip(tree, angle));
+        // The canopy's width either side of the top now and where it lands, so it stays in frame.
+        for (const point of [top, tip]) {
+          points.push(point.clone().add(across), point.clone().sub(across));
+        }
+      }
+    }
+    if (points.length === 0) return undefined;
+    const direction = side
+      .clone()
+      .multiplyScalar(Math.cos(CHASE_ELEVATION))
+      .setY(Math.sin(CHASE_ELEVATION))
+      .normalize();
+    return this.#framing(points, direction, CHASE_MIN_DISTANCE);
+  }
+
+  /**
+   * The closest camera looking along -`direction` that fits all `points` between the overlay's
+   * top and bottom bands, centred on them.
+   */
+  #framing(points: THREE.Vector3[], direction: THREE.Vector3, minDistance: number): CameraPose {
+    const { clientWidth: width, clientHeight: height } = this.#element;
+    const box = new THREE.Box3().setFromPoints(points);
+    const target = box.getCenter(new THREE.Vector3());
+    const band = { top: UI_TOP + 16, bottom: height - UI_BOTTOM - 16 };
+    const camera = this.#framer;
+    camera.aspect = width / Math.max(height, 1);
+    camera.updateProjectionMatrix();
+    const screen = (distance: number) => {
+      camera.position.copy(target).addScaledVector(direction, distance);
+      camera.lookAt(target);
+      camera.updateMatrixWorld();
+      return points.map((point) => {
+        const projected = point.clone().project(camera);
+        return { x: ((projected.x + 1) / 2) * width, y: ((1 - projected.y) / 2) * height };
+      });
+    };
+    const fits = (distance: number) => {
+      const spots = screen(distance);
+      const xs = spots.map((spot) => spot.x);
+      const ys = spots.map((spot) => spot.y);
+      return (
+        Math.min(...xs) >= 36 &&
+        Math.max(...xs) <= width - 36 &&
+        Math.max(...ys) - Math.min(...ys) <= band.bottom - band.top
+      );
+    };
+    let near = minDistance;
+    let far = 80;
+    if (!fits(near)) {
+      for (let i = 0; i < 18; i++) {
+        const middle = (near + far) / 2;
+        if (fits(middle)) far = middle;
+        else near = middle;
+      }
+      near = far;
+    }
+    const ys = screen(near).map((spot) => spot.y);
+    const middle = (Math.max(...ys) + Math.min(...ys)) / 2;
+    return {
+      position: target.clone().addScaledVector(direction, near),
+      target,
+      offsetY: middle - (band.top + band.bottom) / 2,
+    };
+  }
+
   #moveCamera(to: CameraPose): void {
     this.#cameraFrom = this.#cameraPose ?? this.#overview;
     this.#cameraTo = to;
     this.#cameraAt = this.#round.now;
   }
 
-  #updateCamera(): void {
+  #updateCamera(dt: number): void {
     let pose = this.#cameraPose ?? this.#overview;
-    if (this.#cameraFrom && this.#cameraTo) {
+    if (this.#chase) {
+      pose = this.#followChase(dt) ?? pose;
+    } else if (this.#cameraFrom && this.#cameraTo) {
       const t = Math.min((this.#round.now - this.#cameraAt) / CAMERA_MOVE, 1);
       const eased = t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2;
       pose = {
@@ -744,6 +959,7 @@ export class Woodcutting3DView implements ScreenView {
         this.#cameraFrom = this.#cameraTo = undefined;
       }
     }
+    this.#shownPose = pose;
     const shake = this.#shake;
     this.#camera.position.copy(pose.position);
     if (shake > 0.0005) {
@@ -874,7 +1090,7 @@ export class Woodcutting3DView implements ScreenView {
         const carver = this.#carvers.get(step.tree);
         if (visual && carver && visual.brokenAt === undefined) this.#breakAtNotch(visual, carver);
       }
-      this.#moveCamera(this.#overview);
+      this.#startChase(event.steps[0]);
       this.#play(`creak-${1 + Math.floor(Math.random() * 3)}`, 0.7);
     } else if (event.type === 'landed') {
       const visual = this.#trees.get(event.step.tree);
@@ -981,7 +1197,7 @@ export class Woodcutting3DView implements ScreenView {
     this.#updateGuides();
     this.#updateAxe();
     this.#updateParticles(dt);
-    this.#updateCamera();
+    this.#updateCamera(realDt);
     this.#updateUi();
     this.#renderer.render(this.#scene, this.#camera);
   }
@@ -999,16 +1215,16 @@ export class Woodcutting3DView implements ScreenView {
    */
   #blocksCloseUp(visual: TreeVisual): boolean {
     const phase = this.#round.phase;
-    if (phase.kind !== 'chop' || visual.tree.id === phase.tree) return false;
-    const pose = this.#closeUpPose(phase.tree, phase.angle);
-    if (!pose) return false;
-    const from = new THREE.Vector2(pose.position.x, pose.position.z);
-    const to = new THREE.Vector2(pose.target.x, pose.target.z);
-    const at = new THREE.Vector2(visual.root.position.x, visual.root.position.z);
-    const line = to.clone().sub(from);
-    const t = Math.min(Math.max(at.clone().sub(from).dot(line) / line.lengthSq(), 0), 1);
-    const closest = from.clone().addScaledVector(line, t);
-    return at.distanceTo(closest) < 1.3;
+    if (phase.kind === 'chop') {
+      if (visual.tree.id === phase.tree) return false;
+      const pose = this.#closeUpPose(phase.tree, phase.angle);
+      return pose ? blocks(visual, pose, 1, 1.3) : false;
+    }
+    // Chasing a chain: standing trees close in front of the camera would hide the falls.
+    const pose = this.#chase && this.#shownPose;
+    if (!pose || visual.fallen || this.#round.fallers.some((f) => f.step.tree === visual.tree.id))
+      return false;
+    return blocks(visual, pose, 0.55, 1);
   }
 
   #updateTrees(): void {
@@ -1297,4 +1513,18 @@ export class Woodcutting3DView implements ScreenView {
       carveMs: Math.round(Math.max(0, ...[...this.#carvers.values()].map((c) => c.slowestMs))),
     });
   }
+}
+
+/**
+ * Whether `visual` stands near the line from the camera toward its target (on the ground), within
+ * the first `share` of that line and `radius` of it.
+ */
+function blocks(visual: TreeVisual, pose: CameraPose, share: number, radius: number): boolean {
+  const from = new THREE.Vector2(pose.position.x, pose.position.z);
+  const to = new THREE.Vector2(pose.target.x, pose.target.z);
+  const at = new THREE.Vector2(visual.root.position.x, visual.root.position.z);
+  const line = to.clone().sub(from);
+  const t = Math.min(Math.max(at.clone().sub(from).dot(line) / line.lengthSq(), 0), share);
+  const closest = from.clone().addScaledVector(line, t);
+  return at.distanceTo(closest) < radius;
 }
