@@ -58,5 +58,11 @@ export const woodcutting = {
     chainDelay: 0.22,
     shakeStrength: 1,
     hitStopMs: 70,
+    buzzChopMs: 10,
+    buzzPerfectMs: 22,
+    buzzHitMs: 8,
+    buzzLandMs: 12,
+    buzzLandPerTreeMs: 4,
+    buzzLandMaxMs: 30,
   },
 } satisfies GameDataInput['woodcutting'];

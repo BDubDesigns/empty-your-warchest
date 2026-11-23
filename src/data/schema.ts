@@ -178,6 +178,15 @@ export const woodcuttingFeelSchema = z.object({
   shakeStrength: nonNegative,
   /** How long the game freezes on a perfect chop (hit-stop), in milliseconds. */
   hitStopMs: nonNegative,
+  /** Vibration pulses, in milliseconds (0 = none). A chop biting in; a perfect one. */
+  buzzChopMs: nonNegative,
+  buzzPerfectMs: nonNegative,
+  /** A falling tree knocking into the next: a lighter tick before the landing. */
+  buzzHitMs: nonNegative,
+  /** A tree landing: longer for each tree the chain has landed so far, up to the max. */
+  buzzLandMs: nonNegative,
+  buzzLandPerTreeMs: nonNegative,
+  buzzLandMaxMs: nonNegative,
 });
 
 export const woodcuttingSchema = z.object({
@@ -207,6 +216,8 @@ export const warchestSchema = z.object({
     /** Seconds the lid stays open after the last piece lands. */
     closeDelay: z.number().min(0),
   }),
+  /** Vibration pulses when the HUD chest opens and when its lid slams, in milliseconds. */
+  haptics: z.object({ openMs: nonNegative, slamMs: nonNegative }),
 });
 
 export const gameDataShape = z.object({

@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { TrunkCarver } from './carve';
 import type { ScreenView } from '../../../app/screen';
+import type { Haptics } from '../../../app/haptics';
 import { loadModel } from '../../../app/models';
 import { Sfx } from '../../../app/sfx';
 import { WarchestHud, type Deposit, type ScreenPoint } from '../../../app/warchestHud';
@@ -17,6 +18,7 @@ export interface Woodcutting3DDeps {
   feel: LiveTuning<WoodcuttingFeel>;
   /** Which trees to draw; picked in the debug menu. */
   treeStyle: LiveChoice<TreeStyle>;
+  haptics: Haptics;
 }
 
 interface Models {
@@ -254,7 +256,7 @@ export class Woodcutting3DView implements ScreenView {
       Promise.all(MODELS.quaternius.map(loadModel)),
       loadModel(MODELS.stump),
       loadModel(MODELS.axe),
-      WarchestHud.create(element, { game, item }),
+      WarchestHud.create(element, { game, item, haptics: deps.haptics }),
     ]);
     return new Woodcutting3DView(element, deps, { kenney, quaternius, stump, axe }, hud);
   }
@@ -1082,6 +1084,7 @@ export class Woodcutting3DView implements ScreenView {
         (swing.result === 'perfect' ? 0.12 : 0.06) * feel.shakeStrength * (0.6 + swing.pull * 0.6);
       const drift = Math.round(Math.abs(swing.drift / DEG));
       const drifted = drift >= 1 ? ` · aim off ${drift}°` : '';
+      this.#deps.haptics.pulse(swing.result === 'perfect' ? feel.buzzPerfectMs : feel.buzzChopMs);
       if (swing.result === 'perfect') {
         this.#play('chop-perfect', 0.9);
         this.#frozenUntil = performance.now() + feel.hitStopMs;
@@ -1105,6 +1108,10 @@ export class Woodcutting3DView implements ScreenView {
       }
       this.#startChase(event.steps[0]);
       this.#play(`creak-${1 + Math.floor(Math.random() * 3)}`, 0.7);
+    } else if (event.type === 'hit') {
+      // The falling canopy knocks into the next trunk: a light knock and tick before the thud.
+      this.#play(`chop-${2 + Math.floor(Math.random() * 2)}`, 0.35, 250);
+      this.#deps.haptics.pulse(feel.buzzHitMs);
     } else if (event.type === 'landed') {
       const visual = this.#trees.get(event.step.tree);
       if (visual) {
@@ -1120,6 +1127,9 @@ export class Woodcutting3DView implements ScreenView {
         -Math.min((combo - 1) * 90, 450),
       );
       this.#shake = Math.min(0.05 + combo * 0.025, 0.22) * feel.shakeStrength;
+      this.#deps.haptics.pulse(
+        Math.min(feel.buzzLandMs + (combo - 1) * feel.buzzLandPerTreeMs, feel.buzzLandMaxMs),
+      );
       if (combo > 1) this.#showCounter(combo);
     } else if (event.type === 'banked') {
       // The logs are in the warchest; the chest shows them arriving once the camera is back on

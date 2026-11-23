@@ -63,6 +63,9 @@ export interface RoundFaller {
   step: FallStep;
   /** Round time (s) when this tree starts to tip over. */
   start: number;
+  /** Round time (s) when the tree that knocks it over first touches it (hit trees only). */
+  contact: number | undefined;
+  touched: boolean;
   landed: boolean;
 }
 
@@ -70,6 +73,8 @@ export interface RoundFaller {
 export type RoundEvent =
   | { type: 'impact'; tree: string; swing: RoundSwing; angle: number; points: number }
   | { type: 'fell'; steps: FallStep[] }
+  /** A falling tree's canopy reaches the next tree's trunk, knocking it over. */
+  | { type: 'hit'; step: FallStep }
   | { type: 'landed'; step: FallStep; count: number }
   | { type: 'banked'; trees: number; logs: number }
   | { type: 'cleared' };
@@ -351,7 +356,8 @@ export class WoodcuttingRound {
               feel.fallSeconds +
             feel.chainDelay;
       starts.set(step.tree, start);
-      return { step, start, landed: false };
+      const contact = step.hitBy === undefined ? undefined : start - feel.chainDelay;
+      return { step, start, contact, touched: false, landed: false };
     });
     for (const step of steps) this.standing.delete(step.tree);
     this.phase = { kind: 'falling' };
@@ -367,6 +373,10 @@ export class WoodcuttingRound {
 
   #advanceFall(): void {
     for (const faller of this.fallers) {
+      if (!faller.touched && faller.contact !== undefined && this.now >= faller.contact) {
+        faller.touched = true;
+        this.#hooks.onEvent?.({ type: 'hit', step: faller.step });
+      }
       if (!faller.landed && this.now >= faller.start + this.feel.fallSeconds) {
         faller.landed = true;
         this.#hooks.onEvent?.({
