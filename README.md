@@ -2,11 +2,11 @@
 
 Working title. A scapelike made of small mini games: build the warchest by hand, then run the attack.
 
-Design and the build plan live in Notion. This repo follows the "Build Plan — Prototype" page.
+Design and the build plan live in Notion. This repo follows the "Build Plan — Prototype" page. Working on the code (people or agents): read [AGENTS.md](AGENTS.md) first.
 
 ## Stack
 
-TypeScript (strict) + Vite, Phaser for the 2D camp and mini games, three.js for the runner's 3D view, Vitest for unit tests, Playwright for the smoke test.
+TypeScript (strict) + Vite, Phaser for the 2D camp and mini games, three.js for 3D (woodcutting and the runner), Vitest for unit tests, Playwright for the smoke test.
 
 ## Commands
 
