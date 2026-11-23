@@ -5,8 +5,12 @@ export const PLACEHOLDER_SCENE = 'station-placeholder';
 /** Kept in sync with WOODCUTTING_SCENE; the scene itself loads with Phaser. */
 const WOODCUTTING_SCENE = 'woodcutting';
 
-/** Where a station's mini game runs: a Phaser scene, or the three.js screen. */
-export type StationScreen = { kind: 'phaser'; scene: string } | { kind: 'three' };
+/** Full-screen views outside Phaser (three.js), by id. */
+export type ScreenId = 'runner' | 'woodcutting3d';
+
+/** Where a station's mini game runs: a Phaser scene, or its own (three.js) screen. */
+export type StationScreen =
+  { kind: 'phaser'; scene: string } | { kind: 'screen'; screen: ScreenId };
 
 export interface MechanicModule {
   screen: StationScreen;
@@ -28,8 +32,10 @@ export const mechanics: Readonly<Record<string, MechanicModule>> = {
     screen: { kind: 'phaser', scene: PLACEHOLDER_SCENE },
     placeholderNote: 'Fire-hardening arrives in M5',
   },
+  // 3D spike: the same woodcutting rules in a three.js view, to compare with the 2D one.
+  woodcutting3d: { screen: { kind: 'screen', screen: 'woodcutting3d' } },
   runner: {
-    screen: { kind: 'three' },
+    screen: { kind: 'screen', screen: 'runner' },
     placeholderNote: 'The Attack Run arrives in M7–M8',
   },
 };

@@ -7,7 +7,15 @@ export const stations = [
     name: 'Tree line',
     skill: 'woodcutting',
     mechanic: 'woodcutting',
-    camp: { x: 0.5, y: 0.2 },
+    camp: { x: 0.27, y: 0.2 },
+  },
+  {
+    // 3D spike: same rules in a three.js view, to compare side by side.
+    id: 'tree_line_3d',
+    name: 'Tree line 3D',
+    skill: 'woodcutting',
+    mechanic: 'woodcutting3d',
+    camp: { x: 0.73, y: 0.2 },
   },
   {
     id: 'workbench',

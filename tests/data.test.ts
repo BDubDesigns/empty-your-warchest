@@ -14,6 +14,7 @@ describe('game data', () => {
     expect(data.items.map((item) => item.id)).toEqual(['log', 'stave', 'spear']);
     expect(data.stations.map((station) => station.id)).toEqual([
       'tree_line',
+      'tree_line_3d',
       'workbench',
       'fire_pit',
       'war_tent',

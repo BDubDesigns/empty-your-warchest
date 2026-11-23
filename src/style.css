@@ -282,3 +282,272 @@ body:not([data-view='camp']) #build-label {
   background: none;
   accent-color: var(--accent);
 }
+
+/* Woodcutting 3D spike overlay */
+
+.w3d-canvas {
+  display: block;
+  touch-action: none;
+}
+
+.w3d-ui {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  font-family: system-ui, sans-serif;
+  color: var(--fg);
+}
+
+.w3d-ui button {
+  pointer-events: auto;
+}
+
+.w3d-total {
+  position: absolute;
+  top: calc(var(--safe-top) + 62px);
+  right: calc(var(--safe-right) + 14px);
+  font-size: 14px;
+  color: var(--fg);
+  text-shadow: 0 1px 3px rgb(0 0 0 / 0.6);
+}
+
+.w3d-style {
+  position: absolute;
+  top: calc(var(--safe-top) + 58px);
+  left: calc(var(--safe-left) + 12px);
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid rgb(255 255 255 / 0.5);
+  border-radius: 8px;
+  background: rgb(0 0 0 / 0.35);
+  color: var(--fg);
+  font:
+    600 12px system-ui,
+    sans-serif;
+}
+
+.w3d-perf {
+  position: absolute;
+  left: calc(var(--safe-left) + 10px);
+  bottom: calc(var(--safe-bottom) + 6px);
+  font-size: 11px;
+  color: rgb(255 255 255 / 0.75);
+}
+
+.w3d-hint {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: calc(var(--safe-bottom) + 212px);
+  text-align: center;
+  font-size: 14px;
+  text-shadow: 0 1px 3px rgb(0 0 0 / 0.8);
+}
+
+.w3d-panel {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: calc(var(--safe-bottom) + 24px);
+  height: 176px;
+  display: grid;
+  place-items: center;
+}
+
+.w3d-aim {
+  display: flex;
+  gap: 12px;
+}
+
+.w3d-aim[hidden],
+.w3d-chop[hidden],
+.w3d-summary[hidden],
+.w3d-marker[hidden] {
+  display: none;
+}
+
+.w3d-button {
+  min-width: 64px;
+  min-height: 60px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--accent);
+  color: var(--bg);
+  font:
+    700 24px system-ui,
+    sans-serif;
+  touch-action: manipulation;
+}
+
+.w3d-button:active {
+  background: var(--accent-pressed);
+}
+
+.w3d-button:disabled {
+  opacity: 0.45;
+}
+
+.w3d-wide {
+  min-width: 160px;
+}
+
+.w3d-chop {
+  width: min(100%, 400px);
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: rgb(20 24 18 / 0.78);
+}
+
+.w3d-bar {
+  position: relative;
+  height: 22px;
+  border-radius: 6px;
+  background: #2f352c;
+  overflow: visible;
+}
+
+.w3d-green,
+.w3d-yellow {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+}
+
+.w3d-green {
+  background: #6fae4f;
+}
+
+.w3d-yellow {
+  background: #e8c04f;
+}
+
+.w3d-marker {
+  position: absolute;
+  top: -6px;
+  bottom: -6px;
+  width: 4px;
+  margin-left: -2px;
+  background: var(--fg);
+}
+
+.w3d-pips {
+  margin-top: 10px;
+  text-align: center;
+  letter-spacing: 2px;
+  color: var(--accent);
+  font-size: 15px;
+}
+
+.w3d-power {
+  display: flex;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 8px;
+  min-height: 22px;
+}
+
+.w3d-power-bar {
+  width: 12px;
+  height: 22px;
+  border: 2px solid var(--accent);
+  border-radius: 3px;
+}
+
+.w3d-power-bar.w3d-on {
+  background: var(--accent);
+}
+
+.w3d-flashes {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(var(--safe-bottom) + 250px);
+  display: grid;
+  justify-items: center;
+}
+
+.w3d-flash {
+  grid-area: 1 / 1;
+  font:
+    800 22px system-ui,
+    sans-serif;
+  text-shadow: 0 2px 4px rgb(0 0 0 / 0.8);
+  animation: w3d-rise 0.9s ease-out forwards;
+}
+
+.w3d-perfect {
+  color: #f0cd5c;
+}
+
+.w3d-good {
+  color: #8fd16f;
+}
+
+.w3d-glancing {
+  color: var(--muted);
+}
+
+@keyframes w3d-rise {
+  from {
+    transform: translateY(0);
+    opacity: 1;
+  }
+  to {
+    transform: translateY(-36px);
+    opacity: 0;
+  }
+}
+
+.w3d-counter {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 38%;
+  text-align: center;
+  font:
+    900 42px system-ui,
+    sans-serif;
+  text-shadow: 0 3px 6px rgb(0 0 0 / 0.8);
+  opacity: 0;
+}
+
+.w3d-pop {
+  animation: w3d-pop 1.3s ease-out forwards;
+}
+
+@keyframes w3d-pop {
+  0% {
+    transform: scale(1.5);
+    opacity: 1;
+  }
+  20% {
+    transform: scale(1);
+  }
+  75% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+.w3d-summary {
+  position: absolute;
+  inset: 30% 16px auto;
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+  padding: 20px;
+  border-radius: 14px;
+  background: rgb(20 24 18 / 0.85);
+}
+
+.w3d-summary-title {
+  font:
+    800 24px system-ui,
+    sans-serif;
+}
+
+.w3d-summary-text {
+  color: var(--muted);
+}

@@ -1,6 +1,6 @@
 import type { Clock, EventLogger } from '../core';
 import { byId, type GameData } from '../data';
-import { mechanicFor } from '../stations';
+import { mechanicFor, type ScreenId } from '../stations';
 
 export type View = { kind: 'camp' } | { kind: 'warchest' } | { kind: 'station'; stationId: string };
 
@@ -9,7 +9,7 @@ export interface NavigationTargets {
   showCamp(): Promise<void>;
   showWarchest(): Promise<void>;
   showPhaserStation(sceneKey: string, stationId: string): Promise<void>;
-  showThreeStation(stationId: string): Promise<void>;
+  showScreenStation(screen: ScreenId, stationId: string): Promise<void>;
 }
 
 /**
@@ -54,7 +54,7 @@ export class Navigation {
     const station = byId(this.#data.stations, stationId);
     const { screen } = mechanicFor(station.mechanic);
     if (screen.kind === 'phaser') await this.#targets.showPhaserStation(screen.scene, station.id);
-    else await this.#targets.showThreeStation(station.id);
+    else await this.#targets.showScreenStation(screen.screen, station.id);
     this.#enter({ kind: 'station', stationId: station.id });
   }
 

@@ -5,4 +5,5 @@ export * from './logic/aim';
 export * from './logic/chain';
 export * from './logic/fall';
 export * from './logic/layout';
+export * from './logic/round';
 export * from './logic/swing';

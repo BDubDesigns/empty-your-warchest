@@ -10,13 +10,14 @@ describe('camp layout', () => {
     const spots = campSpots(data);
     expect(spots.filter((spot) => spot.kind === 'station').map((spot) => spot.id)).toEqual([
       'tree_line',
+      'tree_line_3d',
       'workbench',
       'fire_pit',
       'war_tent',
     ]);
     expect(spots).toContainEqual({ kind: 'chest', ...data.camp.chest });
     expect(spots).toContainEqual(
-      expect.objectContaining({ id: 'tree_line', skillName: 'Woodcutting', x: 0.5, y: 0.2 }),
+      expect.objectContaining({ id: 'tree_line', skillName: 'Woodcutting', x: 0.27, y: 0.2 }),
     );
   });
 
