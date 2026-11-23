@@ -72,8 +72,10 @@ const CAMERA_MOVE = 0.6;
 const HAUL_SECONDS = 0.6;
 /** Rough trunk radius of the tree models after scaling, for where the axe bites. */
 const TRUNK_RADIUS = 0.16;
-/** How far the axe winds back around the hands at full pull. */
-const WIND_ARC = (110 * Math.PI) / 180;
+/** Where the handle points at full pull (from the hands): mostly up, back toward the camera, over the shoulder. */
+const WIND_UP = 0.9;
+const WIND_BACK = 0.4;
+const WIND_SIDE = 0.15;
 const DEG = Math.PI / 180;
 
 interface TreeVisual {
@@ -383,9 +385,16 @@ export class Woodcutting3DView implements ScreenView {
       geometry.rotateX(-Math.PI / 2);
       const mesh = new THREE.Mesh(
         geometry,
-        new THREE.MeshBasicMaterial({ color, transparent: true, opacity, depthWrite: false }),
+        // Drawn over everything, so trunks and canopies never hide where a tree will go.
+        new THREE.MeshBasicMaterial({
+          color,
+          transparent: true,
+          opacity,
+          depthWrite: false,
+          depthTest: false,
+        }),
       );
-      mesh.renderOrder = 2;
+      mesh.renderOrder = 10;
       mesh.visible = false;
       this.#scene.add(mesh);
       return mesh;
@@ -405,7 +414,9 @@ export class Woodcutting3DView implements ScreenView {
       line: strip(COLORS.guide, 0.7),
       ghost: flat(new THREE.RingGeometry(canopy - 0.05, canopy + 0.03, 40), COLORS.guide, 0.85),
       hitLine: strip(COLORS.gold, 0.85),
-      hitHead: flat(new THREE.ShapeGeometry(arrowShape), COLORS.gold, 0.9),
+      hitHead: flat(new THREE.ShapeGeometry(arrowShape), COLORS.gold, 0.95),
+      /** Where the knocked tree's canopy will land. */
+      hitLand: flat(new THREE.RingGeometry(canopy - 0.05, canopy + 0.03, 40), COLORS.gold, 0.9),
     }));
     return {
       selection: flat(new THREE.RingGeometry(canopy + 0.12, canopy + 0.24, 40), COLORS.accent, 1),
@@ -427,7 +438,12 @@ export class Woodcutting3DView implements ScreenView {
     const { selection, tether, sets } = this.#guides;
     selection.visible = tether.visible = false;
     for (const set of sets)
-      set.line.visible = set.ghost.visible = set.hitLine.visible = set.hitHead.visible = false;
+      set.line.visible =
+        set.ghost.visible =
+        set.hitLine.visible =
+        set.hitHead.visible =
+        set.hitLand.visible =
+          false;
     const phase = this.#round.phase;
     // The ground guides are for the overview; the chop close-up stays clean.
     if (phase.kind !== 'aim') return;
@@ -452,13 +468,21 @@ export class Woodcutting3DView implements ScreenView {
         const hitTree = this.#trees.get(preview.hit.tree)?.tree;
         if (!hitTree) return;
         const from = this.#world(hitTree);
-        const end = this.#world(
-          fallTip({ ...hitTree, height: hitTree.height * 0.6 }, preview.hit.angle),
-        );
-        this.#placeStrip(set.hitLine, from, end, 0.07);
-        set.hitHead.position.set(end.x, 0.05, end.z);
+        // The knocked tree's whole fall: a line to where its top lands, and its landing ring.
+        const land = this.#world(fallTip(hitTree, preview.hit.angle));
+        const canopy = this.#clearing.canopyRadius * SCALE;
+        const lineEnd = land
+          .clone()
+          .addScaledVector(
+            new THREE.Vector3(Math.cos(preview.hit.angle), 0, Math.sin(preview.hit.angle)),
+            -canopy - 0.25,
+          );
+        this.#placeStrip(set.hitLine, from, lineEnd, 0.08);
+        set.hitHead.position.set(lineEnd.x, 0.05, lineEnd.z);
         set.hitHead.rotation.set(0, -preview.hit.angle, 0);
         set.hitHead.visible = true;
+        set.hitLand.position.set(land.x, 0.05, land.z);
+        set.hitLand.visible = true;
       }
     });
   }
@@ -489,7 +513,7 @@ export class Woodcutting3DView implements ScreenView {
   }
 
   /**
-   * Poses the axe: the hands are in front of the trunk and to the right; at impact the head
+   * Poses the axe: the hands are back toward the camera and a little right; at impact the head
    * sits against the trunk with the blade facing into it. Winding up turns it back around the
    * hands, in the plane of the swing.
    */
@@ -503,14 +527,17 @@ export class Woodcutting3DView implements ScreenView {
     const frame = this.#closeUpFrame(phase.tree, phase.angle);
     if (!frame) return;
     const { base, back, up, right } = frame;
+    // The hands are back toward the camera (the player's own grip), so the axe reaches from
+    // "you" into the trunk.
     const hands = base
       .clone()
-      .addScaledVector(back, 1.05)
+      .addScaledVector(back, 1.2)
       .addScaledVector(right, 0.7)
-      .addScaledVector(up, 0.95);
+      .addScaledVector(up, 0.4);
     const head = base
       .clone()
       .addScaledVector(back, TRUNK_RADIUS + 0.06)
+      .addScaledVector(right, 0.1)
       .addScaledVector(up, 0.6);
     const handle = head.clone().sub(hands);
     const length = handle.length();
@@ -524,12 +551,16 @@ export class Woodcutting3DView implements ScreenView {
     model.quaternion.setFromRotationMatrix(basis);
     model.scale.setScalar(length);
     rig.position.copy(hands);
-    // Wind up up-and-back, like a real backswing, so the chop comes down into the trunk on a
-    // diagonal and reads clearly from over the shoulder.
-    const windUp = up.clone().multiplyScalar(0.8).addScaledVector(blade, -0.6);
-    windUp.addScaledVector(along, -windUp.dot(along)).normalize();
-    const swingAxis = new THREE.Vector3().crossVectors(along, windUp).normalize();
-    rig.quaternion.setFromAxisAngle(swingAxis, WIND_ARC * this.#round.axeBack);
+    // Pulling back raises the axe up and back over the shoulder, toward the camera, like a real
+    // backswing; letting go brings it down into the trunk. The head stays in frame at full pull.
+    const raised = up
+      .clone()
+      .multiplyScalar(WIND_UP)
+      .addScaledVector(back, WIND_BACK)
+      .addScaledVector(right, WIND_SIDE)
+      .normalize();
+    const wound = new THREE.Quaternion().setFromUnitVectors(along, raised);
+    rig.quaternion.identity().slerp(wound, this.#round.axeBack);
     rig.visible = true;
   }
 
@@ -882,8 +913,27 @@ export class Woodcutting3DView implements ScreenView {
     if (pose) this.#moveCamera(pose);
   }
 
+  /**
+   * In the chop close-up, trees standing between the camera and the chosen trunk would fill
+   * the screen, so they're hidden until the camera goes back to the overview.
+   */
+  #blocksCloseUp(visual: TreeVisual): boolean {
+    const phase = this.#round.phase;
+    if (phase.kind !== 'chop' || visual.tree.id === phase.tree) return false;
+    const pose = this.#closeUpPose(phase.tree, phase.angle);
+    if (!pose) return false;
+    const from = new THREE.Vector2(pose.position.x, pose.position.z);
+    const to = new THREE.Vector2(pose.target.x, pose.target.z);
+    const at = new THREE.Vector2(visual.root.position.x, visual.root.position.z);
+    const line = to.clone().sub(from);
+    const t = Math.min(Math.max(at.clone().sub(from).dot(line) / line.lengthSq(), 0), 1);
+    const closest = from.clone().addScaledVector(line, t);
+    return at.distanceTo(closest) < 1.3;
+  }
+
   #updateTrees(): void {
     const round = this.#round;
+    for (const visual of this.#trees.values()) visual.root.visible = !this.#blocksCloseUp(visual);
     const feel = round.feel;
     const falling = new Map(round.fallers.map((faller) => [faller.step.tree, faller]));
     for (const visual of this.#trees.values()) {
