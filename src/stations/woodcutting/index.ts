@@ -9,5 +9,7 @@ export * from './logic/layout';
 export * from './logic/round';
 export * from './logic/score';
 export * from './logic/swing';
+export * from './logic/unlocks';
 export * from './clearingPicker';
+export * from './fastFall';
 export * from './treeStyle';

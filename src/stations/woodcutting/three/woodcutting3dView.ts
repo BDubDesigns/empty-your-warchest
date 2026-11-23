@@ -13,6 +13,8 @@ import { fallTilt } from '../logic/fall';
 import { WoodcuttingRound, type RoundEvent } from '../logic/round';
 import { chainLogs } from '../logic/score';
 import type { ClearingPicker } from '../clearingPicker';
+import type { FastFall } from '../fastFall';
+import { fastFallUnlocked, unlocksBetween, woodcuttingSkill } from '../logic/unlocks';
 import type { ClearingPlan } from '../logic/generate';
 import type { TreeStyle } from '../treeStyle';
 
@@ -25,6 +27,8 @@ export interface Woodcutting3DDeps {
   haptics: Haptics;
   /** Picks each round's clearing: the tutorial first, then random ones. */
   clearings: ClearingPicker;
+  /** The fast-fall switch, shown once its woodcutting level is reached. */
+  fastFall: LiveChoice<FastFall>;
   /** Leaves the station (the round summary's Back to camp). */
   onLeave: () => void;
   /** The shell's top-left button, which becomes End round during a round. */
@@ -196,6 +200,11 @@ export class Woodcutting3DView implements ScreenView {
   #summaryTimers: number[] = [];
   /** The longest chain banked this round, for the summary. */
   #bestChain = 0;
+  /** The skill woodcutting trains, and its XP when this round started (for the summary). */
+  readonly #skill: string;
+  #xpAtStart = 0;
+  /** Levels gained by a chain whose logs haven't poured in yet: the callout waits for them. */
+  #levelUpPending: { from: number; to: number } | undefined;
   readonly #timer = new THREE.Timer();
   readonly #raycaster = new THREE.Raycaster();
   readonly #groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
@@ -239,6 +248,7 @@ export class Woodcutting3DView implements ScreenView {
     hud: WarchestHud,
   ) {
     this.#hud = hud;
+    this.#skill = woodcuttingSkill(deps.game.data);
     this.#element = element;
     this.#deps = deps;
     this.#models = models;
@@ -302,10 +312,15 @@ export class Woodcutting3DView implements ScreenView {
       this.#clearing,
       {
         logger: this.#deps.logger,
-        feel: () => this.#deps.feel.values,
+        feel: () => this.#feel(),
         chainExponent: this.#deps.game.data.woodcutting.chainExponent,
         bank: (batches) => {
-          const result = game.craft(game.data.woodcutting.recipe, { batches }, { awardXp: false });
+          const before = game.level(this.#skill);
+          const result = game.craft(game.data.woodcutting.recipe, { batches });
+          const after = game.level(this.#skill);
+          if (after > before) {
+            this.#levelUpPending = { from: this.#levelUpPending?.from ?? before, to: after };
+          }
           return result.produced.reduce((sum, stack) => sum + stack.count, 0);
         },
         onEvent: (event) => {
@@ -322,6 +337,8 @@ export class Woodcutting3DView implements ScreenView {
     );
     this.#buildTrees({ keepFallen: false });
     this.#bestChain = 0;
+    this.#xpAtStart = game.xp(this.#skill);
+    this.#levelUpPending = undefined;
     this.#summaryPending = undefined;
     this.#showEndRound();
     this.#frameTimes = [];
@@ -1175,6 +1192,66 @@ export class Woodcutting3DView implements ScreenView {
     }
   }
 
+  /** The feel numbers (with live tuning), at fast-fall speeds when that switch is on. */
+  #feel(): WoodcuttingFeel {
+    const { game, feel, fastFall } = this.#deps;
+    const values = feel.values;
+    if (
+      fastFall.value !== 'on' ||
+      !fastFallUnlocked(game.data.woodcutting, game.level(this.#skill))
+    )
+      return values;
+    return { ...values, ...game.data.woodcutting.fastFall };
+  }
+
+  /** A woodcutting level-up: a callout with what it unlocks, a two-note ding and a buzz. */
+  #levelUp(from: number, to: number): void {
+    const { levelUp, levelUpTitle, levelUpText } = this.#ui;
+    const skillName =
+      this.#deps.game.data.skills.find((skill) => skill.id === this.#skill)?.name ?? this.#skill;
+    levelUpTitle.textContent = `${skillName} level ${String(to)}!`;
+    levelUpText.textContent = unlocksBetween(this.#deps.game.data.woodcutting, from, to)
+      .map((unlock) => unlock.text)
+      .join(' · ');
+    levelUp.classList.remove('w3d-levelup-show');
+    levelUp.getBoundingClientRect();
+    levelUp.classList.add('w3d-levelup-show');
+    this.#sfx.play('star', 0.7, 500);
+    this.#summaryTimers.push(
+      window.setTimeout(() => {
+        this.#sfx.play('star', 0.7, 900);
+      }, 160),
+    );
+    this.#deps.haptics.pulse(30);
+  }
+
+  /** The summary's XP: gained this round, and the level bar filling up to where it is now. */
+  #showXp(): void {
+    const { game } = this.#deps;
+    const { summaryXpLabel, summaryXpFill } = this.#ui;
+    const xp = game.xp(this.#skill);
+    const level = game.level(this.#skill);
+    const curve = game.xpCurve;
+    const gained = xp - this.#xpAtStart;
+    const levelsGained = level - curve.levelForXp(this.#xpAtStart);
+    const skillName = game.data.skills.find((skill) => skill.id === this.#skill)?.name ?? '';
+    summaryXpLabel.textContent = `${skillName} level ${String(level)}${
+      levelsGained > 0 ? ` (+${String(levelsGained)})` : ''
+    } · +${gained.toLocaleString()} XP`;
+    summaryXpLabel.classList.toggle('w3d-xp-up', levelsGained > 0);
+    this.#ui.summaryUnlocks.textContent = unlocksBetween(
+      game.data.woodcutting,
+      level - levelsGained,
+      level,
+    )
+      .map((unlock) => `Unlocked: ${unlock.text}`)
+      .join('\n');
+    const floor = curve.xpForLevel(level);
+    const share =
+      level >= curve.maxLevel ? 1 : (xp - floor) / (curve.xpForLevel(level + 1) - floor);
+    summaryXpFill.style.width = `${String(Math.round(share * 1000) / 10)}%`;
+  }
+
   /** During a round the top-left button ends it, showing the summary first. */
   #showEndRound(): void {
     this.#deps.backButton.set({
@@ -1230,6 +1307,13 @@ export class Woodcutting3DView implements ScreenView {
     ui.summarySeed.textContent =
       plan?.seed === undefined ? 'Tutorial clearing' : `Clearing #${String(plan.seed)}`;
     ui.summary.dataset.stars = String(earned);
+    // The level bar fills from empty each time the summary opens.
+    ui.summaryXpFill.style.width = '0%';
+    this.#summaryTimers.push(
+      window.setTimeout(() => {
+        this.#showXp();
+      }, STAR_DELAY_MS),
+    );
     const bonus = round.starBonus;
     // Cleared: the bonus is earned now. Ended early: it lands if they leave, not if they keep going.
     ui.summaryBonus.textContent =
@@ -1274,6 +1358,7 @@ export class Woodcutting3DView implements ScreenView {
     if (logs <= 0) return false;
     const ui = this.#ui;
     ui.summaryBonus.textContent = `Star bonus +${String(logs)} logs!`;
+    this.#showXp();
     ui.summaryBonus.className = 'w3d-summary-bonus w3d-summary-bonus-won';
     const box = this.#element.getBoundingClientRect();
     const points = ui.stars
@@ -1398,6 +1483,12 @@ export class Woodcutting3DView implements ScreenView {
     this.#updateParticles(dt);
     this.#updateCamera(realDt);
     this.#startPendingPour();
+    const levelUp = this.#levelUpPending;
+    if (levelUp && !this.#pendingPour && this.#hud.settled) {
+      this.#levelUpPending = undefined;
+      // The summary lists what was unlocked, so the callout is only for mid-round level-ups.
+      if (!this.#summaryPending && this.#ui.summary.hidden) this.#levelUp(levelUp.from, levelUp.to);
+    }
     const pending = this.#summaryPending;
     if (
       pending &&
@@ -1539,6 +1630,16 @@ export class Woodcutting3DView implements ScreenView {
     const power = el('div', 'w3d-power');
     chopPanel.append(bar, pips, power);
     panel.append(aim, chopPanel);
+    const fast = button('', () => {
+      const { fastFall } = this.#deps;
+      fastFall.set(fastFall.value === 'on' ? 'off' : 'on');
+      this.#deps.logger.log('woodcutting3d.fastFall', { value: fastFall.value });
+    });
+    fast.classList.add('w3d-fast');
+    const levelUp = el('div', 'w3d-levelup');
+    const levelUpTitle = el('div', 'w3d-levelup-title');
+    const levelUpText = el('div', 'w3d-levelup-text');
+    levelUp.append(levelUpTitle, levelUpText);
     const flashes = el('div', 'w3d-flashes');
     const counter = el('div', 'w3d-counter');
     const summary = el('div', 'w3d-summary');
@@ -1561,6 +1662,13 @@ export class Woodcutting3DView implements ScreenView {
       });
     });
     const summaryBonus = el('div', 'w3d-summary-bonus');
+    const summaryXp = el('div', 'w3d-xp');
+    const summaryXpLabel = el('div', 'w3d-xp-label');
+    const summaryXpBar = el('div', 'w3d-xp-bar');
+    const summaryXpFill = el('div', 'w3d-xp-fill');
+    summaryXpBar.append(summaryXpFill);
+    const summaryUnlocks = el('div', 'w3d-xp-unlocks');
+    summaryXp.append(summaryXpLabel, summaryXpBar, summaryUnlocks);
     const keepChopping = button(
       'Keep chopping',
       () => {
@@ -1575,12 +1683,13 @@ export class Woodcutting3DView implements ScreenView {
       starRow,
       summaryText,
       summaryBonus,
+      summaryXp,
       summarySeed,
       keepChopping,
       summaryButtons,
     );
     summary.hidden = true;
-    root.append(perf, hint, panel, flashes, counter, summary);
+    root.append(perf, hint, panel, fast, flashes, counter, levelUp, summary);
     this.#element.append(root);
     return {
       perf,
@@ -1599,6 +1708,13 @@ export class Woodcutting3DView implements ScreenView {
       summaryTitle,
       summaryText,
       summaryBonus,
+      summaryXpLabel,
+      summaryXpFill,
+      summaryUnlocks,
+      fast,
+      levelUp,
+      levelUpTitle,
+      levelUpText,
       summarySeed,
       summaryButtons,
       keepChopping,
@@ -1623,6 +1739,10 @@ export class Woodcutting3DView implements ScreenView {
       ui.hint.textContent = hints[phase.kind] ?? '';
     }
     const waiting = !ui.summary.hidden || this.#summaryPending !== undefined;
+    const { game, fastFall } = this.#deps;
+    ui.fast.hidden = waiting || !fastFallUnlocked(game.data.woodcutting, game.level(this.#skill));
+    ui.fast.textContent = `⏩ Fast fall: ${fastFall.value === 'on' ? 'on' : 'off'}`;
+    ui.fast.setAttribute('aria-pressed', String(fastFall.value === 'on'));
     ui.aim.hidden = phase.kind !== 'aim' || waiting;
     ui.chop.disabled = !round.canChop;
     ui.chopPanel.hidden = phase.kind !== 'chop' || waiting;

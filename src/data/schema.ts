@@ -231,6 +231,23 @@ export const woodcuttingSchema = z.object({
    * 3 stars. Small, because logs already reward long chains (N × N).
    */
   starBonus: z.object({ two: nonNegative, three: nonNegative }),
+  /**
+   * What woodcutting levels unlock, in level order. From its level up, an entry changes the random
+   * clearings (later entries win). Levels never make the controls more forgiving.
+   */
+  unlocks: z.array(
+    z.object({
+      level: positiveInt,
+      /** Shown when the level is reached. */
+      text: z.string().min(1),
+      trees: z.object({ min: positiveInt, max: positiveInt }).optional(),
+      forkedShare: fraction.optional(),
+      /** Unlocks the fast-fall switch (see `fastFall`). */
+      fastFall: z.literal(true).optional(),
+    }),
+  ),
+  /** The fall and chain speeds the fast-fall switch uses (the faster feel from before Nov 23). */
+  fastFall: z.object({ fallSeconds: positive, chainDelay: nonNegative }),
   feel: woodcuttingFeelSchema,
 });
 
