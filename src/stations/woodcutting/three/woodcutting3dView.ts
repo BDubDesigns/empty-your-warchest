@@ -46,6 +46,8 @@ const FALLBACK_MS = 25;
 /** When the summary's first star pops in, and the gap before each of the others (ms). */
 const STAR_DELAY_MS = 450;
 const STAR_STAGGER_MS = 380;
+/** How long the summary stays after a star bonus has poured in, before leaving (ms). */
+const BONUS_LINGER_MS = 350;
 const MODELS = {
   kenney: ['tree_default', 'tree_oak', 'tree_detailed'].map((name) => `models/kenney/${name}.glb`),
   quaternius: ['CommonTree_1', 'CommonTree_3', 'Pine_1'].map(
@@ -310,7 +312,11 @@ export class Woodcutting3DView implements ScreenView {
           this.#onEvent(event);
         },
         view: '3d',
-        stars: { par: plan.par, ...game.data.woodcutting.stars },
+        stars: {
+          par: plan.par,
+          ...game.data.woodcutting.stars,
+          bonus: game.data.woodcutting.starBonus,
+        },
       },
       Date.now() >>> 0,
     );
@@ -323,6 +329,7 @@ export class Woodcutting3DView implements ScreenView {
     this.#cameraFrom = this.#cameraTo = undefined;
     this.#cameraPhase = '';
     this.#ui.summary.hidden = true;
+    delete this.#ui.summaryButtons.dataset.busy;
     this.#timer.reset();
     this.#renderer.setAnimationLoop((time) => {
       this.#loop(time);
@@ -1223,8 +1230,23 @@ export class Woodcutting3DView implements ScreenView {
     ui.summarySeed.textContent =
       plan?.seed === undefined ? 'Tutorial clearing' : `Clearing #${String(plan.seed)}`;
     ui.summary.dataset.stars = String(earned);
+    const bonus = round.starBonus;
+    // Cleared: the bonus is earned now. Ended early: it lands if they leave, not if they keep going.
+    ui.summaryBonus.textContent =
+      bonus <= 0 ? '' : paused ? `End the round for a star bonus: +${String(bonus)} logs` : '';
+    ui.summaryBonus.className = 'w3d-summary-bonus';
     ui.summary.hidden = false;
     const feel = round.feel;
+    if (!paused && bonus > 0) {
+      this.#summaryTimers.push(
+        window.setTimeout(
+          () => {
+            this.#pourStarBonus();
+          },
+          STAR_DELAY_MS + 3 * STAR_STAGGER_MS + 150,
+        ),
+      );
+    }
     ui.stars.forEach((star, index) => {
       star.className = 'w3d-star';
       this.#summaryTimers.push(
@@ -1241,6 +1263,59 @@ export class Woodcutting3DView implements ScreenView {
         ),
       );
     });
+  }
+
+  /**
+   * Banks the star bonus and pours it into the chest from the earned stars, with a callout.
+   * Returns whether anything poured.
+   */
+  #pourStarBonus(): boolean {
+    const logs = this.#round.claimStarBonus();
+    if (logs <= 0) return false;
+    const ui = this.#ui;
+    ui.summaryBonus.textContent = `Star bonus +${String(logs)} logs!`;
+    ui.summaryBonus.className = 'w3d-summary-bonus w3d-summary-bonus-won';
+    const box = this.#element.getBoundingClientRect();
+    const points = ui.stars
+      .filter((star) => star.classList.contains('w3d-star-on'))
+      .map((star) => {
+        const rect = star.getBoundingClientRect();
+        return {
+          x: rect.left + rect.width / 2 - box.left,
+          y: rect.top + rect.height / 2 - box.top,
+        };
+      });
+    this.#hud.hold(logs).pour(points);
+    this.#sfx.play('star', 0.5, 700);
+    return true;
+  }
+
+  /**
+   * Leaving from the summary (Back to camp or Next clearing). Ended early, the star bonus pours
+   * in first, so the player sees it land before the screen changes.
+   */
+  #leaveSummary(then: () => void): void {
+    const ui = this.#ui;
+    if (ui.summaryButtons.dataset.busy === 'true') return;
+    if (!this.#pourStarBonus()) {
+      then();
+      return;
+    }
+    ui.summaryButtons.dataset.busy = 'true';
+    ui.keepChopping.hidden = true;
+    const waitForPour = () => {
+      if (!this.#hud.settled) {
+        this.#summaryTimers.push(window.setTimeout(waitForPour, 100));
+        return;
+      }
+      this.#summaryTimers.push(
+        window.setTimeout(() => {
+          delete ui.summaryButtons.dataset.busy;
+          then();
+        }, BONUS_LINGER_MS),
+      );
+    };
+    waitForPour();
   }
 
   #play(name: string, volume: number, pitchCents = 0): void {
@@ -1474,13 +1549,18 @@ export class Woodcutting3DView implements ScreenView {
     const summaryText = el('div', 'w3d-summary-text');
     const summarySeed = el('div', 'w3d-summary-seed');
     const leave = button('Back to camp', () => {
-      this.#deps.onLeave();
+      this.#leaveSummary(() => {
+        this.#deps.onLeave();
+      });
     });
     leave.classList.add('w3d-secondary');
     const next = button('Next clearing', () => {
-      this.stop();
-      this.start();
+      this.#leaveSummary(() => {
+        this.stop();
+        this.start();
+      });
     });
+    const summaryBonus = el('div', 'w3d-summary-bonus');
     const keepChopping = button(
       'Keep chopping',
       () => {
@@ -1490,7 +1570,15 @@ export class Woodcutting3DView implements ScreenView {
     );
     const summaryButtons = el('div', 'w3d-summary-buttons');
     summaryButtons.append(leave, next);
-    summary.append(summaryTitle, starRow, summaryText, summarySeed, keepChopping, summaryButtons);
+    summary.append(
+      summaryTitle,
+      starRow,
+      summaryText,
+      summaryBonus,
+      summarySeed,
+      keepChopping,
+      summaryButtons,
+    );
     summary.hidden = true;
     root.append(perf, hint, panel, flashes, counter, summary);
     this.#element.append(root);
@@ -1510,7 +1598,9 @@ export class Woodcutting3DView implements ScreenView {
       summary,
       summaryTitle,
       summaryText,
+      summaryBonus,
       summarySeed,
+      summaryButtons,
       keepChopping,
       stars,
     };

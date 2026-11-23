@@ -226,6 +226,11 @@ export const woodcuttingSchema = z.object({
    * would bank, taking the biggest chain they can find each time). 1 star for any banked chain.
    */
   stars: z.object({ two: fraction, three: fraction }),
+  /**
+   * Bonus logs when the round ends, as a share of its logs: none for 1 star, then these for 2 and
+   * 3 stars. Small, because logs already reward long chains (N × N).
+   */
+  starBonus: z.object({ two: nonNegative, three: nonNegative }),
   feel: woodcuttingFeelSchema,
 });
 

@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { chainLogs, WoodcuttingRound, type RoundEvent } from '../src/stations/woodcutting';
+import {
+  chainLogs,
+  starBonusLogs,
+  WoodcuttingRound,
+  type RoundEvent,
+} from '../src/stations/woodcutting';
 import { data, testLogger } from './helpers';
 
 const clearing = data.woodcutting.clearings[0];
@@ -7,7 +12,7 @@ if (!clearing) throw new Error('No clearing in data');
 const feel = data.woodcutting.feel;
 const towardA2 = Math.atan2(170 - 110, 140 - 70);
 
-function setup(seed = 7) {
+function setup(seed = 7, par?: number) {
   const { logger } = testLogger();
   const events: RoundEvent[] = [];
   let banked = 0;
@@ -23,6 +28,9 @@ function setup(seed = 7) {
       },
       onEvent: (event) => events.push(event),
       view: 'test',
+      ...(par === undefined
+        ? {}
+        : { stars: { par, ...data.woodcutting.stars, bonus: data.woodcutting.starBonus } }),
     },
     seed,
   );
@@ -171,6 +179,34 @@ describe('WoodcuttingRound', () => {
 
   it('an exponent of 1 is a log per tree', () => {
     expect(chainLogs(4, 1)).toBe(4);
+  });
+});
+
+describe('star bonus', () => {
+  it('banks the bonus for the stars once, when the round ends', async () => {
+    // Par 20: the 4-tree chain's 16 logs are 80% of it, 3 stars.
+    const { round, logger, banked } = setup(7, 20);
+    aimAndChop(round, 'a1', towardA2);
+    while (round.phase.kind === 'chop') perfectChop(round);
+    for (let i = 0; i < 200 && round.phase.kind === 'falling'; i++) round.tick(0.05);
+    expect(round.stars).toBe(3);
+    expect(round.starBonus).toBe(4);
+    expect(round.claimStarBonus()).toBe(4);
+    expect(round.claimStarBonus()).toBe(0);
+    expect(banked()).toBe(20);
+    expect(round.bonusLogs).toBe(4);
+    // The bonus doesn't count toward the round's own logs, or it would raise its own stars.
+    expect(round.logs).toBe(16);
+    const bonus = (await logger.readAll()).find((event) => event.type === 'woodcutting.starBonus');
+    expect(bonus?.data).toEqual({ stars: 3, logs: 16, bonus: 4 });
+  });
+
+  it('is nothing for 1 star, a little for 2 and more for 3', () => {
+    const bonus = { two: 0.1, three: 0.25 };
+    expect(starBonusLogs(40, 1, bonus)).toBe(0);
+    expect(starBonusLogs(40, 2, bonus)).toBe(4);
+    expect(starBonusLogs(40, 3, bonus)).toBe(10);
+    expect(starBonusLogs(0, 0, bonus)).toBe(0);
   });
 });
 

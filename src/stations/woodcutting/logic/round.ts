@@ -3,7 +3,7 @@ import type { Clearing, WoodcuttingFeel } from '../../../data';
 import { angleBeforeLift, nudgeAim, type AimSample } from './aim';
 import { resolveChain, type FallStep } from './chain';
 import { fallTimeToReach } from './fall';
-import { chainLogs, starsFor, type StarThresholds } from './score';
+import { chainLogs, starBonusLogs, starsFor, type StarBonus, type StarThresholds } from './score';
 import {
   chopDamage,
   judgeSwing,
@@ -94,8 +94,8 @@ export interface RoundHooks {
   onEvent?: (event: RoundEvent) => void;
   /** Which view is playing, for the logs (e.g. '3d'). */
   view: string;
-  /** The clearing's par and the star thresholds, for the round's stars. */
-  stars?: StarThresholds & { par: number };
+  /** The clearing's par, the star thresholds and the star bonus, for the round's stars. */
+  stars?: StarThresholds & { par: number; bonus: StarBonus };
 }
 
 /**
@@ -115,6 +115,8 @@ export class WoodcuttingRound {
   #rng: Rng;
   #ended = false;
   #startedAt = 0;
+  #bonusClaimed = false;
+  #bonusLogs = 0;
 
   constructor(clearing: Clearing, hooks: RoundHooks, seed: number) {
     this.clearing = clearing;
@@ -137,6 +139,35 @@ export class WoodcuttingRound {
     return this.#hooks.stars?.par;
   }
 
+  /** Bonus logs the round's stars are worth when it ends (whether or not claimed yet). */
+  get starBonus(): number {
+    const stars = this.#hooks.stars;
+    return stars ? starBonusLogs(this.logs, this.stars, stars.bonus) : 0;
+  }
+
+  /** Logs the star bonus banked (0 until it's claimed). */
+  get bonusLogs(): number {
+    return this.#bonusLogs;
+  }
+
+  /**
+   * The round is ending: bank the star bonus into the warchest, once. Returns the logs gained.
+   * Logs banked after this (there shouldn't be any) don't raise it.
+   */
+  claimStarBonus(): number {
+    if (this.#bonusClaimed) return 0;
+    this.#bonusClaimed = true;
+    const bonus = this.starBonus;
+    if (bonus <= 0) return 0;
+    this.#bonusLogs = this.#hooks.bank(bonus, 0);
+    this.#log('woodcutting.starBonus', {
+      stars: this.stars,
+      logs: this.logs,
+      bonus: this.#bonusLogs,
+    });
+    return this.#bonusLogs;
+  }
+
   start(seed: number): void {
     this.#rng = new Rng(seed);
     this.standing = new Set(this.clearing.trees.map((tree) => tree.id));
@@ -144,6 +175,8 @@ export class WoodcuttingRound {
     this.felled = 0;
     this.logs = 0;
     this.#ended = false;
+    this.#bonusClaimed = false;
+    this.#bonusLogs = 0;
     this.#startedAt = this.now;
     this.phase = { kind: 'pick' };
     this.#log('woodcutting.roundStart', {

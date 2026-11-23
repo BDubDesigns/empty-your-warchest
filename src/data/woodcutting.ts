@@ -57,6 +57,7 @@ export const woodcutting = {
   // Par comes from trying every fall direction, so it finds chains people often miss: stars are
   // given well short of it.
   stars: { two: 0.4, three: 0.7 },
+  starBonus: { two: 0.1, three: 0.25 },
   feel: {
     meterSpeed: 1.1,
     timingWindow: 0.46,
