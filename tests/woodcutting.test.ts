@@ -390,10 +390,10 @@ describe('live tuning', () => {
     const feel = woodcuttingFeel(data.woodcutting.feel, store);
     let changes = 0;
     feel.onChange(() => changes++);
-    feel.set('fallSeconds', 1.5);
-    expect(feel.values.fallSeconds).toBe(1.5);
+    feel.set('fallSeconds', 2);
+    expect(feel.values.fallSeconds).toBe(2);
     expect(feel.isOverridden('fallSeconds')).toBe(true);
-    expect(woodcuttingFeel(data.woodcutting.feel, store).values.fallSeconds).toBe(1.5);
+    expect(woodcuttingFeel(data.woodcutting.feel, store).values.fallSeconds).toBe(2);
     feel.reset();
     expect(feel.values).toEqual(data.woodcutting.feel);
     expect(store.get('warchest.tuning.woodcutting')).toBeNull();

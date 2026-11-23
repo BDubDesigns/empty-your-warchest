@@ -185,6 +185,8 @@ export const woodcuttingSchema = z.object({
   recipe: id,
   /** A chain of N felled trees banks N^chainExponent logs (a forked tree counts once). */
   chainExponent: positive,
+  /** Words shouted as a chain grows: the last one whose `trees` is reached shows. */
+  comboCallouts: z.array(z.object({ trees: z.number().int().min(2), text: z.string().min(1) })),
   clearings: z.array(clearingSchema).min(1),
   feel: woodcuttingFeelSchema,
 });
