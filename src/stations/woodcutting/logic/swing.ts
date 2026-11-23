@@ -3,10 +3,15 @@ import type { WoodcuttingFeel } from '../../../data';
 
 export type SwingResult = 'perfect' | 'good' | 'glancing';
 
-/** The bar marker's position, 0–1, `seconds` after you start holding the axe back. Sweeps end to end. */
-export function markerPosition(seconds: number, meterSpeed: number): number {
-  const phase = (seconds * meterSpeed) % 2;
-  return phase <= 1 ? phase : 2 - phase;
+/** Position 0–1 on the bar for a marker that has swept `phase` passes, bouncing end to end. */
+export function markerPosition(phase: number): number {
+  const wrapped = phase % 2;
+  return wrapped <= 1 ? wrapped : 2 - wrapped;
+}
+
+/** Passes per second the marker sweeps; a fuller pull sweeps faster. */
+export function markerSpeed(pull: number, feel: WoodcuttingFeel): number {
+  return feel.meterSpeed * (1 + pull * feel.pullSpeedUp);
 }
 
 /** A new spot for the yellow zone, kept far enough from the ends that the green fits around it. */
@@ -15,16 +20,23 @@ export function nextTarget(feel: WoodcuttingFeel, rng: Rng): number {
   return rng.range(margin, 1 - margin);
 }
 
-/** Judges a chop by how close the marker was to the yellow zone's center. */
-export function judgeSwing(
-  position: number,
-  target: number,
-  feel: WoodcuttingFeel,
-): { result: SwingResult; points: number } {
+/** How clean a chop was: where the marker stopped relative to the yellow zone. */
+export function judgeSwing(position: number, target: number, feel: WoodcuttingFeel): SwingResult {
   const offset = Math.abs(position - target);
-  if (offset <= feel.perfectWindow / 2) return { result: 'perfect', points: feel.perfectPoints };
-  if (offset <= feel.timingWindow / 2) return { result: 'good', points: feel.goodPoints };
-  return { result: 'glancing', points: 0 };
+  if (offset <= feel.perfectWindow / 2) return 'perfect';
+  if (offset <= feel.timingWindow / 2) return 'good';
+  return 'glancing';
+}
+
+/**
+ * Damage from one chop: the pull sets the power (a full pull deals fullPullPoints, a partial
+ * pull its share, at least 1); yellow adds perfectBonus; a glancing chop deals half.
+ */
+export function chopDamage(pull: number, result: SwingResult, feel: WoodcuttingFeel): number {
+  const power = Math.max(1, Math.round(pull * feel.fullPullPoints));
+  if (result === 'perfect') return power + feel.perfectBonus;
+  if (result === 'good') return power;
+  return Math.floor(power / 2);
 }
 
 /**

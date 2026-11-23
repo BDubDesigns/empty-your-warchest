@@ -6,9 +6,14 @@ import {
   fallTimeToReach,
   fallTip,
   fitClearing,
+  angleBeforeLift,
+  chopDamage,
+  fineTune,
   judgeSwing,
   markerPosition,
+  markerSpeed,
   nextTarget,
+  trunkAngles,
   previewFall,
   resolveChain,
   swingScatter,
@@ -155,24 +160,30 @@ describe('the hand-made clearing', () => {
 describe('chop bar', () => {
   const feel = data.woodcutting.feel;
 
-  it('sweeps the marker end to end while the axe is held back', () => {
-    expect(markerPosition(0, 1)).toBe(0);
-    expect(markerPosition(0.5, 1)).toBe(0.5);
-    expect(markerPosition(1, 1)).toBe(1);
-    expect(markerPosition(1.25, 1)).toBe(0.75);
+  it('sweeps the marker end to end', () => {
+    expect(markerPosition(0)).toBe(0);
+    expect(markerPosition(0.5)).toBe(0.5);
+    expect(markerPosition(1)).toBe(1);
+    expect(markerPosition(1.25)).toBe(0.75);
+  });
+
+  it('sweeps faster the further the axe is pulled back', () => {
+    expect(markerSpeed(0, feel)).toBe(feel.meterSpeed);
+    expect(markerSpeed(1, feel)).toBeCloseTo(feel.meterSpeed * (1 + feel.pullSpeedUp));
   });
 
   it('judges yellow, green and glancing around wherever the yellow zone is', () => {
-    expect(judgeSwing(0.3, 0.3, feel)).toEqual({ result: 'perfect', points: feel.perfectPoints });
-    expect(judgeSwing(0.3 + feel.perfectWindow / 2 + 0.01, 0.3, feel)).toEqual({
-      result: 'good',
-      points: feel.goodPoints,
-    });
-    expect(judgeSwing(0.3 + feel.timingWindow / 2 + 0.01, 0.3, feel)).toEqual({
-      result: 'glancing',
-      points: 0,
-    });
-    expect(judgeSwing(0.8, 0.8, feel).result).toBe('perfect');
+    expect(judgeSwing(0.3, 0.3, feel)).toBe('perfect');
+    expect(judgeSwing(0.3 + feel.perfectWindow / 2 + 0.01, 0.3, feel)).toBe('good');
+    expect(judgeSwing(0.3 + feel.timingWindow / 2 + 0.01, 0.3, feel)).toBe('glancing');
+  });
+
+  it('deals more damage for a fuller pull, a bonus on yellow, half when glancing', () => {
+    expect(chopDamage(1, 'good', feel)).toBe(feel.fullPullPoints);
+    expect(chopDamage(0.05, 'good', feel)).toBe(1);
+    expect(chopDamage(1, 'perfect', feel)).toBe(feel.fullPullPoints + feel.perfectBonus);
+    expect(chopDamage(1, 'glancing', feel)).toBe(Math.floor(feel.fullPullPoints / 2));
+    expect(chopDamage(0.5, 'good', feel)).toBeLessThan(chopDamage(1, 'good', feel));
   });
 
   it('moves the yellow zone to a new spot each chop, always with room for the green', () => {
@@ -206,6 +217,45 @@ describe('chop bar', () => {
       return [swingScatter('good', feel, rng), swingScatter('glancing', feel, rng)];
     };
     expect(drifts(42)).toEqual(drifts(42));
+  });
+});
+
+describe('aiming', () => {
+  it('ignores the finger rolling just before it lifts', () => {
+    const samples = [
+      { t: 1.0, angle: 0.5 },
+      { t: 1.2, angle: 0.6 },
+      { t: 1.35, angle: 0.9 },
+      { t: 1.38, angle: 1.1 },
+    ];
+    expect(angleBeforeLift(samples, 1.4, 0.1)).toBe(0.6);
+    expect(angleBeforeLift([{ t: 1.39, angle: 2 }], 1.4, 0.1)).toBe(2);
+    expect(angleBeforeLift([], 1.4, 0.1)).toBeUndefined();
+  });
+
+  it('fine-tunes slowly with a sideways drag', () => {
+    expect(degrees(fineTune(0, 100, 0.15))).toBe(15);
+    expect(degrees(fineTune(Math.PI / 2, -60, 0.1))).toBe(84);
+  });
+});
+
+describe('forked trees', () => {
+  const fork = clearing([
+    { id: 'f', x: 100, y: 100, height: 100, forks: [-30, 30] },
+    { id: 'up', x: 186, y: 50, height: 50 },
+    { id: 'down', x: 186, y: 150, height: 50 },
+    { id: 'ahead', x: 190, y: 100, height: 50 },
+  ]);
+
+  it('falls as trunks fanned out around the fall direction', () => {
+    expect(trunkAngles(firstOf(fork.trees), 0).map(degrees)).toEqual([-30, 30]);
+    expect(trunkAngles({ id: 'plain', x: 0, y: 0, height: 1 }, 0)).toEqual([0]);
+  });
+
+  it('knocks over a tree on each trunk line, not the one between them', () => {
+    const steps = resolveChain(fork, all(fork), 'f', RIGHT);
+    expect(ids(steps).sort()).toEqual(['down', 'f', 'up']);
+    expect(steps[0]?.trunks).toHaveLength(2);
   });
 });
 

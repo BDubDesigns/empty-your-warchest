@@ -28,6 +28,13 @@ async function touchDrag(page: Page, from: { x: number; y: number }, to: { x: nu
   await client.detach();
 }
 
+/** Taps the Chop button, which sits in the middle of the box at the bottom. */
+async function tapChop(page: Page, box: { x: number; y: number; width: number; height: number }) {
+  const boxTop = box.height - 268 + 28;
+  const boxHeight = 268 - 40;
+  await page.touchscreen.tap(box.x + box.width / 2, box.y + boxTop + boxHeight / 2);
+}
+
 /** Pulls the axe back in the chop box, holds for `holdMs`, and lets go. */
 async function chop(
   page: Page,
@@ -83,6 +90,9 @@ test('a woodcutting turn: pick, aim, chop, fall, logs to the warchest', async ({
     { x: box.x + from.x, y: box.y + from.y },
     { x: box.x + pullTo.x, y: box.y + pullTo.y },
   );
+  // The aim stays after letting go; Chop commits it.
+  await expect(page.locator('body')).toHaveAttribute('data-woodcutting', 'aim');
+  await tapChop(page, box);
   await expect(page.locator('body')).toHaveAttribute('data-woodcutting', 'chop');
 
   // Chop in the box: hold for different times so some releases land in the green or yellow.
@@ -170,6 +180,8 @@ test('pulling back aims the opposite way', async ({ page }) => {
     { x: box.x + from.x, y: box.y + from.y },
     { x: box.x + from.x, y: box.y + from.y - 60 },
   );
+  await expect(page.locator('body')).toHaveAttribute('data-woodcutting', 'aim');
+  await tapChop(page, box);
   await expect(page.locator('body')).toHaveAttribute('data-woodcutting', 'chop');
 
   await page.getByRole('button', { name: 'Back to camp' }).tap();

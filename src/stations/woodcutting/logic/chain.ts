@@ -10,6 +10,8 @@ export interface FallStep {
   tree: string;
   /** Radians, 0 = right, π/2 = down (screen coordinates). */
   angle: number;
+  /** The direction of each trunk: one for a plain tree, 2–3 fanned out for a forked one. */
+  trunks: number[];
   /** 0 for the tree you chopped, 1 for trees it hits, and so on. */
   depth: number;
   /** The tree that knocked this one over. */
@@ -26,6 +28,11 @@ export interface Hit {
   contactAt: number;
   /** -1 (hit at one edge) … 0 (dead center) … 1 (other edge). */
   offset: number;
+}
+
+/** The directions a tree's trunks fall when it's felled at `angle`. */
+export function trunkAngles(tree: ClearingTree, angle: number): number[] {
+  return tree.forks ? tree.forks.map((offset) => angle + (offset * Math.PI) / 180) : [angle];
 }
 
 /** Where a tree's top lands when it falls at `angle`. */
@@ -94,22 +101,33 @@ export function resolveChain(
 
   const stillStanding = new Set(standing);
   stillStanding.delete(startId);
-  const steps: FallStep[] = [{ tree: startId, angle, depth: 0 }];
-  let frontier = [{ tree: start, angle }];
+  const steps: FallStep[] = [{ tree: startId, angle, trunks: trunkAngles(start, angle), depth: 0 }];
+  let frontier = [{ tree: start, trunks: trunkAngles(start, angle) }];
   for (let depth = 1; frontier.length > 0; depth++) {
-    const next: { tree: ClearingTree; angle: number }[] = [];
+    const next: { tree: ClearingTree; trunks: number[] }[] = [];
     for (const faller of frontier) {
-      for (const hit of treesHit(clearing, stillStanding, faller.tree, faller.angle)) {
-        const hitAngle = knockAngle(faller.tree, faller.angle, hit);
+      // Every trunk sweeps its own line; whichever touches a tree first knocks it over.
+      const hits = faller.trunks
+        .flatMap((trunk) =>
+          treesHit(clearing, stillStanding, faller.tree, trunk).map((hit) => ({ hit, trunk })),
+        )
+        .sort(
+          (a, b) => a.hit.contactAt - b.hit.contactAt || a.hit.tree.id.localeCompare(b.hit.tree.id),
+        );
+      for (const { hit, trunk } of hits) {
+        if (!stillStanding.has(hit.tree.id)) continue;
         stillStanding.delete(hit.tree.id);
+        const hitAngle = knockAngle(faller.tree, trunk, hit);
+        const trunks = trunkAngles(hit.tree, hitAngle);
         steps.push({
           tree: hit.tree.id,
           angle: hitAngle,
+          trunks,
           depth,
           hitBy: faller.tree.id,
           hitAt: hit.contactAt,
         });
-        next.push({ tree: hit.tree, angle: hitAngle });
+        next.push({ tree: hit.tree, trunks });
       }
     }
     frontier = next;

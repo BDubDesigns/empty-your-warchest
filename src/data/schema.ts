@@ -124,6 +124,11 @@ const clearingSchema = z.object({
         y: nonNegative,
         /** How far the tree reaches when it falls. */
         height: positive,
+        /**
+         * A forked tree falls as 2–3 trunks fanning out: one per offset (degrees) from the
+         * fall direction. Each trunk knocks trees over on its own line.
+         */
+        forks: z.array(z.number().min(-90).max(90)).min(2).max(3).optional(),
       }),
     )
     .min(1),
@@ -143,11 +148,16 @@ export const woodcuttingFeelSchema = z.object({
   goodScatter: z.number().min(0).max(90),
   /** Most a glancing chop can knock the fall direction off, in degrees. */
   glancingScatter: z.number().min(0).max(90),
-  /** Chop points needed to fell a tree, after the notch cut that sets its direction. */
+  /** Chop points needed to fell a tree. */
   chopPoints: positiveInt,
-  /** Points for a good chop; a perfect chop gets perfectPoints; a miss gets none. */
-  goodPoints: nonNegative,
-  perfectPoints: nonNegative,
+  /** Points a full pull of the axe deals; a partial pull deals its share (at least 1). */
+  fullPullPoints: positiveInt,
+  /** Extra points for a chop released on yellow. A glancing chop deals half. */
+  perfectBonus: nonNegative,
+  /** How much faster the bar marker sweeps at full pull (0 = same speed, 1 = twice as fast). */
+  pullSpeedUp: nonNegative,
+  /** Fine-tune aiming: degrees the aim turns per screen pixel of drag. */
+  fineAimRate: positive,
   /** Seconds for a tree to fall from upright to the ground. */
   fallSeconds: positive,
   /** How sharply a fall speeds up: 1 = steady, higher = slower start and faster finish. */
