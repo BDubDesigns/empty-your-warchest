@@ -15,5 +15,8 @@ Placeholder sounds, converted to mono mp3. Both packs are CC0 (public domain): h
 | warchest/chest-open.mp3               | Kenney, RPG Audio: `doorOpen_1.ogg`                       |
 | warchest/chest-close.mp3              | Kenney, RPG Audio: `doorClose_4.ogg`                      |
 | warchest/log-in-1.mp3 … log-in-3.mp3  | Kenney, Impact Sounds: `impactWood_light_001/003/004.ogg` |
+| warchest/chest-latch.mp3              | Kenney, RPG Audio: `metalLatch.ogg`                       |
+| warchest/panel-open.mp3               | Kenney, RPG Audio: `handleSmallLeather.ogg`               |
+| warchest/panel-close.mp3              | Kenney, RPG Audio: `handleSmallLeather2.ogg`              |
 
 Kenney: https://kenney.nl (RPG Audio, Impact Sounds)

@@ -575,6 +575,7 @@ body:not([data-view='camp']) #build-label {
 .warchest-layer {
   position: absolute;
   inset: 0;
+  z-index: 3;
   pointer-events: none;
 }
 
@@ -583,11 +584,14 @@ body:not([data-view='camp']) #build-label {
   top: calc(var(--safe-top) + 58px);
   right: calc(var(--safe-right) + 12px);
   height: 46px;
+  min-width: 46px;
   padding-right: 52px;
   display: flex;
   align-items: center;
-  pointer-events: none;
+  z-index: 4;
   font-family: system-ui, sans-serif;
+  cursor: pointer;
+  touch-action: manipulation;
 }
 
 .warchest-count {
@@ -643,5 +647,205 @@ body:not([data-view='camp']) #build-label {
   100% {
     opacity: 0;
     transform: translateY(-10px);
+  }
+}
+
+/* The warchest panel (src/app/warchestPanel.ts): bursts out of the HUD chest, which stays drawn
+   above it, and folds back in. */
+.warchest-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  font-family: system-ui, sans-serif;
+}
+
+.warchest-overlay[hidden] {
+  display: none;
+}
+
+.warchest-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgb(0 0 0 / 0.6);
+  opacity: 0;
+  transition: opacity 0.18s ease-in;
+}
+
+.warchest-overlay[data-state='open'] .warchest-backdrop {
+  opacity: 1;
+  transition: opacity 0.22s ease-out;
+}
+
+.warchest-burst {
+  position: absolute;
+  width: 180px;
+  height: 180px;
+  margin: -90px 0 0 -90px;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle,
+    rgb(255 226 140 / 0.9),
+    rgb(255 190 80 / 0.35) 35%,
+    transparent 70%
+  );
+  opacity: 0;
+  pointer-events: none;
+}
+
+.warchest-overlay[data-state='open'] .warchest-burst {
+  animation: warchest-burst 0.55s ease-out;
+}
+
+@keyframes warchest-burst {
+  0% {
+    opacity: 1;
+    transform: scale(0.2);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.6);
+  }
+}
+
+.warchest-panel {
+  position: absolute;
+  top: calc(var(--safe-top) + 114px);
+  right: calc(var(--safe-right) + 12px);
+  width: min(340px, calc(100% - 24px - var(--safe-left) - var(--safe-right)));
+  box-sizing: border-box;
+  padding: 16px 14px 14px;
+  border: 2px solid #7a5a2e;
+  border-radius: 16px;
+  background: linear-gradient(#3a2d1e, #261d14);
+  box-shadow:
+    0 12px 32px rgb(0 0 0 / 0.55),
+    inset 0 1px 0 rgb(255 230 180 / 0.12);
+  color: var(--fg);
+  opacity: 0;
+  transform: scale(0.1);
+  transition:
+    transform 0.18s cubic-bezier(0.5, 0, 0.9, 0.5),
+    opacity 0.18s ease-in;
+}
+
+.warchest-overlay[data-state='open'] .warchest-panel {
+  opacity: 1;
+  transform: scale(1);
+  transition:
+    transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1),
+    opacity 0.1s ease-out;
+}
+
+.warchest-title {
+  margin: 0 0 12px;
+  font-size: 20px;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  text-align: center;
+  color: #f0cd5c;
+  text-shadow: 0 2px 4px rgb(0 0 0 / 0.6);
+}
+
+.warchest-rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 6px;
+}
+
+.warchest-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  min-height: 40px;
+  padding: 0 12px;
+  border: 1px solid rgb(255 255 255 / 0.06);
+  border-radius: 10px;
+  background: rgb(255 255 255 / 0.05);
+}
+
+.warchest-overlay[data-state='open'] .warchest-row {
+  animation: warchest-row-in 0.34s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+  animation-delay: calc(120ms + var(--i) * 45ms);
+}
+
+@keyframes warchest-row-in {
+  0% {
+    opacity: 0;
+    transform: translateX(24px);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* The item this station collects. */
+.warchest-row-here {
+  border-color: rgb(240 205 92 / 0.5);
+  background: rgb(240 205 92 / 0.12);
+}
+
+.warchest-row-name {
+  font-weight: 700;
+  font-size: 16px;
+}
+
+.warchest-row-detail {
+  font-weight: 800;
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.warchest-row-here .warchest-row-detail {
+  color: #f0cd5c;
+}
+
+.warchest-overlay[data-state='open'] .warchest-row-pop {
+  animation: warchest-row-pop 0.4s ease-out;
+}
+
+@keyframes warchest-row-pop {
+  0% {
+    transform: scale(1.06);
+    background: rgb(240 205 92 / 0.3);
+  }
+  100% {
+    transform: none;
+  }
+}
+
+.warchest-close {
+  display: block;
+  width: 100%;
+  min-height: 44px;
+  margin-top: 14px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--accent);
+  color: var(--bg);
+  font:
+    800 17px system-ui,
+    sans-serif;
+  touch-action: manipulation;
+}
+
+.warchest-close:active {
+  background: var(--accent-pressed);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .warchest-panel,
+  .warchest-overlay[data-state='open'] .warchest-panel {
+    transition: opacity 0.15s;
+    transform: none;
+  }
+
+  .warchest-overlay[data-state='open'] .warchest-row,
+  .warchest-overlay[data-state='open'] .warchest-burst {
+    animation: none;
   }
 }
