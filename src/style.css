@@ -141,6 +141,8 @@ body:not([data-view='camp']) #build-label {
 .debug-panel {
   position: absolute;
   inset: 0;
+  /* Over everything a screen draws, including the HUD chest and its panel. */
+  z-index: 10;
   overflow-y: auto;
   padding: calc(var(--safe-top) + 12px) calc(var(--safe-right) + 16px)
     calc(var(--safe-bottom) + 24px) calc(var(--safe-left) + 16px);
