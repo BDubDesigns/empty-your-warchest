@@ -5,6 +5,7 @@ import type { BackButton } from '../../../app/backButton';
 import type { Haptics } from '../../../app/haptics';
 import { loadModel } from '../../../app/models';
 import { Sfx } from '../../../app/sfx';
+import { SkillBar, type XpDeposit } from '../../../app/skillBar';
 import { WarchestHud, type Deposit, type ScreenPoint } from '../../../app/warchestHud';
 import type { EventLogger, Game, LiveChoice, LiveTuning } from '../../../core';
 import type { Clearing, ClearingTree, WoodcuttingFeel } from '../../../data';
@@ -190,6 +191,10 @@ export class Woodcutting3DView implements ScreenView {
   readonly #sfx = new Sfx();
   /** The warchest in the HUD, which banked logs pour into. */
   readonly #hud: WarchestHud;
+  /** The woodcutting level bar, top centre, which ticks up as banked logs land in the chest. */
+  readonly #skillBar: SkillBar;
+  /** XP from the last bank, held back until its logs pour in. */
+  #bankedXp: XpDeposit | undefined;
   /** A banked chain waiting for the camera to settle on the overview before its logs pour. */
   #pendingPour: { deposit: Deposit; trees: string[] } | undefined;
   /**
@@ -249,6 +254,7 @@ export class Woodcutting3DView implements ScreenView {
   ) {
     this.#hud = hud;
     this.#skill = woodcuttingSkill(deps.game.data);
+    this.#skillBar = new SkillBar(element, { game: deps.game, skill: this.#skill });
     this.#element = element;
     this.#deps = deps;
     this.#models = models;
@@ -316,8 +322,10 @@ export class Woodcutting3DView implements ScreenView {
         chainExponent: this.#deps.game.data.woodcutting.chainExponent,
         bank: (batches) => {
           const before = game.level(this.#skill);
+          const xpBefore = game.xp(this.#skill);
           const result = game.craft(game.data.woodcutting.recipe, { batches });
           const after = game.level(this.#skill);
+          this.#bankedXp = this.#skillBar.hold(game.xp(this.#skill) - xpBefore);
           if (after > before) {
             this.#levelUpPending = { from: this.#levelUpPending?.from ?? before, to: after };
           }
@@ -360,6 +368,8 @@ export class Woodcutting3DView implements ScreenView {
     this.#clearSummaryTimers();
     this.#deps.backButton.set(undefined);
     this.#hud.settle();
+    this.#skillBar.settle();
+    this.#bankedXp = undefined;
     this.#round.exit();
     this.#deps.clearings.finished();
     this.#logPerformance();
@@ -1184,12 +1194,19 @@ export class Woodcutting3DView implements ScreenView {
       const trees = [...this.#trees.values()]
         .filter((visual) => visual.fallen && visual.fallen.sinkAt === undefined)
         .map((visual) => visual.tree.id);
-      this.#pendingPour = { deposit: this.#hud.hold(event.logs), trees };
+      this.#pendingPour = { deposit: this.#hud.hold(event.logs, this.#takeBankedXp()), trees };
       this.#bestChain = Math.max(this.#bestChain, event.trees);
     } else {
       this.#deps.clearings.finished();
       this.#summaryPending = 'cleared';
     }
+  }
+
+  /** The XP the last bank earned, ticked in as its logs land in the chest. */
+  #takeBankedXp(): (share: number) => void {
+    const xp = this.#bankedXp;
+    this.#bankedXp = undefined;
+    return (share) => xp?.arrive(share);
   }
 
   /** The feel numbers (with live tuning), at fast-fall speeds when that switch is on. */
@@ -1370,7 +1387,7 @@ export class Woodcutting3DView implements ScreenView {
           y: rect.top + rect.height / 2 - box.top,
         };
       });
-    this.#hud.hold(logs).pour(points);
+    this.#hud.hold(logs, this.#takeBankedXp()).pour(points);
     this.#sfx.play('star', 0.5, 700);
     return true;
   }

@@ -1070,3 +1070,139 @@ body:not([data-view='camp']) #build-label {
     transform: translateY(-14px);
   }
 }
+
+/* A station's level bar (src/app/skillBar.ts): top centre, between the top-left button and the
+   chest, always in view so the player watches it climb. Only to look at, never to tap. */
+.skill-bar {
+  position: absolute;
+  top: calc(var(--safe-top) + 16px);
+  left: 50%;
+  box-sizing: border-box;
+  width: 104px;
+  transform: translateX(-50%);
+  display: grid;
+  gap: 4px;
+  justify-items: center;
+  padding: 6px 8px 7px;
+  border-radius: 10px;
+  background: rgb(0 0 0 / 0.4);
+  z-index: 4;
+  pointer-events: none;
+  font-family: system-ui, sans-serif;
+}
+
+.skill-bar-label {
+  font-weight: 700;
+  font-size: 12px;
+  color: var(--fg);
+  text-shadow: 0 1px 3px rgb(0 0 0 / 0.7);
+  white-space: nowrap;
+}
+
+.skill-bar-level {
+  display: inline-block;
+  font-weight: 900;
+  color: #f0cd5c;
+  font-variant-numeric: tabular-nums;
+}
+
+.skill-bar-track {
+  width: 100%;
+  height: 7px;
+  border-radius: 4px;
+  background: #2f352c;
+  overflow: hidden;
+}
+
+/* The transition time matches FILL_MS in skillBar.ts. */
+.skill-bar-fill {
+  width: 0%;
+  height: 100%;
+  border-radius: 4px;
+  background: #6fae4f;
+  transition: width 0.25s ease-out;
+}
+
+.skill-bar-fill.skill-bar-snap {
+  transition: none;
+}
+
+/* The XP drop: rises from under the bar into it and fades. */
+.skill-bar-drop {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  text-align: center;
+  font-weight: 900;
+  font-size: 14px;
+  color: #8fd16f;
+  text-shadow: 0 2px 4px rgb(0 0 0 / 0.8);
+  opacity: 0;
+}
+
+.skill-bar-drop-show {
+  animation: skill-bar-drop 1.2s ease-out forwards;
+}
+
+@keyframes skill-bar-drop {
+  0% {
+    opacity: 0;
+    transform: translateY(22px);
+  }
+  20% {
+    opacity: 1;
+    transform: translateY(8px);
+  }
+  75% {
+    opacity: 1;
+    transform: translateY(2px);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+}
+
+/* Filled up: the bar flashes gold and the level number bumps. */
+.skill-bar-up {
+  animation: skill-bar-up 0.8s ease-out;
+}
+
+.skill-bar-up .skill-bar-level {
+  animation: skill-bar-bump 0.8s ease-out;
+}
+
+@keyframes skill-bar-up {
+  0% {
+    background: rgb(240 205 92 / 0.85);
+    box-shadow: 0 0 18px rgb(240 205 92 / 0.8);
+  }
+  100% {
+    background: rgb(0 0 0 / 0.4);
+    box-shadow: 0 0 0 rgb(240 205 92 / 0);
+  }
+}
+
+@keyframes skill-bar-bump {
+  0% {
+    transform: scale(1.6);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+/* Too narrow for it to fit between the top-left button and the chest: drop to the next row, beside
+   Debug. */
+@media (max-width: 400px) {
+  .skill-bar {
+    top: calc(var(--safe-top) + 70px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skill-bar-fill {
+    transition: none;
+  }
+}

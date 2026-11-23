@@ -7,7 +7,8 @@ export const recipes = [
     station: 'tree_line',
     inputs: [],
     outputs: [{ item: 'log', count: 1 }],
-    xp: 25,
+    // A round banks about 45 logs: level 10 in about 5 rounds, 20 in about 20, 40 in about 165.
+    xp: 5,
   },
   {
     id: 'rive_stave',

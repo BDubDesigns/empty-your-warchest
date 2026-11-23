@@ -56,3 +56,19 @@ test('the fast-fall switch stays hidden below its level', async ({ page }) => {
   await openTreeLineAt(page, fastFallLevel - 1);
   await expect(page.locator('.w3d-fast')).toBeHidden();
 });
+
+test('the level bar shows the woodcutting level and flashes when it goes up', async ({ page }) => {
+  test.setTimeout(60_000);
+  await openTreeLineAt(page, 12);
+  const bar = page.locator('.skill-bar');
+  await expect(bar).toBeVisible();
+  await expect(bar).toHaveText(/Woodcutting 12/);
+  await expect(bar).toHaveAttribute('data-level', '12');
+  // A level-up while in the station fills the bar, bumps the level and flashes.
+  await page.getByRole('button', { name: 'Open debug menu' }).tap();
+  const row = page.locator('.debug-row[data-skill="woodcutting"]');
+  await row.getByRole('spinbutton').fill('13');
+  await row.getByRole('button', { name: 'Set' }).tap();
+  await expect(bar).toHaveText(/Woodcutting 13/);
+  await expect(bar).toHaveClass(/skill-bar-up/);
+});

@@ -55,6 +55,9 @@ interface Flight {
   mesh: THREE.Object3D;
   from: THREE.Vector2;
   share: number;
+  /** Told each piece's share of its deposit as it lands. */
+  onArrive: ((share: number) => void) | undefined;
+  amount: number;
   launchAt: number;
   spin: THREE.Vector3;
 }
@@ -194,9 +197,10 @@ export class WarchestHud {
 
   /**
    * Call when `amount` items have just gone into the warchest: the count holds them back until
-   * `pour` sends them in, so the player watches them arrive.
+   * `pour` sends them in, so the player watches them arrive. `onArrive` hears each piece land,
+   * with its share of the deposit (e.g. to tick in the XP the items earned).
    */
-  hold(amount: number): Deposit {
+  hold(amount: number, onArrive?: (share: number) => void): Deposit {
     this.#held += amount;
     this.#showCount();
     let poured = false;
@@ -204,7 +208,7 @@ export class WarchestHud {
       pour: (from) => {
         if (poured) return;
         poured = true;
-        this.#startPour(amount, from);
+        this.#startPour(amount, from, onArrive);
       },
     };
   }
@@ -238,7 +242,11 @@ export class WarchestHud {
     this.#renderer.dispose();
   }
 
-  #startPour(amount: number, from: ScreenPoint[]): void {
+  #startPour(
+    amount: number,
+    from: ScreenPoint[],
+    onArrive: ((share: number) => void) | undefined,
+  ): void {
     const sources = from.length > 0 ? from : [this.#chestPoint()];
     const pieces = splitDeposit(amount, sources.length, this.#pour.maxPieces, this.#pour.stagger);
     const now = performance.now() / 1000;
@@ -251,6 +259,8 @@ export class WarchestHud {
         mesh,
         from: new THREE.Vector2(source.x, source.y),
         share: piece.share,
+        onArrive,
+        amount,
         launchAt: now + piece.delay,
         spin: new THREE.Vector3(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5)
           .normalize()
@@ -414,6 +424,7 @@ export class WarchestHud {
     this.#flights = this.#flights.filter((other) => other !== flight);
     this.#held = Math.max(this.#held - flight.share, 0);
     this.#arrived += 1;
+    flight.onArrive?.(flight.share / flight.amount);
     this.#bump = 1;
     this.#kick(2.5);
     this.#showCount();
