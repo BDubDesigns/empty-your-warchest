@@ -128,6 +128,12 @@ function checkReferences(data: GameData, ctx: z.RefinementCtx): void {
       'The perfect window must fit inside the timing window',
     );
   }
+  if (feel.perfectWindowLight > feel.timingWindow) {
+    issue(
+      ['woodcutting', 'feel', 'perfectWindowLight'],
+      'The yellow zone must fit inside the green one',
+    );
+  }
   if (feel.timingWindow >= 1) {
     issue(['woodcutting', 'feel', 'timingWindow'], 'The green zone must be narrower than the bar');
   }

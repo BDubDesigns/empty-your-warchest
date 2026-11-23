@@ -9,9 +9,10 @@ export function markerPosition(phase: number): number {
   return wrapped <= 1 ? wrapped : 2 - wrapped;
 }
 
-/** Passes per second the marker sweeps; a fuller pull sweeps faster. */
-export function markerSpeed(pull: number, feel: WoodcuttingFeel): number {
-  return feel.meterSpeed * (1 + pull * feel.pullSpeedUp);
+/** Width of the yellow zone for a pull: wide for a light pull, narrow for a hard one. */
+export function yellowWidth(pull: number, feel: WoodcuttingFeel): number {
+  const clamped = Math.min(Math.max(pull, 0), 1);
+  return feel.perfectWindowLight + (feel.perfectWindow - feel.perfectWindowLight) * clamped;
 }
 
 /** A new spot for the yellow zone, kept far enough from the ends that the green fits around it. */
@@ -20,10 +21,15 @@ export function nextTarget(feel: WoodcuttingFeel, rng: Rng): number {
   return rng.range(margin, 1 - margin);
 }
 
-/** How clean a chop was: where the marker stopped relative to the yellow zone. */
-export function judgeSwing(position: number, target: number, feel: WoodcuttingFeel): SwingResult {
+/** How clean a chop was: where the marker stopped relative to the yellow zone for this pull. */
+export function judgeSwing(
+  position: number,
+  target: number,
+  pull: number,
+  feel: WoodcuttingFeel,
+): SwingResult {
   const offset = Math.abs(position - target);
-  if (offset <= feel.perfectWindow / 2) return 'perfect';
+  if (offset <= yellowWidth(pull, feel) / 2) return 'perfect';
   if (offset <= feel.timingWindow / 2) return 'good';
   return 'glancing';
 }

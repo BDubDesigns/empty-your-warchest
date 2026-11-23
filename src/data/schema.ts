@@ -140,8 +140,12 @@ export const woodcuttingFeelSchema = z.object({
   meterSpeed: positive,
   /** Width of the green (good) zone around the yellow, as a share of the bar. */
   timingWindow: fraction,
-  /** Width of the yellow (perfect) zone. It moves to a new spot after every chop. */
+  /**
+   * Width of the yellow (perfect) zone at a full pull. A lighter pull makes it wider, up to
+   * perfectWindowLight at the lightest pull. It moves to a new spot after every chop.
+   */
   perfectWindow: fraction,
+  perfectWindowLight: fraction,
   /** Seconds for the axe to swing from wound-up into the tree. */
   swingSeconds: positive,
   /** Most a good chop can knock the fall direction off, in degrees (perfect: never). */
@@ -154,10 +158,8 @@ export const woodcuttingFeelSchema = z.object({
   fullPullPoints: positiveInt,
   /** Extra points for a chop released on yellow. A glancing chop deals half. */
   perfectBonus: nonNegative,
-  /** How much faster the bar marker sweeps at full pull (0 = same speed, 1 = twice as fast). */
-  pullSpeedUp: nonNegative,
-  /** Fine-tune aiming: degrees the aim turns per screen pixel of drag. */
-  fineAimRate: positive,
+  /** Degrees each tap of a fine-tune button turns the aim. */
+  fineAimStep: positive,
   /** Seconds for a tree to fall from upright to the ground. */
   fallSeconds: positive,
   /** How sharply a fall speeds up: 1 = steady, higher = slower start and faster finish. */

@@ -3,7 +3,7 @@ import { onTap, text } from '../../app/phaserUi';
 import { theme } from '../../app/theme';
 import { Rng, type EventLogger, type Game, type LiveTuning } from '../../core';
 import type { Clearing, ClearingTree, WoodcuttingFeel } from '../../data';
-import { angleBeforeLift, fineTune, type AimSample } from './logic/aim';
+import { angleBeforeLift, nudgeAim, type AimSample } from './logic/aim';
 import {
   fallTip,
   previewFall,
@@ -18,9 +18,9 @@ import {
   chopDamage,
   judgeSwing,
   markerPosition,
-  markerSpeed,
   nextTarget,
   swingScatter,
+  yellowWidth,
   type SwingResult,
 } from './logic/swing';
 
@@ -48,11 +48,8 @@ interface Swing {
   holdSeconds: number;
 }
 
-/** A finger dragging to aim: from the tree (pull back), or anywhere else (fine-tune dial). */
+/** A finger pulling back from the tree to aim. */
 interface AimDrag {
-  mode: 'coarse' | 'fine';
-  startX: number;
-  startAngle: number | undefined;
   samples: AimSample[];
 }
 
@@ -161,6 +158,8 @@ export class WoodcuttingScene extends Phaser.Scene {
   #counter!: Phaser.GameObjects.Text;
   #summary!: Phaser.GameObjects.Container;
   #chopButton!: Phaser.GameObjects.Container;
+  #turnLeft!: Phaser.GameObjects.Container;
+  #turnRight!: Phaser.GameObjects.Container;
   #chips!: Phaser.GameObjects.Particles.ParticleEmitter;
   /** Bigger wood chunks knocked out of the log by good and perfect chops. */
   #chunks!: Phaser.GameObjects.Particles.ParticleEmitter;
@@ -228,7 +227,15 @@ export class WoodcuttingScene extends Phaser.Scene {
       .setStroke(theme.bg, 6)
       .setAlpha(0);
     this.#summary = this.#makeSummary();
-    this.#chopButton = this.#makeChopButton();
+    this.#chopButton = this.#makeButton('Chop', 160, () => {
+      this.#startChopping();
+    });
+    this.#turnLeft = this.#makeButton('↺', 64, () => {
+      this.#nudge(-1);
+    });
+    this.#turnRight = this.#makeButton('↻', 64, () => {
+      this.#nudge(1);
+    });
 
     this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
       this.#onPress(pointer.x, pointer.y);
@@ -296,8 +303,8 @@ export class WoodcuttingScene extends Phaser.Scene {
     document.body.dataset.woodcutting = phase.kind;
     const hints: Record<Phase['kind'], string> = {
       pick: 'Touch a tree and pull back to aim',
-      aim: 'Pull back from the tree to aim · drag elsewhere to fine-tune',
-      chop: 'Pull the axe back (further = harder) · let go on yellow',
+      aim: 'Pull back from the tree to aim · ↺ ↻ to fine-tune · then Chop',
+      chop: 'Pull back further to hit harder (smaller yellow) · let go on yellow',
       falling: '',
       cleared: '',
     };
@@ -314,32 +321,28 @@ export class WoodcuttingScene extends Phaser.Scene {
       this.#setPhase({
         kind: 'aim',
         tree: tree.id,
-        drag: { mode: 'coarse', startX: x, startAngle: undefined, samples: [] },
+        drag: { samples: [] },
         adjustments: 0,
         startedAt: this.#now,
       });
       this.#deps.logger.log('woodcutting.select', { tree: tree.id });
     } else if (phase.kind === 'aim') {
-      if (this.#overChopButton(x, y)) return;
+      if (this.#overAimButtons(x, y)) return;
       const tree = this.#treeAt(x, y);
-      if (tree && tree.id !== phase.tree) {
+      if (!tree) return;
+      if (tree.id !== phase.tree) {
         // Switch to another tree.
         this.#setPhase({
           kind: 'aim',
           tree: tree.id,
-          drag: { mode: 'coarse', startX: x, startAngle: undefined, samples: [] },
+          drag: { samples: [] },
           adjustments: 0,
           startedAt: this.#now,
         });
         this.#deps.logger.log('woodcutting.select', { tree: tree.id });
         return;
       }
-      const mode = tree ? 'coarse' : 'fine';
-      if (mode === 'fine' && phase.angle === undefined) return;
-      this.#phase = {
-        ...phase,
-        drag: { mode, startX: x, startAngle: phase.angle, samples: [] },
-      };
+      this.#phase = { ...phase, drag: { samples: [] } };
     } else if (phase.kind === 'chop' && !phase.swing) {
       // Anywhere on screen: grab the axe and start pulling it back.
       this.#phase = {
@@ -352,14 +355,10 @@ export class WoodcuttingScene extends Phaser.Scene {
   #onDrag(x: number, y: number): void {
     const phase = this.#phase;
     if (phase.kind === 'aim' && phase.drag) {
-      const drag = phase.drag;
-      const angle =
-        drag.mode === 'coarse'
-          ? this.#angleFrom(phase.tree, x, y)
-          : fineTune(drag.startAngle ?? 0, x - drag.startX, this.#feel.fineAimRate);
+      const angle = this.#angleFrom(phase.tree, x, y);
       if (angle === undefined) return;
-      drag.samples.push({ t: this.#now, angle });
-      this.#phase = { ...phase, angle, pull: drag.mode === 'coarse' ? { x, y } : undefined };
+      phase.drag.samples.push({ t: this.#now, angle });
+      this.#phase = { ...phase, angle, pull: { x, y } };
     } else if (phase.kind === 'chop' && phase.hold) {
       phase.hold.finger = { x, y };
     }
@@ -389,7 +388,7 @@ export class WoodcuttingScene extends Phaser.Scene {
       }
       const feel = this.#feel;
       const marker = markerPosition(hold.sweep);
-      const result = judgeSwing(marker, phase.target, feel);
+      const result = judgeSwing(marker, phase.target, pulled, feel);
       const points = chopDamage(pulled, result, feel);
       const drift = swingScatter(result, feel, this.#rng);
       this.#phase = {
@@ -455,11 +454,11 @@ export class WoodcuttingScene extends Phaser.Scene {
     });
   }
 
-  /** The bar marker sweeps while the axe is held back, faster the further it's pulled. */
+  /** The bar marker sweeps at a steady speed while the axe is held back. */
   #advanceMarker(dt: number): void {
     const phase = this.#phase;
     if (phase.kind !== 'chop' || !phase.hold) return;
-    phase.hold.sweep += dt * markerSpeed(this.#pullAmount(phase.hold), this.#feel);
+    phase.hold.sweep += dt * this.#feel.meterSpeed;
   }
 
   /** Lands a chop once the axe reaches the trunk. */
@@ -705,7 +704,10 @@ export class WoodcuttingScene extends Phaser.Scene {
     g.fillStyle(COLORS.box, 0.85).fillRoundedRect(box.left, box.top, box.width, box.height, 12);
     if (phase.kind === 'chop') this.#drawChopBox(phase);
     const showChop = phase.kind === 'aim' && phase.angle !== undefined && !phase.drag;
-    this.#chopButton.setVisible(showChop).setPosition(box.centerX, box.top + box.height / 2);
+    const buttonsY = box.top + box.height / 2;
+    this.#chopButton.setVisible(showChop).setPosition(box.centerX, buttonsY);
+    this.#turnLeft.setVisible(showChop).setPosition(box.centerX - 128, buttonsY);
+    this.#turnRight.setVisible(showChop).setPosition(box.centerX + 128, buttonsY);
 
     this.#total.setPosition(width - 16, 70).setText(`Logs this round: ${this.#round.logs}`);
     this.#hint.setPosition(width / 2, box.top - 14);
@@ -878,8 +880,14 @@ export class WoodcuttingScene extends Phaser.Scene {
       const center = bar.left + bar.width * phase.target;
       g.fillStyle(color, 1).fillRect(center - zoneWidth / 2, bar.top, zoneWidth, bar.height);
     };
+    // The yellow narrows as the axe is pulled back harder.
+    const currentPull = phase.swing
+      ? phase.swing.from
+      : phase.hold
+        ? this.#pullAmount(phase.hold)
+        : 0;
     zone(feel.timingWindow, COLORS.good);
-    zone(feel.perfectWindow, COLORS.perfect);
+    zone(yellowWidth(currentPull, feel), COLORS.perfect);
     const marker = phase.swing
       ? phase.swing.marker
       : phase.hold
@@ -1036,18 +1044,32 @@ export class WoodcuttingScene extends Phaser.Scene {
     this.sound.play(key, { volume, detune: this.#fx.int(-120, 120) });
   }
 
-  #makeChopButton(): Phaser.GameObjects.Container {
-    const plate = this.add.rectangle(0, 0, 180, 60, theme.accentHex);
-    const label = text(this, 'Chop', { fontSize: '22px', fontStyle: 'bold', color: theme.bg });
-    onTap(plate, theme.accentHex, theme.accentPressedHex, () => {
-      this.#startChopping();
-    });
-    return this.add.container(0, 0, [plate, label]).setVisible(false);
+  #makeButton(label: string, width: number, action: () => void): Phaser.GameObjects.Container {
+    const plate = this.add.rectangle(0, 0, width, 60, theme.accentHex);
+    const caption = text(this, label, { fontSize: '24px', fontStyle: 'bold', color: theme.bg });
+    onTap(plate, theme.accentHex, theme.accentPressedHex, action);
+    return this.add.container(0, 0, [plate, caption]).setVisible(false).setData('width', width);
   }
 
-  #overChopButton(x: number, y: number): boolean {
-    if (!this.#chopButton.visible) return false;
-    return Math.abs(x - this.#chopButton.x) <= 90 && Math.abs(y - this.#chopButton.y) <= 30;
+  /** True if (x, y) is on the Chop or fine-tune buttons, which handle their own taps. */
+  #overAimButtons(x: number, y: number): boolean {
+    return [this.#chopButton, this.#turnLeft, this.#turnRight].some(
+      (button) =>
+        button.visible &&
+        Math.abs(x - button.x) <= (button.getData('width') as number) / 2 &&
+        Math.abs(y - button.y) <= 30,
+    );
+  }
+
+  /** Fine-tunes the aim by one step: −1 turns it counter-clockwise, +1 clockwise. */
+  #nudge(direction: 1 | -1): void {
+    const phase = this.#phase;
+    if (phase.kind !== 'aim' || phase.angle === undefined) return;
+    this.#phase = {
+      ...phase,
+      angle: nudgeAim(phase.angle, direction, this.#feel.fineAimStep),
+      adjustments: phase.adjustments + 1,
+    };
   }
 
   #makeSummary(): Phaser.GameObjects.Container {

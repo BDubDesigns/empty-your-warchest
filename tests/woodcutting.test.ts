@@ -8,12 +8,12 @@ import {
   fitClearing,
   angleBeforeLift,
   chopDamage,
-  fineTune,
+  nudgeAim,
   judgeSwing,
   markerPosition,
-  markerSpeed,
   nextTarget,
   trunkAngles,
+  yellowWidth,
   previewFall,
   resolveChain,
   swingScatter,
@@ -167,15 +167,22 @@ describe('chop bar', () => {
     expect(markerPosition(1.25)).toBe(0.75);
   });
 
-  it('sweeps faster the further the axe is pulled back', () => {
-    expect(markerSpeed(0, feel)).toBe(feel.meterSpeed);
-    expect(markerSpeed(1, feel)).toBeCloseTo(feel.meterSpeed * (1 + feel.pullSpeedUp));
+  it('narrows the yellow zone the harder the axe is pulled back', () => {
+    expect(yellowWidth(0, feel)).toBeCloseTo(feel.perfectWindowLight);
+    expect(yellowWidth(1, feel)).toBeCloseTo(feel.perfectWindow);
+    expect(yellowWidth(0.5, feel)).toBeLessThan(yellowWidth(0.2, feel));
   });
 
   it('judges yellow, green and glancing around wherever the yellow zone is', () => {
-    expect(judgeSwing(0.3, 0.3, feel)).toBe('perfect');
-    expect(judgeSwing(0.3 + feel.perfectWindow / 2 + 0.01, 0.3, feel)).toBe('good');
-    expect(judgeSwing(0.3 + feel.timingWindow / 2 + 0.01, 0.3, feel)).toBe('glancing');
+    expect(judgeSwing(0.3, 0.3, 1, feel)).toBe('perfect');
+    expect(judgeSwing(0.3 + feel.perfectWindow / 2 + 0.01, 0.3, 1, feel)).toBe('good');
+    expect(judgeSwing(0.3 + feel.timingWindow / 2 + 0.01, 0.3, 1, feel)).toBe('glancing');
+  });
+
+  it('is more forgiving on a light pull than a hard one', () => {
+    const justOff = 0.3 + feel.perfectWindow / 2 + 0.01;
+    expect(judgeSwing(justOff, 0.3, 1, feel)).toBe('good');
+    expect(judgeSwing(justOff, 0.3, 0, feel)).toBe('perfect');
   });
 
   it('deals more damage for a fuller pull, a bonus on yellow, half when glancing', () => {
@@ -233,9 +240,9 @@ describe('aiming', () => {
     expect(angleBeforeLift([], 1.4, 0.1)).toBeUndefined();
   });
 
-  it('fine-tunes slowly with a sideways drag', () => {
-    expect(degrees(fineTune(0, 100, 0.15))).toBe(15);
-    expect(degrees(fineTune(Math.PI / 2, -60, 0.1))).toBe(84);
+  it('fine-tunes by a small step per tap, either way', () => {
+    expect(degrees(nudgeAim(0, 1, 1))).toBe(1);
+    expect(degrees(nudgeAim(Math.PI / 2, -1, 2))).toBe(88);
   });
 });
 

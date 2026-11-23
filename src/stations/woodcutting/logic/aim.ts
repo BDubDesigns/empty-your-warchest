@@ -20,7 +20,7 @@ export function angleBeforeLift(
   return (chosen ?? samples[0])?.angle;
 }
 
-/** Fine-tuning: dragging sideways turns the aim slowly, like a dial. */
-export function fineTune(startAngle: number, dragX: number, degreesPerPixel: number): number {
-  return startAngle + (dragX * degreesPerPixel * Math.PI) / 180;
+/** Fine-tuning: each tap of a turn button nudges the aim by `stepDegrees` (+1 clockwise, −1 counter). */
+export function nudgeAim(angle: number, direction: 1 | -1, stepDegrees: number): number {
+  return angle + (direction * stepDegrees * Math.PI) / 180;
 }
