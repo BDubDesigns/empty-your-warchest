@@ -121,10 +121,11 @@ body:not([data-view='camp']) #build-label {
 
 /* Debug menu */
 
+/* Under Back to camp, so the top-right stays free for the HUD chest. */
 .debug-toggle {
   position: absolute;
-  top: calc(var(--safe-top) + 12px);
-  right: calc(var(--safe-right) + 12px);
+  top: calc(var(--safe-top) + 68px);
+  left: calc(var(--safe-left) + 12px);
   min-height: 36px;
   padding: 0 12px;
   border: 1px solid var(--muted);
@@ -215,6 +216,12 @@ body:not([data-view='camp']) #build-label {
   width: 72px;
 }
 
+.debug-panel button[aria-pressed='true'] {
+  border-color: var(--accent);
+  background: #3a2d1e;
+  color: #f0cd5c;
+}
+
 .debug-panel button:disabled {
   opacity: 0.5;
 }
@@ -300,21 +307,6 @@ body:not([data-view='camp']) #build-label {
 
 .w3d-ui button {
   pointer-events: auto;
-}
-
-.w3d-style {
-  position: absolute;
-  top: calc(var(--safe-top) + 58px);
-  left: calc(var(--safe-left) + 12px);
-  min-height: 32px;
-  padding: 0 10px;
-  border: 1px solid rgb(255 255 255 / 0.5);
-  border-radius: 8px;
-  background: rgb(0 0 0 / 0.35);
-  color: var(--fg);
-  font:
-    600 12px system-ui,
-    sans-serif;
 }
 
 .w3d-perf {
@@ -579,14 +571,13 @@ body:not([data-view='camp']) #build-label {
   pointer-events: none;
 }
 
-/* In the top bar, centred on the Debug button's row and left of it: set in from the phone's edge,
-   which is hard to reach and where Android's back swipe starts, with a gap so a slightly-off tap
-   can't open Debug. Opening it is a rare check, so the top is fine. When Debug goes, keep the
-   inset. */
+/* In the top bar, set in from the phone's edge (hard to reach, and where Android's back swipe
+   starts), and low enough that the open lid stays on screen. Opening it is a rare check, so the
+   top is fine. */
 .warchest-hud {
   position: absolute;
-  top: calc(var(--safe-top) + 7px);
-  right: calc(var(--safe-right) + 96px);
+  top: calc(var(--safe-top) + 22px);
+  right: calc(var(--safe-right) + 40px);
   height: 46px;
   min-width: 46px;
   padding-right: 52px;
@@ -713,7 +704,7 @@ body:not([data-view='camp']) #build-label {
 
 .warchest-panel {
   position: absolute;
-  top: calc(var(--safe-top) + 64px);
+  top: calc(var(--safe-top) + 78px);
   right: calc(var(--safe-right) + 12px);
   width: min(340px, calc(100% - 24px - var(--safe-left) - var(--safe-right)));
   box-sizing: border-box;

@@ -34,6 +34,7 @@ export async function startApp(): Promise<void> {
     mountDebugMenu(byId('app'), {
       ...booted,
       tuning: [booted.feel.woodcutting],
+      choices: [booted.choices.treeStyle],
       buildLabel: __BUILD_LABEL__,
     });
   } catch (error) {
@@ -41,7 +42,7 @@ export async function startApp(): Promise<void> {
     showFatal(error);
     return;
   }
-  const { game, logger, clock, feel } = booted;
+  const { game, logger, clock, feel, choices } = booted;
 
   const phaserElement = byId('screen-phaser');
   const threeElement = byId('screen-three');
@@ -69,7 +70,12 @@ export async function startApp(): Promise<void> {
       wood3d: lazyScreen(wood3dElement, async () => {
         const { Woodcutting3DView } =
           await import('../stations/woodcutting/three/woodcutting3dView');
-        return Woodcutting3DView.create(wood3dElement, { game, logger, feel: feel.woodcutting });
+        return Woodcutting3DView.create(wood3dElement, {
+          game,
+          logger,
+          feel: feel.woodcutting,
+          treeStyle: choices.treeStyle,
+        });
       }),
       three: lazyScreen(threeElement, async () => {
         const { ThreeView } = await import('./threeView');

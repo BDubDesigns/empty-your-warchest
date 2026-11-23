@@ -4,19 +4,20 @@ import type { ScreenView } from '../../../app/screen';
 import { loadModel } from '../../../app/models';
 import { Sfx } from '../../../app/sfx';
 import { WarchestHud, type Deposit, type ScreenPoint } from '../../../app/warchestHud';
-import type { EventLogger, Game, LiveTuning } from '../../../core';
+import type { EventLogger, Game, LiveChoice, LiveTuning } from '../../../core';
 import type { Clearing, ClearingTree, WoodcuttingFeel } from '../../../data';
 import { fallTip, previewFall, trunkAngles, type FallStep, type Point } from '../logic/chain';
 import { fallTilt } from '../logic/fall';
 import { WoodcuttingRound, chainLogs, type RoundEvent } from '../logic/round';
+import type { TreeStyle } from '../treeStyle';
 
 export interface Woodcutting3DDeps {
   game: Game;
   logger: EventLogger;
   feel: LiveTuning<WoodcuttingFeel>;
+  /** Which trees to draw; picked in the debug menu. */
+  treeStyle: LiveChoice<TreeStyle>;
 }
-
-type TreeStyle = 'kenney' | 'quaternius';
 
 interface Models {
   kenney: THREE.Object3D[];
@@ -27,7 +28,6 @@ interface Models {
 
 /** World units per clearing unit: the 360×640 clearing becomes 12×21 units. */
 const SCALE = 1 / 30;
-const STYLE_KEY = 'warchest.woodcutting.treeStyle';
 /** Frames (while aiming) to judge the detailed trees by, and the median frame time that's too slow. */
 const FALLBACK_FRAMES = 90;
 const FALLBACK_MS = 25;
@@ -217,7 +217,8 @@ export class Woodcutting3DView implements ScreenView {
     const [clearing] = deps.game.data.woodcutting.clearings;
     if (!clearing) throw new Error('No woodcutting clearing in data');
     this.#clearing = clearing;
-    this.#style = this.#savedStyle();
+    this.#style = deps.treeStyle.value;
+    this.#styleChosen = deps.treeStyle.picked;
 
     this.#renderer = new THREE.WebGLRenderer({ antialias: true });
     this.#renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -233,6 +234,10 @@ export class Woodcutting3DView implements ScreenView {
     this.#buildTrees();
     this.#sfx.load(SOUNDS);
     this.#listen();
+    deps.treeStyle.onChange((style) => {
+      this.#styleChosen = true;
+      this.#applyStyle(style);
+    });
     new ResizeObserver(() => {
       this.#resize();
     }).observe(element);
@@ -1302,11 +1307,6 @@ export class Woodcutting3DView implements ScreenView {
     };
     const root = el('div', 'w3d-ui');
     const perf = el('div', 'w3d-perf');
-    const style = el('button', 'w3d-style');
-    style.type = 'button';
-    style.addEventListener('click', () => {
-      this.#setStyle(this.#style === 'kenney' ? 'quaternius' : 'kenney');
-    });
     const hint = el('div', 'w3d-hint');
     const panel = el('div', 'w3d-panel');
     const aim = el('div', 'w3d-aim');
@@ -1360,11 +1360,10 @@ export class Woodcutting3DView implements ScreenView {
     );
     summary.append(summaryTitle, summaryText, again);
     summary.hidden = true;
-    root.append(style, perf, hint, panel, flashes, counter, summary);
+    root.append(perf, hint, panel, flashes, counter, summary);
     this.#element.append(root);
     return {
       perf,
-      style,
       hint,
       aim,
       chop,
@@ -1397,7 +1396,6 @@ export class Woodcutting3DView implements ScreenView {
       };
       ui.hint.textContent = hints[phase.kind] ?? '';
     }
-    ui.style.textContent = `Trees: ${this.#style === 'kenney' ? 'Kenney' : 'Quaternius'}`;
     ui.aim.hidden = phase.kind !== 'aim';
     ui.chop.disabled = !round.canChop;
     ui.chopPanel.hidden = phase.kind !== 'chop';
@@ -1497,19 +1495,7 @@ export class Woodcutting3DView implements ScreenView {
     counter.classList.add('w3d-pop');
   }
 
-  // Style toggle and logs
-
-  /** The player's pick if they made one; otherwise the detailed trees, watched for slow frames. */
-  #savedStyle(): TreeStyle {
-    let saved: string | null = null;
-    try {
-      saved = localStorage.getItem(STYLE_KEY);
-    } catch {
-      // No storage: use the default.
-    }
-    this.#styleChosen = saved === 'kenney' || saved === 'quaternius';
-    return saved === 'kenney' ? 'kenney' : 'quaternius';
-  }
+  // Tree style and logs
 
   /**
    * Older phones: if the detailed trees run slowly while aiming (when nothing heavy is happening),
@@ -1524,17 +1510,16 @@ export class Woodcutting3DView implements ScreenView {
     const sorted = [...this.#aimFrames].sort((a, b) => a - b);
     const median = sorted[Math.floor(sorted.length / 2)] ?? 0;
     this.#styleChosen = true;
-    if (median > FALLBACK_MS) this.#setStyle('kenney', { auto: true, p50: median });
+    if (median > FALLBACK_MS) {
+      this.#deps.logger.log('woodcutting3d.style', { style: 'kenney', auto: true, p50: median });
+      this.#deps.treeStyle.set('kenney');
+    }
   }
 
-  #setStyle(style: TreeStyle, auto?: { auto: true; p50: number }): void {
+  /** Redraws the clearing with the other trees (picked in the debug menu, or by the fallback). */
+  #applyStyle(style: TreeStyle): void {
+    if (style === this.#style) return;
     this.#style = style;
-    this.#styleChosen = true;
-    try {
-      localStorage.setItem(STYLE_KEY, style);
-    } catch {
-      // Not saved; it still applies until the page reloads.
-    }
     this.#buildTrees();
     // Mid-chop the notch was rebuilt away with the old trees: cut it again.
     const phase = this.#round.phase;
@@ -1544,7 +1529,6 @@ export class Woodcutting3DView implements ScreenView {
         this.#carverFor(phase.tree, frame)?.carve(phase.points / this.#round.feel.chopPoints);
     }
     this.#updateTrees();
-    this.#deps.logger.log('woodcutting3d.style', { style, ...auto });
   }
 
   #logPerformance(): void {

@@ -7,3 +7,4 @@ export * from './logic/fall';
 export * from './logic/layout';
 export * from './logic/round';
 export * from './logic/swing';
+export * from './treeStyle';
