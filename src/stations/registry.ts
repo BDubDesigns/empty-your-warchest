@@ -2,11 +2,13 @@ import { GameDataError, type GameData } from '../data';
 
 /** Phaser scene key for stations whose mini game isn't built yet. */
 export const PLACEHOLDER_SCENE = 'station-placeholder';
-/** Kept in sync with WOODCUTTING_SCENE; the scene itself loads with Phaser. */
-const WOODCUTTING_SCENE = 'woodcutting';
 
-/** Where a station's mini game runs: a Phaser scene, or the three.js screen. */
-export type StationScreen = { kind: 'phaser'; scene: string } | { kind: 'three' };
+/** Full-screen views outside Phaser (three.js), by id. */
+export type ScreenId = 'runner' | 'woodcutting3d';
+
+/** Where a station's mini game runs: a Phaser scene, or its own (three.js) screen. */
+export type StationScreen =
+  { kind: 'phaser'; scene: string } | { kind: 'screen'; screen: ScreenId };
 
 export interface MechanicModule {
   screen: StationScreen;
@@ -19,7 +21,7 @@ export interface MechanicModule {
  * A new mini game is new data plus one entry here.
  */
 export const mechanics: Readonly<Record<string, MechanicModule>> = {
-  woodcutting: { screen: { kind: 'phaser', scene: WOODCUTTING_SCENE } },
+  woodcutting3d: { screen: { kind: 'screen', screen: 'woodcutting3d' } },
   rive: {
     screen: { kind: 'phaser', scene: PLACEHOLDER_SCENE },
     placeholderNote: 'Riving arrives in M4',
@@ -29,7 +31,7 @@ export const mechanics: Readonly<Record<string, MechanicModule>> = {
     placeholderNote: 'Fire-hardening arrives in M5',
   },
   runner: {
-    screen: { kind: 'three' },
+    screen: { kind: 'screen', screen: 'runner' },
     placeholderNote: 'The Attack Run arrives in M7–M8',
   },
 };

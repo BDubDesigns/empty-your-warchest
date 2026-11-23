@@ -1,9 +1,10 @@
 import type { GameDataInput } from './schema';
 
-// M3a feel prototype: one hand-made clearing. All numbers are first guesses,
+// Feel prototype: one hand-made clearing. All numbers are first guesses,
 // meant to be tuned live from the debug menu on a phone.
 export const woodcutting = {
   recipe: 'fell_tree',
+  chainExponent: 2,
   clearings: [
     {
       id: 'first_clearing',

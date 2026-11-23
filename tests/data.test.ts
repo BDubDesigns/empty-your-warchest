@@ -21,6 +21,12 @@ describe('game data', () => {
     expect(data.qualities.map((quality) => quality.name)).toEqual(['Poor', 'Good', 'Perfect']);
   });
 
+  it('fails loudly on a chain exponent that is not positive', () => {
+    expectInvalid((raw) => {
+      raw.woodcutting.chainExponent = 0;
+    }, 'chainExponent');
+  });
+
   it('fails loudly on a recipe that uses an unknown item', () => {
     expectInvalid((raw) => {
       raw.recipes[1]?.inputs.push({ item: 'oak_log', count: 1 });

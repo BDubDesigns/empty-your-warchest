@@ -16,7 +16,7 @@ describe('camp layout', () => {
     ]);
     expect(spots).toContainEqual({ kind: 'chest', ...data.camp.chest });
     expect(spots).toContainEqual(
-      expect.objectContaining({ id: 'tree_line', skillName: 'Woodcutting', x: 0.5, y: 0.2 }),
+      expect.objectContaining({ id: 'tree_line', skillName: 'Woodcutting', x: 0.27, y: 0.2 }),
     );
   });
 
@@ -26,7 +26,7 @@ describe('camp layout', () => {
         id: 'sawmill',
         name: 'Sawmill',
         skill: 'woodcutting',
-        mechanic: 'woodcutting',
+        mechanic: 'woodcutting3d',
         camp: { x: 0.2, y: 0.7 },
       });
     });

@@ -5,7 +5,7 @@ import type { PhaserView } from './phaserView';
 import { lazyScreen } from './screen';
 import { ScreenSwitcher } from './screenSwitcher';
 
-type ScreenId = 'phaser' | 'three';
+type ScreenId = 'phaser' | 'three' | 'wood3d';
 
 function byId(id: string): HTMLElement {
   const element = document.getElementById(id);
@@ -45,6 +45,7 @@ export async function startApp(): Promise<void> {
 
   const phaserElement = byId('screen-phaser');
   const threeElement = byId('screen-three');
+  const wood3dElement = byId('screen-wood3d');
   const backButton = byId('back-button');
   let phaser: PhaserView | undefined;
   const run = (action: () => Promise<void>) => () => {
@@ -57,8 +58,6 @@ export async function startApp(): Promise<void> {
         const { PhaserView } = await import('./phaserView');
         phaser = await PhaserView.create(phaserElement, {
           game,
-          logger,
-          feel: feel.woodcutting,
           onStationTap: (stationId) => {
             run(() => navigation.openStation(stationId))();
           },
@@ -66,6 +65,11 @@ export async function startApp(): Promise<void> {
           onWarchestClose: run(() => navigation.back()),
         });
         return phaser;
+      }),
+      wood3d: lazyScreen(wood3dElement, async () => {
+        const { Woodcutting3DView } =
+          await import('../stations/woodcutting/three/woodcutting3dView');
+        return Woodcutting3DView.create(wood3dElement, { game, logger, feel: feel.woodcutting });
       }),
       three: lazyScreen(threeElement, async () => {
         const { ThreeView } = await import('./threeView');
@@ -97,7 +101,7 @@ export async function startApp(): Promise<void> {
       showPhaserStation: async (sceneKey, stationId) => {
         (await phaserView()).showStation(sceneKey, stationId);
       },
-      showThreeStation: () => switcher.show('three'),
+      showScreenStation: (screen) => switcher.show(screen === 'runner' ? 'three' : 'wood3d'),
     },
     (view) => {
       document.body.dataset.view = viewName(view);

@@ -15,7 +15,8 @@ function setup() {
       showWarchest: () => Promise.resolve(void calls.push('warchest')),
       showPhaserStation: (scene, station) =>
         Promise.resolve(void calls.push(`phaser:${scene}:${station}`)),
-      showThreeStation: (station) => Promise.resolve(void calls.push(`three:${station}`)),
+      showScreenStation: (screen, station) =>
+        Promise.resolve(void calls.push(`screen:${screen}:${station}`)),
     },
     (view) => views.push(view),
   );
@@ -23,7 +24,7 @@ function setup() {
 }
 
 describe('Navigation', () => {
-  it('opens Phaser stations as scenes and the war tent on the three.js screen', async () => {
+  it('opens Phaser stations as scenes and the war tent on its own screen', async () => {
     const { navigation, calls } = setup();
     await navigation.start();
     await navigation.openStation('workbench');
@@ -34,7 +35,7 @@ describe('Navigation', () => {
       'camp',
       'phaser:station-placeholder:workbench',
       'camp',
-      'three:war_tent',
+      'screen:runner:war_tent',
       'camp',
     ]);
   });

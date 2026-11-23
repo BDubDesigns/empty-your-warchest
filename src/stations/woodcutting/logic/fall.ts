@@ -13,3 +13,9 @@ export function fallTimeToReach(along: number, height: number, ease: number): nu
   const reach = Math.min(Math.max(along / height, 0), 1);
   return ((2 * Math.asin(reach)) / Math.PI) ** (1 / ease);
 }
+
+/** How far a falling tree has tipped over, in radians from upright (0) to the ground (π/2). */
+export function fallTilt(t: number, ease: number): number {
+  const clamped = Math.min(Math.max(t, 0), 1);
+  return (clamped ** ease * Math.PI) / 2;
+}

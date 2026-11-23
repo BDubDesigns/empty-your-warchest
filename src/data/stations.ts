@@ -6,8 +6,8 @@ export const stations = [
     id: 'tree_line',
     name: 'Tree line',
     skill: 'woodcutting',
-    mechanic: 'woodcutting',
-    camp: { x: 0.5, y: 0.2 },
+    mechanic: 'woodcutting3d',
+    camp: { x: 0.27, y: 0.2 },
   },
   {
     id: 'workbench',
