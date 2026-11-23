@@ -191,6 +191,24 @@ export const woodcuttingSchema = z.object({
   feel: woodcuttingFeelSchema,
 });
 
+export const warchestSchema = z.object({
+  /** Items deposited at a station fly from where they came from into the HUD chest. */
+  pour: z.object({
+    /** At most this many pieces fly; each carries a share, so big deposits stay readable. */
+    maxPieces: z.number().int().min(1),
+    /** Seconds between pieces leaving. */
+    stagger: z.number().min(0),
+    /** Seconds each piece hops out of where it came from before flying. */
+    popSeconds: positive,
+    /** Seconds each piece takes to fly into the chest. */
+    flightSeconds: positive,
+    /** How high the flight curves, as a share of its length. */
+    arcHeight: z.number().min(0),
+    /** Seconds the lid stays open after the last piece lands. */
+    closeDelay: z.number().min(0),
+  }),
+});
+
 export const gameDataShape = z.object({
   /** Ordered worst to best. */
   qualities: z.array(qualitySchema).min(1),
@@ -203,6 +221,7 @@ export const gameDataShape = z.object({
   levels: z.array(levelSchema),
   camp: campSchema,
   woodcutting: woodcuttingSchema,
+  warchest: warchestSchema,
   tuning: tuningSchema,
 });
 

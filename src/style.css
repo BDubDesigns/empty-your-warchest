@@ -302,15 +302,6 @@ body:not([data-view='camp']) #build-label {
   pointer-events: auto;
 }
 
-.w3d-total {
-  position: absolute;
-  top: calc(var(--safe-top) + 62px);
-  right: calc(var(--safe-right) + 14px);
-  font-size: 14px;
-  color: var(--fg);
-  text-shadow: 0 1px 3px rgb(0 0 0 / 0.6);
-}
-
 .w3d-style {
   position: absolute;
   top: calc(var(--safe-top) + 58px);
@@ -577,4 +568,80 @@ body:not([data-view='camp']) #build-label {
 
 .w3d-summary-text {
   color: var(--muted);
+}
+
+/* The warchest in a station's HUD (src/app/warchestHud.ts): the 3D chest is drawn on its own
+   layer at the right end of this anchor; the count sits to its left. */
+.warchest-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.warchest-hud {
+  position: absolute;
+  top: calc(var(--safe-top) + 58px);
+  right: calc(var(--safe-right) + 12px);
+  height: 46px;
+  padding-right: 52px;
+  display: flex;
+  align-items: center;
+  pointer-events: none;
+  font-family: system-ui, sans-serif;
+}
+
+.warchest-count {
+  font-weight: 900;
+  font-size: 22px;
+  color: var(--fg);
+  text-shadow: 0 2px 4px rgb(0 0 0 / 0.7);
+  font-variant-numeric: tabular-nums;
+}
+
+.warchest-count-glow {
+  animation: warchest-glow 0.9s ease-out;
+}
+
+@keyframes warchest-glow {
+  0% {
+    color: #f0cd5c;
+    transform: scale(1.35);
+  }
+  100% {
+    color: var(--fg);
+    transform: scale(1);
+  }
+}
+
+.warchest-gain {
+  position: absolute;
+  right: 52px;
+  top: 40px;
+  font-weight: 900;
+  font-size: 18px;
+  color: #f0cd5c;
+  text-shadow: 0 2px 4px rgb(0 0 0 / 0.7);
+  opacity: 0;
+}
+
+.warchest-gain-show {
+  animation: warchest-gain 1.4s ease-out forwards;
+}
+
+@keyframes warchest-gain {
+  0% {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  15% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  70% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
 }
