@@ -72,10 +72,10 @@ const CAMERA_MOVE = 0.6;
 const HAUL_SECONDS = 0.6;
 /** Rough trunk radius of the tree models after scaling, for where the axe bites. */
 const TRUNK_RADIUS = 0.16;
-/** Where the handle points at full pull (from the hands): mostly up, back toward the camera, over the shoulder. */
-const WIND_UP = 0.9;
-const WIND_BACK = 0.4;
-const WIND_SIDE = 0.15;
+/** Height of the cut and of the flat swing, in tree-model units. */
+const CUT_HEIGHT = 0.7;
+/** How far the axe head swings back toward the camera, around the hands, at full pull. */
+const WIND_ARC = (100 * Math.PI) / 180;
 const DEG = Math.PI / 180;
 
 interface TreeVisual {
@@ -86,6 +86,13 @@ interface TreeVisual {
   stump: THREE.Object3D;
   /** Trunk directions once it has fallen, and when it started sinking away. */
   fallen?: { trunks: number[]; sinkAt?: number };
+}
+
+interface CloseUpFrame {
+  base: THREE.Vector3;
+  back: THREE.Vector3;
+  up: THREE.Vector3;
+  right: THREE.Vector3;
 }
 
 interface CameraPose {
@@ -502,7 +509,7 @@ export class Woodcutting3DView implements ScreenView {
   }
 
   /** Frame for the close-up around the chosen tree: toward the camera, to its right, up. */
-  #closeUpFrame(treeId: string, angle: number) {
+  #closeUpFrame(treeId: string, angle: number): CloseUpFrame | undefined {
     const tree = this.#trees.get(treeId)?.tree;
     if (!tree) return undefined;
     const base = this.#world(tree);
@@ -513,9 +520,33 @@ export class Woodcutting3DView implements ScreenView {
   }
 
   /**
-   * Poses the axe: the hands are back toward the camera and a little right; at impact the head
-   * sits against the trunk with the blade facing into it. Winding up turns it back around the
-   * hands, in the plane of the swing.
+   * The flat (horizontal) chop: the hands are left of the trunk and toward the camera, and the
+   * handle lies level, touching the trunk where the blade bites, so the blade faces straight into
+   * it. `cut` points out of the trunk at the bite.
+   */
+  #grip(frame: CloseUpFrame) {
+    const { base, back, up, right } = frame;
+    const hands = base
+      .clone()
+      .addScaledVector(back, 0.9)
+      .addScaledVector(right, 0.4)
+      .addScaledVector(up, CUT_HEIGHT);
+    const reach = TRUNK_RADIUS + 0.06;
+    const flat = hands.clone().sub(base).setY(0);
+    const distance = flat.length();
+    const length = Math.sqrt(distance * distance - reach * reach);
+    const along = flat
+      .negate()
+      .normalize()
+      .applyAxisAngle(up, -Math.asin(reach / distance));
+    const head = hands.clone().addScaledVector(along, length);
+    const cut = head.clone().sub(base).setY(0).normalize();
+    return { hands, head, along, cut, length };
+  }
+
+  /**
+   * Poses the axe lying level at the cut. Pulling back swings the head around the hands, back
+   * toward the camera; letting go swings it flat into the trunk.
    */
   #updateAxe(): void {
     const phase = this.#round.phase;
@@ -526,41 +557,15 @@ export class Woodcutting3DView implements ScreenView {
     }
     const frame = this.#closeUpFrame(phase.tree, phase.angle);
     if (!frame) return;
-    const { base, back, up, right } = frame;
-    // The hands are back toward the camera (the player's own grip), so the axe reaches from
-    // "you" into the trunk.
-    const hands = base
-      .clone()
-      .addScaledVector(back, 1.2)
-      .addScaledVector(right, 0.7)
-      .addScaledVector(up, 0.4);
-    const head = base
-      .clone()
-      .addScaledVector(back, TRUNK_RADIUS + 0.06)
-      .addScaledVector(right, 0.1)
-      .addScaledVector(up, 0.6);
-    const handle = head.clone().sub(hands);
-    const length = handle.length();
-    const along = handle.clone().normalize();
-    // Blade faces into the trunk: the horizontal direction from the head to the trunk, square to the handle.
-    const intoTrunk = base.clone().setY(head.y).sub(head).normalize();
-    const blade = intoTrunk.clone().addScaledVector(along, -intoTrunk.dot(along)).normalize();
-    const side = new THREE.Vector3().crossVectors(blade.clone().negate(), along).normalize();
-    // Model axes: +Y along the handle, −X toward the blade.
-    const basis = new THREE.Matrix4().makeBasis(blade.clone().negate(), along, side);
-    model.quaternion.setFromRotationMatrix(basis);
+    const { hands, along, cut, length } = this.#grip(frame);
+    // Model axes: +Y along the handle, −X toward the blade (into the trunk), Z square to both.
+    const side = new THREE.Vector3().crossVectors(cut, along).normalize();
+    model.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(cut, along, side));
     model.scale.setScalar(length);
     rig.position.copy(hands);
-    // Pulling back raises the axe up and back over the shoulder, toward the camera, like a real
-    // backswing; letting go brings it down into the trunk. The head stays in frame at full pull.
-    const raised = up
-      .clone()
-      .multiplyScalar(WIND_UP)
-      .addScaledVector(back, WIND_BACK)
-      .addScaledVector(right, WIND_SIDE)
-      .normalize();
-    const wound = new THREE.Quaternion().setFromUnitVectors(along, raised);
-    rig.quaternion.identity().slerp(wound, this.#round.axeBack);
+    // Turn about the vertical through the hands, the way that moves the head out of the cut.
+    const outward = new THREE.Vector3().crossVectors(frame.up, along).dot(cut) >= 0 ? 1 : -1;
+    rig.quaternion.setFromAxisAngle(frame.up, outward * WIND_ARC * this.#round.axeBack);
     rig.visible = true;
   }
 
@@ -573,15 +578,16 @@ export class Woodcutting3DView implements ScreenView {
     const frame = this.#closeUpFrame(phase.tree, phase.angle);
     if (!frame) return;
     const depth = Math.min(phase.points / this.#round.feel.chopPoints, 1);
+    const { cut } = this.#grip(frame);
     const at = frame.base
       .clone()
-      .addScaledVector(frame.back, TRUNK_RADIUS * 0.85)
-      .addScaledVector(frame.up, 0.6);
+      .addScaledVector(cut, TRUNK_RADIUS * 0.7)
+      .addScaledVector(frame.up, CUT_HEIGHT);
+    // A flat notch, wider than tall, the shape a level swing leaves.
     this.#bite.position.copy(at);
-    this.#bite.lookAt(at.clone().add(frame.back));
-    this.#bite.rotateZ(Math.PI / 4);
-    const size = 0.12 + depth * 0.22;
-    this.#bite.scale.set(size, size, 0.08 + depth * 0.14);
+    this.#bite.lookAt(at.clone().add(cut));
+    const size = 0.12 + depth * 0.2;
+    this.#bite.scale.set(size * 1.1, size * 0.4, 0.08 + depth * 0.12);
     this.#bite.visible = true;
   }
 
@@ -638,15 +644,11 @@ export class Woodcutting3DView implements ScreenView {
   #closeUpPose(treeId: string, angle: number): CameraPose | undefined {
     const frame = this.#closeUpFrame(treeId, angle);
     if (!frame) return undefined;
-    const { base, back, up, right } = frame;
-    // Over the feller's right shoulder, far enough back that the trunk, the axe and its swing
-    // all fit in a narrow portrait view, and high enough to stay out from under the canopy.
+    const { base, back, up } = frame;
+    // Behind the feller and high, looking down on the level swing so its whole arc (head swung
+    // back toward the camera) fits in a narrow portrait view, and out from under the canopy.
     return {
-      position: base
-        .clone()
-        .addScaledVector(back, 4.2)
-        .addScaledVector(right, 1.6)
-        .addScaledVector(up, 2.1),
+      position: base.clone().addScaledVector(back, 3.6).addScaledVector(up, 3.2),
       target: base.clone().addScaledVector(up, 0.55).addScaledVector(back, 0.3),
       offsetY: this.#element.clientHeight * 0.14,
     };
@@ -770,11 +772,12 @@ export class Woodcutting3DView implements ScreenView {
       const phase = this.#round.phase;
       const frame = phase.kind === 'chop' ? this.#closeUpFrame(phase.tree, phase.angle) : undefined;
       if (frame) {
+        const { cut } = this.#grip(frame);
         const at = frame.base
           .clone()
-          .addScaledVector(frame.back, TRUNK_RADIUS)
-          .addScaledVector(frame.up, 0.6);
-        this.#burst('chip', at, 6 + swing.points * 5, frame.back);
+          .addScaledVector(cut, TRUNK_RADIUS)
+          .addScaledVector(frame.up, CUT_HEIGHT);
+        this.#burst('chip', at, 6 + swing.points * 5, cut);
       }
       this.#shake =
         (swing.result === 'perfect' ? 0.12 : 0.06) * feel.shakeStrength * (0.6 + swing.pull * 0.6);
