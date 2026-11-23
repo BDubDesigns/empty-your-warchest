@@ -1,8 +1,8 @@
 import { Rng, type EventLogger } from '../../../core';
 import type { Clearing, WoodcuttingFeel } from '../../../data';
 import { angleBeforeLift, nudgeAim, type AimSample } from './aim';
-import { resolveChain, type FallStep } from './chain';
-import { fallTimeToReach } from './fall';
+import { hitsCabin, resolveChain, type FallStep } from './chain';
+import { fallTimeToReach, fallTimeToTilt } from './fall';
 import { chainLogs, starBonusLogs, starsFor, type StarBonus, type StarThresholds } from './score';
 import {
   chopDamage,
@@ -58,7 +58,9 @@ export type RoundPhase =
       swing: RoundSwing | undefined;
     }
   | { kind: 'falling' }
-  | { kind: 'cleared' };
+  | { kind: 'cleared' }
+  /** A chain crashed into the cabin: its logs are lost and the round is over. */
+  | { kind: 'crashed' };
 
 export interface RoundFaller {
   step: FallStep;
@@ -66,6 +68,8 @@ export interface RoundFaller {
   start: number;
   /** Round time (s) when the tree that knocks it over first touches it (hit trees only). */
   contact: number | undefined;
+  /** Round time (s) when it's down: on the ground, or resting on a rock or the cabin. */
+  end: number;
   touched: boolean;
   landed: boolean;
 }
@@ -77,7 +81,13 @@ export type RoundEvent =
   /** A falling tree's canopy reaches the next tree's trunk, knocking it over. */
   | { type: 'hit'; step: FallStep }
   | { type: 'landed'; step: FallStep; count: number }
+  /** A trunk slides off a rock (`stop` false) or comes to rest on it (`stop` true). */
+  | { type: 'rock'; step: FallStep; rock: string; stop: boolean }
+  /** A falling tree crashes into the cabin. */
+  | { type: 'crash'; step: FallStep }
   | { type: 'banked'; trees: number; logs: number }
+  /** A chain that crashed into the cabin: its logs never reach the warchest. */
+  | { type: 'lost'; trees: number; logs: number }
   | { type: 'cleared' };
 
 export interface RoundHooks {
@@ -117,6 +127,10 @@ export class WoodcuttingRound {
   #startedAt = 0;
   #bonusClaimed = false;
   #bonusLogs = 0;
+  /** Rock touches and the cabin crash still to come in the falling chain, by round time. */
+  #moments: { at: number; event: RoundEvent }[] = [];
+  /** Logs lost to the cabin this round. */
+  lostLogs = 0;
 
   constructor(clearing: Clearing, hooks: RoundHooks, seed: number) {
     this.clearing = clearing;
@@ -172,8 +186,10 @@ export class WoodcuttingRound {
     this.#rng = new Rng(seed);
     this.standing = new Set(this.clearing.trees.map((tree) => tree.id));
     this.fallers = [];
+    this.#moments = [];
     this.felled = 0;
     this.logs = 0;
+    this.lostLogs = 0;
     this.#ended = false;
     this.#bonusClaimed = false;
     this.#bonusLogs = 0;
@@ -343,9 +359,9 @@ export class WoodcuttingRound {
     }
   }
 
-  /** Leaving mid-round: bank anything already falling, and log the round's end. */
+  /** Leaving mid-round: bank anything already falling (unless it's crashing), and log the end. */
   exit(): void {
-    this.#bank();
+    this.#settle();
     this.#end('exit');
   }
 
@@ -399,16 +415,66 @@ export class WoodcuttingRound {
             feel.chainDelay;
       starts.set(step.tree, start);
       const contact = step.hitBy === undefined ? undefined : start - feel.chainDelay;
-      return { step, start, contact, touched: false, landed: false };
+      // Down when its last trunk is: a trunk stopped on something rests partway over.
+      const share = Math.max(
+        ...step.paths.map((path) =>
+          path.stop ? fallTimeToTilt(path.stop.tilt, feel.fallEase) : 1,
+        ),
+      );
+      return {
+        step,
+        start,
+        contact,
+        end: start + share * feel.fallSeconds,
+        touched: false,
+        landed: false,
+      };
     });
+    this.#moments = this.fallers
+      .flatMap((faller) =>
+        faller.step.paths.flatMap((path) => {
+          const at = (tilt: number) =>
+            faller.start + fallTimeToTilt(tilt, feel.fallEase) * feel.fallSeconds;
+          const moments: { at: number; event: RoundEvent }[] = [];
+          if (path.rock) {
+            moments.push({
+              at: at(path.rock.tilt),
+              event: { type: 'rock', step: faller.step, rock: path.rock.id, stop: false },
+            });
+          }
+          if (path.stop) {
+            moments.push({
+              at: at(path.stop.tilt),
+              event:
+                path.stop.on === 'cabin'
+                  ? { type: 'crash', step: faller.step }
+                  : { type: 'rock', step: faller.step, rock: path.stop.id ?? '', stop: true },
+            });
+          }
+          return moments;
+        }),
+      )
+      .sort((a, b) => a.at - b.at);
     for (const step of steps) this.standing.delete(step.tree);
     this.phase = { kind: 'falling' };
+    const paths = steps.flatMap((step) => step.paths.map((path) => ({ tree: step.tree, path })));
     this.#log('woodcutting.fell', {
       tree: treeId,
       angle: degrees(angle),
       chain: steps.map((step) => step.tree),
       forked: steps.filter((step) => step.trunks.length > 1).map((step) => step.tree),
       length: steps.length,
+      rockSlides: paths
+        .filter(({ path }) => path.rock)
+        .map(({ tree, path }) => ({
+          tree,
+          rock: path.rock?.id,
+          turn: Math.round((path.landAngle - path.angle) / DEG),
+        })),
+      rockStops: paths
+        .filter(({ path }) => path.stop?.on === 'rock')
+        .map(({ tree, path }) => ({ tree, rock: path.stop?.id })),
+      cabin: hitsCabin(steps),
     });
     this.#hooks.onEvent?.({ type: 'fell', steps });
   }
@@ -419,7 +485,7 @@ export class WoodcuttingRound {
         faller.touched = true;
         this.#hooks.onEvent?.({ type: 'hit', step: faller.step });
       }
-      if (!faller.landed && this.now >= faller.start + this.feel.fallSeconds) {
+      if (!faller.landed && this.now >= faller.end) {
         faller.landed = true;
         this.#hooks.onEvent?.({
           type: 'landed',
@@ -428,11 +494,34 @@ export class WoodcuttingRound {
         });
       }
     }
-    if (this.fallers.length > 0 && this.fallers.every((faller) => faller.landed)) this.#bank();
+    while (this.#moments[0] && this.now >= this.#moments[0].at) {
+      const moment = this.#moments.shift();
+      if (moment) this.#hooks.onEvent?.(moment.event);
+    }
+    if (this.fallers.length > 0 && this.fallers.every((faller) => faller.landed)) this.#settle();
+  }
+
+  /** The falling chain is down: bank it, or lose it if it crashed into the cabin. */
+  #settle(): void {
+    if (this.fallers.length === 0) return;
+    this.#moments = [];
+    if (hitsCabin(this.fallers.map((faller) => faller.step))) this.#lose();
+    else this.#bank();
+  }
+
+  #lose(): void {
+    const trees = this.fallers.length;
+    this.fallers = [];
+    const logs = chainLogs(trees, this.#hooks.chainExponent ?? 1);
+    this.felled += trees;
+    this.lostLogs += logs;
+    this.#log('woodcutting.cabinHit', { trees, lostLogs: logs, roundLogs: this.logs });
+    this.#hooks.onEvent?.({ type: 'lost', trees, logs });
+    this.phase = { kind: 'crashed' };
+    this.#end('cabin');
   }
 
   #bank(): void {
-    if (this.fallers.length === 0) return;
     const trees = this.fallers.length;
     this.fallers = [];
     const logs = this.#hooks.bank(chainLogs(trees, this.#hooks.chainExponent ?? 1), trees);
@@ -449,7 +538,7 @@ export class WoodcuttingRound {
     }
   }
 
-  #end(reason: 'cleared' | 'exit'): void {
+  #end(reason: 'cleared' | 'exit' | 'cabin'): void {
     if (this.#ended) return;
     this.#ended = true;
     this.#log('woodcutting.roundEnd', {
@@ -457,6 +546,7 @@ export class WoodcuttingRound {
       view: this.#hooks.view,
       felled: this.felled,
       logs: this.logs,
+      lostLogs: this.lostLogs,
       par: this.par,
       stars: this.stars,
       standing: this.standing.size,

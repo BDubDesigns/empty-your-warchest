@@ -39,6 +39,8 @@ export const woodcutting = {
         { id: 'd2', x: 170, y: 300, height: 90 },
         { id: 'd3', x: 300, y: 610, height: 90 },
       ],
+      // The tutorial has no hazards; random clearings bring the cabin and rocks.
+      maxRockTurn: 40,
     },
   ],
   tutorialClearing: 'first_clearing',
@@ -53,6 +55,10 @@ export const woodcutting = {
     minBestChain: 3,
     attempts: 40,
     aimSamples: 120,
+    // About two trees wide, at an edge.
+    cabin: { width: 96, depth: 64, height: 60, gap: 24, edgeInset: 8 },
+    // Two trunks wide, knee high.
+    rocks: { count: { min: 1, max: 3 }, radius: 14, height: 12, gap: 26 },
   },
   // Par comes from trying every fall direction, so it finds chains people often miss: stars are
   // given well short of it.

@@ -120,6 +120,24 @@ function checkReferences(data: GameData, ctx: z.RefinementCtx): void {
         issue([...path, 'trees', treeIndex], `Tree "${tree.id}" is outside the clearing`);
       }
     });
+    clearing.rocks.forEach((rock, rockIndex) => {
+      if (treeIds.has(rock.id))
+        issue([...path, 'rocks', rockIndex, 'id'], `Duplicate id "${rock.id}"`);
+      treeIds.add(rock.id);
+      if (rock.x > clearing.width || rock.y > clearing.height) {
+        issue([...path, 'rocks', rockIndex], `Rock "${rock.id}" is outside the clearing`);
+      }
+    });
+    const cabin = clearing.cabin;
+    if (
+      cabin &&
+      (cabin.x - cabin.width / 2 < 0 ||
+        cabin.y - cabin.depth / 2 < 0 ||
+        cabin.x + cabin.width / 2 > clearing.width ||
+        cabin.y + cabin.depth / 2 > clearing.height)
+    ) {
+      issue([...path, 'cabin'], 'The cabin is outside the clearing');
+    }
   });
   if (!woodcutting.clearings.some((clearing) => clearing.id === woodcutting.tutorialClearing)) {
     issue(
@@ -132,6 +150,9 @@ function checkReferences(data: GameData, ctx: z.RefinementCtx): void {
     if (generator[key].min > generator[key].max) {
       issue(['woodcutting', 'generator', key], 'min must not be more than max');
     }
+  }
+  if (generator.rocks.count.min > generator.rocks.count.max) {
+    issue(['woodcutting', 'generator', 'rocks', 'count'], 'min must not be more than max');
   }
   let lastUnlock = 0;
   woodcutting.unlocks.forEach((unlock, index) => {

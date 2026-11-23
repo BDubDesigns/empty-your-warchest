@@ -1,6 +1,6 @@
 import { Rng } from '../../../core';
 import type { Clearing, ClearingTree, GameData } from '../../../data';
-import { resolveChain } from './chain';
+import { hitsCabin, resolveChain } from './chain';
 import { chainLogs } from './score';
 import { forestAt } from './unlocks';
 
@@ -25,7 +25,7 @@ export interface BestChain {
 /**
  * The longest chain any standing tree can start, trying `samples` fall directions each. A chain
  * only counts at the length it keeps with the aim one step off either way, as a solid (not
- * pixel-perfect) player would find it.
+ * pixel-perfect) player would find it. A chain into the cabin counts for nothing.
  */
 export function bestChain(
   clearing: Clearing,
@@ -36,7 +36,10 @@ export function bestChain(
   for (const tree of clearing.trees) {
     if (!standing.has(tree.id)) continue;
     const angles = Array.from({ length: samples }, (_, index) => (index / samples) * Math.PI * 2);
-    const lengths = angles.map((angle) => resolveChain(clearing, standing, tree.id, angle).length);
+    const lengths = angles.map((angle) => {
+      const steps = resolveChain(clearing, standing, tree.id, angle);
+      return hitsCabin(steps) ? 0 : steps.length;
+    });
     lengths.forEach((length, index) => {
       const before = lengths[(index + samples - 1) % samples] ?? length;
       const after = lengths[(index + 1) % samples] ?? length;
@@ -58,7 +61,8 @@ export function clearingPar(clearing: Clearing, exponent: number, samples: numbe
   let logs = 0;
   while (standing.size > 0) {
     const best = bestChain(clearing, standing, samples);
-    if (!best) break;
+    // Whatever's left can only reach the cabin: a solid player leaves it standing.
+    if (!best || best.length === 0) break;
     const steps = resolveChain(clearing, standing, best.tree, best.angle);
     for (const step of steps) standing.delete(step.tree);
     logs += chainLogs(steps.length, exponent);
@@ -114,7 +118,10 @@ function tutorialClearing(woodcutting: WoodcuttingData): Clearing {
   return clearing;
 }
 
-/** Scatters trees over the tutorial clearing's ground, kept apart and away from the edges. */
+/**
+ * Lays out a clearing on the tutorial clearing's ground: the cabin at one edge, then rocks, then
+ * trees, all kept apart and away from the edges.
+ */
 function layout(
   woodcutting: WoodcuttingData,
   forest: ReturnType<typeof forestAt>,
@@ -123,13 +130,37 @@ function layout(
 ): Clearing {
   const shape = tutorialClearing(woodcutting);
   const { generator } = woodcutting;
+  const cabin = placeCabin(shape, generator.cabin, rng);
+  const toCabin = (x: number, y: number) =>
+    Math.hypot(
+      Math.max(Math.abs(x - cabin.x) - cabin.width / 2, 0),
+      Math.max(Math.abs(y - cabin.y) - cabin.depth / 2, 0),
+    );
+  const spot = () => ({
+    x: Math.round(rng.range(generator.margin, shape.width - generator.margin)),
+    y: Math.round(rng.range(generator.margin, shape.height - generator.margin)),
+  });
+  const rocks: Clearing['rocks'] = [];
+  const { radius, height: rockHeight, gap: rockGap } = generator.rocks;
+  const rockCount = rng.int(generator.rocks.count.min, generator.rocks.count.max);
+  for (let index = 0; index < rockCount; index++) {
+    for (let tries = 0; tries < 100; tries++) {
+      const { x, y } = spot();
+      if (toCabin(x, y) < radius + generator.cabin.gap) continue;
+      if (rocks.some((rock) => Math.hypot(rock.x - x, rock.y - y) < radius * 2 + rockGap)) continue;
+      rocks.push({ id: `r${String(index + 1)}`, x, y, radius, height: rockHeight });
+      break;
+    }
+  }
   const count = rng.int(forest.trees.min, forest.trees.max);
   const trees: ClearingTree[] = [];
   for (let index = 0; index < count; index++) {
     for (let tries = 0; tries < 100; tries++) {
-      const x = Math.round(rng.range(generator.margin, shape.width - generator.margin));
-      const y = Math.round(rng.range(generator.margin, shape.height - generator.margin));
+      const { x, y } = spot();
       if (trees.some((tree) => Math.hypot(tree.x - x, tree.y - y) < generator.spacing)) continue;
+      if (toCabin(x, y) < shape.trunkRadius + generator.cabin.gap) continue;
+      const clear = shape.trunkRadius + rockGap;
+      if (rocks.some((rock) => Math.hypot(rock.x - x, rock.y - y) < rock.radius + clear)) continue;
       const step = generator.heightStep;
       const height =
         Math.round(rng.range(generator.height.min, generator.height.max) / step) * step;
@@ -142,5 +173,33 @@ function layout(
       break;
     }
   }
-  return { ...shape, id, trees };
+  return { ...shape, id, trees, rocks, cabin };
+}
+
+/** The cabin, along the top, left or right edge (never the bottom, in front of the camera). */
+function placeCabin(
+  shape: Clearing,
+  cabin: WoodcuttingData['generator']['cabin'],
+  rng: Rng,
+): NonNullable<Clearing['cabin']> {
+  const edge = rng.pick(['top', 'left', 'right'] as const);
+  const { width, depth, height, edgeInset } = cabin;
+  if (edge === 'top') {
+    return {
+      x: Math.round(rng.range(width / 2 + edgeInset, shape.width - width / 2 - edgeInset)),
+      y: depth / 2 + edgeInset,
+      width,
+      depth,
+      height,
+    };
+  }
+  // Long side along the edge.
+  const x = edge === 'left' ? depth / 2 + edgeInset : shape.width - depth / 2 - edgeInset;
+  return {
+    x,
+    y: Math.round(rng.range(width / 2 + edgeInset, shape.height - width / 2 - edgeInset)),
+    width: depth,
+    depth: width,
+    height,
+  };
 }

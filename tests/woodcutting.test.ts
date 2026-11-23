@@ -39,7 +39,17 @@ function clearing(
   trunkRadius = 5,
   canopyStart = 0,
 ): Clearing {
-  return { id: 'test', width: 500, height: 500, canopyRadius, trunkRadius, canopyStart, trees };
+  return {
+    id: 'test',
+    width: 500,
+    height: 500,
+    canopyRadius,
+    trunkRadius,
+    canopyStart,
+    trees,
+    rocks: [],
+    maxRockTurn: 40,
+  };
 }
 
 const all = (c: Clearing) => new Set(c.trees.map((tree) => tree.id));

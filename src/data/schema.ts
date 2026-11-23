@@ -140,6 +140,39 @@ const clearingSchema = z.object({
       }),
     )
     .min(1),
+  /**
+   * Rocks for bank shots: a falling tree that touches one (its trunk or canopy, lying down) turns
+   * away just enough to slide off it, toward the side it hit, and lands on the new line. Dead on
+   * (the fall line runs over the rock, so the trunk itself comes down on it), or if sliding off
+   * would take more than `maxRockTurn` degrees, it stops on the rock.
+   */
+  rocks: z
+    .array(
+      z.object({
+        id,
+        x: nonNegative,
+        y: nonNegative,
+        radius: positive,
+        /** How high it stands: a tree stopped on it rests on its top. */
+        height: positive,
+      }),
+    )
+    .default([]),
+  maxRockTurn: z.number().min(0).max(90),
+  /**
+   * The cabin: a falling tree that touches it crashes into it and stops there. The chain's logs
+   * are lost and the round ends. A box centred on (x, y), `width` across and `depth` down the
+   * clearing, `height` tall.
+   */
+  cabin: z
+    .object({
+      x: nonNegative,
+      y: nonNegative,
+      width: positive,
+      depth: positive,
+      height: positive,
+    })
+    .optional(),
 });
 
 /** Feel numbers for the woodcutting mini game. The debug menu can override them live. */
@@ -220,6 +253,24 @@ export const woodcuttingSchema = z.object({
     attempts: positiveInt,
     /** Fall directions tried per tree when looking for chains (for the check and for par). */
     aimSamples: positiveInt,
+    /**
+     * Every random clearing has a cabin at one edge (top, left or right: never the bottom, in
+     * front of the camera), `gap` clear of the trees, set in `edgeInset` from the edge.
+     */
+    cabin: z.object({
+      width: positive,
+      depth: positive,
+      height: positive,
+      gap: nonNegative,
+      edgeInset: nonNegative,
+    }),
+    /** Rocks scattered among the trees, at least `gap` from any trunk, the cabin and each other. */
+    rocks: z.object({
+      count: z.object({ min: z.number().int().min(0), max: z.number().int().min(0) }),
+      radius: positive,
+      height: positive,
+      gap: nonNegative,
+    }),
   }),
   /**
    * Stars for a finished round, from its logs against the clearing's par (what a solid player
