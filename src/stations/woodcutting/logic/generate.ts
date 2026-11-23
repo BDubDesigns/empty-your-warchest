@@ -2,6 +2,7 @@ import { Rng } from '../../../core';
 import type { Clearing, ClearingTree, GameData } from '../../../data';
 import { resolveChain } from './chain';
 import { chainLogs } from './score';
+import { forestAt } from './unlocks';
 
 type WoodcuttingData = GameData['woodcutting'];
 
@@ -77,16 +78,22 @@ export function tutorialPlan(woodcutting: WoodcuttingData): ClearingPlan {
 }
 
 /**
- * A random clearing from `seed`: the same seed always gives the same clearing. Layouts are
- * rerolled until one has a chain of at least `minBestChain` trees (or the attempts run out, and
- * the best one found is used).
+ * A random clearing from `seed` for a woodcutting `level` (higher levels unlock bigger, more
+ * forked clearings): the same seed and level always give the same clearing. Layouts are rerolled
+ * until one has a chain of at least `minBestChain` trees (or the attempts run out, and the best
+ * one found is used).
  */
-export function generateClearing(woodcutting: WoodcuttingData, seed: number): ClearingPlan {
+export function generateClearing(
+  woodcutting: WoodcuttingData,
+  seed: number,
+  level = 1,
+): ClearingPlan {
   const { generator, chainExponent } = woodcutting;
   const rng = new Rng(seed);
+  const forest = forestAt(woodcutting, level);
   let chosen: { clearing: Clearing; chain: number } | undefined;
   for (let attempt = 0; attempt < generator.attempts; attempt++) {
-    const clearing = layout(woodcutting, rng, `random-${String(seed)}`);
+    const clearing = layout(woodcutting, forest, rng, `random-${String(seed)}`);
     const all = new Set(clearing.trees.map((tree) => tree.id));
     const chain = bestChain(clearing, all, generator.aimSamples)?.length ?? 0;
     if (!chosen || chain > chosen.chain) chosen = { clearing, chain };
@@ -108,10 +115,15 @@ function tutorialClearing(woodcutting: WoodcuttingData): Clearing {
 }
 
 /** Scatters trees over the tutorial clearing's ground, kept apart and away from the edges. */
-function layout(woodcutting: WoodcuttingData, rng: Rng, id: string): Clearing {
+function layout(
+  woodcutting: WoodcuttingData,
+  forest: ReturnType<typeof forestAt>,
+  rng: Rng,
+  id: string,
+): Clearing {
   const shape = tutorialClearing(woodcutting);
   const { generator } = woodcutting;
-  const count = rng.int(generator.trees.min, generator.trees.max);
+  const count = rng.int(forest.trees.min, forest.trees.max);
   const trees: ClearingTree[] = [];
   for (let index = 0; index < count; index++) {
     for (let tries = 0; tries < 100; tries++) {
@@ -122,7 +134,7 @@ function layout(woodcutting: WoodcuttingData, rng: Rng, id: string): Clearing {
       const height =
         Math.round(rng.range(generator.height.min, generator.height.max) / step) * step;
       const tree: ClearingTree = { id: `t${String(index + 1)}`, x, y, height };
-      if (rng.chance(generator.forkedShare)) {
+      if (rng.chance(forest.forkedShare)) {
         const spread = Math.round(rng.range(generator.forkSpread.min, generator.forkSpread.max));
         tree.forks = [-spread, spread];
       }

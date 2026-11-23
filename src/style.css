@@ -578,6 +578,51 @@ body:not([data-view='camp']) #build-label {
   animation: w3d-star-pop 0.45s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
+/* The summary's XP: gained this round, and the level bar. */
+.w3d-xp {
+  display: grid;
+  gap: 4px;
+  width: min(100%, 260px);
+}
+
+.w3d-xp-label {
+  color: var(--muted);
+  font-size: 13px;
+  text-align: center;
+}
+
+.w3d-xp-up {
+  color: #f0cd5c;
+  font-weight: 800;
+}
+
+.w3d-xp-unlocks {
+  color: #f0cd5c;
+  font-weight: 700;
+  font-size: 13px;
+  text-align: center;
+  white-space: pre-line;
+}
+
+.w3d-xp-unlocks:empty {
+  display: none;
+}
+
+.w3d-xp-bar {
+  height: 8px;
+  border-radius: 4px;
+  background: rgb(255 255 255 / 0.1);
+  overflow: hidden;
+}
+
+.w3d-xp-fill {
+  width: 0;
+  height: 100%;
+  border-radius: 4px;
+  background: linear-gradient(90deg, #9fc65a, #f0cd5c);
+  transition: width 0.8s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
 .w3d-summary-seed {
   color: var(--muted);
   font-size: 12px;
@@ -940,5 +985,224 @@ body:not([data-view='camp']) #build-label {
   .warchest-overlay[data-state='open'] .warchest-row,
   .warchest-overlay[data-state='open'] .warchest-burst {
     animation: none;
+  }
+}
+
+/* Woodcutting's fast-fall switch, from its unlock level: under Debug, a rare setting. */
+.w3d-fast {
+  position: absolute;
+  top: calc(var(--safe-top) + 112px);
+  left: calc(var(--safe-left) + 12px);
+  min-height: 36px;
+  padding: 0 12px;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  background: rgb(0 0 0 / 0.4);
+  color: var(--accent);
+  font:
+    700 13px system-ui,
+    sans-serif;
+  touch-action: manipulation;
+}
+
+.w3d-fast[aria-pressed='true'] {
+  background: var(--accent);
+  color: var(--bg);
+}
+
+.w3d-fast[hidden] {
+  display: none;
+}
+
+/* A level-up callout across the top of the clearing. */
+.w3d-levelup {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc(var(--safe-top) + 160px);
+  display: grid;
+  justify-items: center;
+  gap: 4px;
+  text-align: center;
+  pointer-events: none;
+  opacity: 0;
+}
+
+.w3d-levelup-title {
+  font:
+    900 30px system-ui,
+    sans-serif;
+  color: #f0cd5c;
+  text-shadow:
+    0 3px 6px rgb(0 0 0 / 0.8),
+    0 0 18px rgb(240 205 92 / 0.5);
+}
+
+.w3d-levelup-text {
+  max-width: 80%;
+  font-weight: 700;
+  font-size: 15px;
+  color: var(--fg);
+  text-shadow: 0 2px 4px rgb(0 0 0 / 0.8);
+}
+
+.w3d-levelup-show {
+  animation: w3d-levelup 2.6s ease-out forwards;
+}
+
+@keyframes w3d-levelup {
+  0% {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+  12% {
+    opacity: 1;
+    transform: scale(1.12);
+  }
+  20% {
+    transform: scale(1);
+  }
+  80% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-14px);
+  }
+}
+
+/* A station's level bar (src/app/skillBar.ts): top centre, between the top-left button and the
+   chest, always in view so the player watches it climb. Only to look at, never to tap. */
+.skill-bar {
+  position: absolute;
+  top: calc(var(--safe-top) + 16px);
+  left: 50%;
+  box-sizing: border-box;
+  width: 104px;
+  transform: translateX(-50%);
+  display: grid;
+  gap: 4px;
+  justify-items: center;
+  padding: 6px 8px 7px;
+  border-radius: 10px;
+  background: rgb(0 0 0 / 0.4);
+  z-index: 4;
+  pointer-events: none;
+  font-family: system-ui, sans-serif;
+}
+
+.skill-bar-label {
+  font-weight: 700;
+  font-size: 12px;
+  color: var(--fg);
+  text-shadow: 0 1px 3px rgb(0 0 0 / 0.7);
+  white-space: nowrap;
+}
+
+.skill-bar-level {
+  display: inline-block;
+  font-weight: 900;
+  color: #f0cd5c;
+  font-variant-numeric: tabular-nums;
+}
+
+.skill-bar-track {
+  width: 100%;
+  height: 7px;
+  border-radius: 4px;
+  background: #2f352c;
+  overflow: hidden;
+}
+
+/* The transition time matches FILL_MS in skillBar.ts. */
+.skill-bar-fill {
+  width: 0%;
+  height: 100%;
+  border-radius: 4px;
+  background: #6fae4f;
+  transition: width 0.25s ease-out;
+}
+
+.skill-bar-fill.skill-bar-snap {
+  transition: none;
+}
+
+/* The XP drop: rises from under the bar into it and fades. */
+.skill-bar-drop {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  text-align: center;
+  font-weight: 900;
+  font-size: 14px;
+  color: #8fd16f;
+  text-shadow: 0 2px 4px rgb(0 0 0 / 0.8);
+  opacity: 0;
+}
+
+.skill-bar-drop-show {
+  animation: skill-bar-drop 1.2s ease-out forwards;
+}
+
+@keyframes skill-bar-drop {
+  0% {
+    opacity: 0;
+    transform: translateY(22px);
+  }
+  20% {
+    opacity: 1;
+    transform: translateY(8px);
+  }
+  75% {
+    opacity: 1;
+    transform: translateY(2px);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+}
+
+/* Filled up: the bar flashes gold and the level number bumps. */
+.skill-bar-up {
+  animation: skill-bar-up 0.8s ease-out;
+}
+
+.skill-bar-up .skill-bar-level {
+  animation: skill-bar-bump 0.8s ease-out;
+}
+
+@keyframes skill-bar-up {
+  0% {
+    background: rgb(240 205 92 / 0.85);
+    box-shadow: 0 0 18px rgb(240 205 92 / 0.8);
+  }
+  100% {
+    background: rgb(0 0 0 / 0.4);
+    box-shadow: 0 0 0 rgb(240 205 92 / 0);
+  }
+}
+
+@keyframes skill-bar-bump {
+  0% {
+    transform: scale(1.6);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+/* Too narrow for it to fit between the top-left button and the chest: drop to the next row, beside
+   Debug. */
+@media (max-width: 400px) {
+  .skill-bar {
+    top: calc(var(--safe-top) + 70px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skill-bar-fill {
+    transition: none;
   }
 }

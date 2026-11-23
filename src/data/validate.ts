@@ -133,6 +133,18 @@ function checkReferences(data: GameData, ctx: z.RefinementCtx): void {
       issue(['woodcutting', 'generator', key], 'min must not be more than max');
     }
   }
+  let lastUnlock = 0;
+  woodcutting.unlocks.forEach((unlock, index) => {
+    const path = ['woodcutting', 'unlocks', index];
+    if (unlock.level < lastUnlock) issue([...path, 'level'], 'Unlocks must be in level order');
+    if (unlock.level > data.tuning.xpCurve.maxLevel) {
+      issue([...path, 'level'], `Level ${String(unlock.level)} is past the max level`);
+    }
+    if (unlock.trees && unlock.trees.min > unlock.trees.max) {
+      issue([...path, 'trees'], 'min must not be more than max');
+    }
+    lastUnlock = unlock.level;
+  });
   if (woodcutting.stars.two > woodcutting.stars.three) {
     issue(['woodcutting', 'stars'], 'Two stars must not need more than three');
   }

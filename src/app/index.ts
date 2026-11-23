@@ -44,7 +44,7 @@ export async function startApp(): Promise<void> {
     showFatal(error);
     return;
   }
-  const { game, logger, clock, feel, choices, haptics, clearings } = booted;
+  const { game, logger, clock, feel, choices, haptics, clearings, fastFall } = booted;
 
   const phaserElement = byId('screen-phaser');
   const threeElement = byId('screen-three');
@@ -81,6 +81,7 @@ export async function startApp(): Promise<void> {
           treeStyle: choices.treeStyle,
           haptics,
           clearings,
+          fastFall,
           onLeave: run((): Promise<void> => navigation.back()),
           backButton,
         });

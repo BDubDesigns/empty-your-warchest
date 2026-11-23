@@ -1,5 +1,6 @@
 import type { Game } from '../../core';
 import { generateClearing, tutorialPlan, type ClearingPlan } from './logic/generate';
+import { woodcuttingSkill } from './logic/unlocks';
 
 /** The one-time flag for having played the woodcutting tutorial clearing. */
 export const WOODCUTTING_TUTORIAL = 'tutorial.woodcutting';
@@ -48,7 +49,11 @@ export class ClearingPicker {
       (request === undefined && !this.#game.hasDone(WOODCUTTING_TUTORIAL));
     this.#current = tutorial
       ? tutorialPlan(woodcutting)
-      : generateClearing(woodcutting, request?.kind === 'seed' ? request.seed : this.#newSeed());
+      : generateClearing(
+          woodcutting,
+          request?.kind === 'seed' ? request.seed : this.#newSeed(),
+          this.#game.level(woodcuttingSkill(this.#game.data)),
+        );
     this.#changed();
     return this.#current;
   }

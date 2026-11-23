@@ -58,6 +58,13 @@ export const woodcutting = {
   // given well short of it.
   stars: { two: 0.4, three: 0.7 },
   starBonus: { two: 0.1, three: 0.25 },
+  unlocks: [
+    { level: 10, text: 'Bigger clearings: up to 20 trees', trees: { min: 16, max: 20 } },
+    { level: 20, text: 'Fast fall: a switch for faster falling trees', fastFall: true },
+    { level: 30, text: 'More forked trees', forkedShare: 0.2 },
+    { level: 40, text: 'Denser clearings: up to 22 trees', trees: { min: 18, max: 22 } },
+  ],
+  fastFall: { fallSeconds: 0.9, chainDelay: 0.12 },
   feel: {
     meterSpeed: 1.1,
     timingWindow: 0.46,

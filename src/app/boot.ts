@@ -16,8 +16,10 @@ import { loadGameData } from '../data';
 import { checkMechanics } from '../stations';
 import {
   ClearingPicker,
+  fastFallChoice,
   treeStyleChoice,
   woodcuttingFeel,
+  type FastFall,
   type TreeStyle,
 } from '../stations/woodcutting';
 import { Haptics, vibrationChoice, type Vibration } from './haptics';
@@ -33,6 +35,8 @@ export interface Booted {
   haptics: Haptics;
   /** Which clearing each woodcutting round plays. */
   clearings: ClearingPicker;
+  /** Woodcutting's fast-fall switch, shown once its level is reached. */
+  fastFall: LiveChoice<FastFall>;
 }
 
 async function openSink(): Promise<{ sink: EventSink; fallback?: string }> {
@@ -95,6 +99,7 @@ export async function bootGame(buildLabel: string): Promise<Booted> {
   };
   const haptics = new Haptics(choices.vibration);
   const clearings = new ClearingPicker(game);
+  const fastFall = fastFallChoice(localStorageStore());
 
-  return { game, clock, logger, saves, feel, choices, haptics, clearings };
+  return { game, clock, logger, saves, feel, choices, haptics, clearings, fastFall };
 }
