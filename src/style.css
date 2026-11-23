@@ -579,10 +579,14 @@ body:not([data-view='camp']) #build-label {
   pointer-events: none;
 }
 
+/* In the top bar, centred on the Debug button's row and left of it: set in from the phone's edge,
+   which is hard to reach and where Android's back swipe starts, with a gap so a slightly-off tap
+   can't open Debug. Opening it is a rare check, so the top is fine. When Debug goes, keep the
+   inset. */
 .warchest-hud {
   position: absolute;
-  top: calc(var(--safe-top) + 58px);
-  right: calc(var(--safe-right) + 12px);
+  top: calc(var(--safe-top) + 7px);
+  right: calc(var(--safe-right) + 96px);
   height: 46px;
   min-width: 46px;
   padding-right: 52px;
@@ -709,7 +713,7 @@ body:not([data-view='camp']) #build-label {
 
 .warchest-panel {
   position: absolute;
-  top: calc(var(--safe-top) + 114px);
+  top: calc(var(--safe-top) + 64px);
   right: calc(var(--safe-right) + 12px);
   width: min(340px, calc(100% - 24px - var(--safe-left) - var(--safe-right)));
   box-sizing: border-box;
