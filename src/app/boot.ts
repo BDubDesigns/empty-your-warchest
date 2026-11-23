@@ -14,7 +14,12 @@ import {
 import type { WoodcuttingFeel } from '../data';
 import { loadGameData } from '../data';
 import { checkMechanics } from '../stations';
-import { treeStyleChoice, woodcuttingFeel, type TreeStyle } from '../stations/woodcutting';
+import {
+  ClearingPicker,
+  treeStyleChoice,
+  woodcuttingFeel,
+  type TreeStyle,
+} from '../stations/woodcutting';
 import { Haptics, vibrationChoice, type Vibration } from './haptics';
 
 export interface Booted {
@@ -26,6 +31,8 @@ export interface Booted {
   /** Picks kept on this phone, shown in the debug menu. */
   choices: { treeStyle: LiveChoice<TreeStyle>; vibration: LiveChoice<Vibration> };
   haptics: Haptics;
+  /** Which clearing each woodcutting round plays. */
+  clearings: ClearingPicker;
 }
 
 async function openSink(): Promise<{ sink: EventSink; fallback?: string }> {
@@ -87,6 +94,7 @@ export async function bootGame(buildLabel: string): Promise<Booted> {
     vibration: vibrationChoice(localStorageStore()),
   };
   const haptics = new Haptics(choices.vibration);
+  const clearings = new ClearingPicker(game);
 
-  return { game, clock, logger, saves, feel, choices, haptics };
+  return { game, clock, logger, saves, feel, choices, haptics, clearings };
 }

@@ -1,4 +1,5 @@
 import type { Choice, EventLogger, Game, LiveTuning, LogEvent, SaveStore } from '../core';
+import type { ClearingPicker } from '../stations/woodcutting';
 import { canShareFile, downloadFile, shareFile } from './exportFile';
 
 export interface DebugDeps {
@@ -9,6 +10,8 @@ export interface DebugDeps {
   tuning: readonly LiveTuning<Record<string, number>>[];
   /** Picks kept on this phone (e.g. the tree style), shown as buttons. */
   choices: readonly Choice[];
+  /** Woodcutting's clearing picker, to replay a seed or the tutorial. */
+  clearings: ClearingPicker;
   buildLabel: string;
 }
 
@@ -282,6 +285,46 @@ export function mountDebugMenu(root: HTMLElement, deps: DebugDeps): void {
     ]);
   });
 
+  // Woodcutting clearing: replay a layout by its seed, or the tutorial.
+  const clearingNow = el('p');
+  const showClearing = (): void => {
+    const current = deps.clearings.current;
+    const request = deps.clearings.request;
+    const now = current
+      ? `Now: ${current.seed === undefined ? 'tutorial clearing' : `clearing #${String(current.seed)}`} · par ${String(current.par)}`
+      : 'No round played yet';
+    const next =
+      request === undefined
+        ? ''
+        : ` · next round: ${request.kind === 'tutorial' ? 'tutorial' : `#${String(request.seed)}`}`;
+    clearingNow.textContent = now + next;
+  };
+  deps.clearings.onChange(showClearing);
+  showClearing();
+  const seedInput = el('input', {
+    type: 'number',
+    inputMode: 'numeric',
+    placeholder: 'Seed',
+    ariaLabel: 'Clearing seed',
+  });
+  const playSeed = el('button', { type: 'button', textContent: 'Play this seed next' });
+  playSeed.addEventListener('click', () => {
+    const seed = Number(seedInput.value);
+    if (seedInput.value === '' || !Number.isInteger(seed) || seed < 0) {
+      say('Type a clearing number (the # on the round summary)');
+      return;
+    }
+    deps.clearings.requestNext({ kind: 'seed', seed: seed >>> 0 });
+    logger.log('debug.clearing', { seed });
+    say(`Next woodcutting round plays clearing #${String(seed >>> 0)}`);
+  });
+  const playTutorial = el('button', { type: 'button', textContent: 'Tutorial next' });
+  playTutorial.addEventListener('click', () => {
+    deps.clearings.requestNext({ kind: 'tutorial' });
+    logger.log('debug.clearing', { tutorial: true });
+    say('Next woodcutting round plays the tutorial clearing');
+  });
+
   // Live tuning
   const tuningSections = deps.tuning.map((tuning) => {
     const sliders = tuning.tunables.map((tunable) => {
@@ -396,6 +439,11 @@ export function mountDebugMenu(root: HTMLElement, deps: DebugDeps): void {
       ),
       section('Skills', ...skillRows.map((skill) => skill.row)),
       ...(choiceRows.length > 0 ? [section('Options', ...choiceRows)] : []),
+      section(
+        'Woodcutting clearing',
+        clearingNow,
+        el('div', { className: 'debug-row' }, [seedInput, playSeed, playTutorial]),
+      ),
       ...tuningSections,
       section('Time', lastSeen, el('div', { className: 'debug-row' }, skipButtons)),
       section('Save', resetButton),

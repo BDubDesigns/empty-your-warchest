@@ -564,6 +564,102 @@ body:not([data-view='camp']) #build-label {
   color: var(--muted);
 }
 
+.w3d-summary-bonus {
+  min-height: 1.3em;
+  color: var(--muted);
+  font-size: 14px;
+  text-align: center;
+}
+
+.w3d-summary-bonus-won {
+  color: #f0cd5c;
+  font-weight: 800;
+  font-size: 18px;
+  animation: w3d-star-pop 0.45s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.w3d-summary-seed {
+  color: var(--muted);
+  font-size: 12px;
+  opacity: 0.7;
+}
+
+/* Stars pop in one by one: earned ones gold and big, missed ones small and dim. */
+.w3d-stars {
+  display: flex;
+  gap: 10px;
+  height: 56px;
+  align-items: center;
+}
+
+.w3d-star {
+  font-size: 48px;
+  line-height: 1;
+  color: rgb(255 255 255 / 0.12);
+  transform: scale(0);
+}
+
+.w3d-star-on {
+  color: #f0cd5c;
+  text-shadow:
+    0 0 14px rgb(240 205 92 / 0.6),
+    0 2px 4px rgb(0 0 0 / 0.6);
+  animation: w3d-star-pop 0.45s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+
+.w3d-star-off {
+  animation: w3d-star-miss 0.3s ease-out forwards;
+}
+
+@keyframes w3d-star-pop {
+  0% {
+    transform: scale(0) rotate(-30deg);
+  }
+  60% {
+    transform: scale(1.35) rotate(8deg);
+  }
+  100% {
+    transform: scale(1) rotate(0);
+  }
+}
+
+@keyframes w3d-star-miss {
+  0% {
+    transform: scale(0);
+  }
+  100% {
+    transform: scale(0.8);
+  }
+}
+
+.w3d-summary-buttons {
+  display: flex;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+/* Ended early with trees still standing: going back to the round comes first. */
+.w3d-summary > .w3d-button {
+  width: 100%;
+  margin-top: 6px;
+  font-size: 20px;
+}
+
+.w3d-summary > .w3d-button[hidden] {
+  display: none;
+}
+
+.w3d-summary-buttons .w3d-button {
+  padding: 0 16px;
+  font-size: 18px;
+}
+
+.w3d-button.w3d-secondary {
+  border: 2px solid var(--accent);
+  background: transparent;
+  color: var(--accent);
+}
+
 /* The warchest in a station's HUD (src/app/warchestHud.ts): the 3D chest is drawn on its own
    layer at the right end of this anchor; the count sits to its left. */
 .warchest-layer {

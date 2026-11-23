@@ -8,6 +8,8 @@ export interface GameState {
   skills: Record<string, number>;
   /** When the player was last in the game. Idle progress (M6) counts from here. */
   lastSeenAt: number;
+  /** One-time things the player has done, e.g. 'tutorial.woodcutting'. */
+  done: string[];
 }
 
 export function newGameState(data: GameData, now: number): GameState {
@@ -15,5 +17,6 @@ export function newGameState(data: GameData, now: number): GameState {
     inventory: [],
     skills: Object.fromEntries(data.skills.map((skill) => [skill.id, 0])),
     lastSeenAt: now,
+    done: [],
   };
 }

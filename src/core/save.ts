@@ -25,6 +25,8 @@ const saveFileSchema = z.object({
     ),
     skills: z.record(z.string(), z.number().nonnegative()),
     lastSeenAt: z.number(),
+    // Added after version 1 with a default, so earlier saves still load.
+    done: z.array(z.string()).default([]),
   }),
 });
 
@@ -86,6 +88,11 @@ export class SaveStore {
       .join(',');
     if (saved !== current) throw new Error(`Save has skills [${saved}]; the data has [${current}]`);
 
-    return { inventory, skills: file.state.skills, lastSeenAt: file.state.lastSeenAt };
+    return {
+      inventory,
+      skills: file.state.skills,
+      lastSeenAt: file.state.lastSeenAt,
+      done: [...new Set(file.state.done)],
+    };
   }
 }

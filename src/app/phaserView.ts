@@ -67,8 +67,11 @@ export class PhaserView implements ScreenView {
   }
 
   start(): void {
-    // The container was hidden, so pick up any size change from while it was away.
-    this.#game.scale.refresh();
+    // The container was hidden, so pick up any size change from while it was away. A resize while
+    // hidden measured it as 0×0: measure again now it's visible, or refresh keeps the 0.
+    const scale = this.#game.scale;
+    scale.getParentBounds();
+    scale.refresh();
     this.#game.resume();
   }
 

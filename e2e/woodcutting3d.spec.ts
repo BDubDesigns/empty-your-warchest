@@ -84,7 +84,16 @@ test('3D woodcutting: aim, Chop, chop in the close-up, the tree falls, logs to t
   await expect(chest).toHaveAttribute('data-settled', 'true', { timeout: 20_000 });
   const shown = await chest.getAttribute('data-count');
 
-  await page.getByRole('button', { name: 'Back to camp' }).tap();
+  // End round shows the round so far; trees are still standing, so it offers to keep going.
+  await page.getByRole('button', { name: 'End round' }).tap();
+  const summary = page.locator('.w3d-summary');
+  await expect(summary).toBeVisible();
+  await expect(summary).toContainText('Round so far');
+  await expect(summary).toHaveAttribute('data-stars', /[1-3]/);
+  await summary.getByRole('button', { name: 'Keep chopping' }).tap();
+  await expect(summary).toBeHidden();
+  await page.getByRole('button', { name: 'End round' }).tap();
+  await summary.getByRole('button', { name: 'Back to camp' }).tap();
   await expect(page.locator('body')).toHaveAttribute('data-view', 'camp');
   await page.getByRole('button', { name: 'Open debug menu' }).tap();
   await expect(page.getByText(/^Log × \d+$/)).toBeVisible();

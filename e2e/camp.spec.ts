@@ -24,7 +24,7 @@ test('every station and the chest can be entered and exited by touch', async ({ 
   });
   await page.goto('/');
   await viewIs(page, 'camp');
-  const back = page.getByRole('button', { name: 'Back to camp' });
+  const back = page.locator('#back-button');
   await expect(back).toBeHidden();
 
   for (const station of stations) {
@@ -34,7 +34,15 @@ test('every station and the chest can be entered and exited by touch', async ({ 
     const screen = screens[station.mechanic] ?? 'phaser';
     await expect(page.locator('body')).toHaveAttribute('data-screen', screen);
     await expect(page.locator(`#screen-${screen} canvas`).first()).toBeVisible();
-    await back.tap();
+    if (screen === 'wood3d') {
+      // Woodcutting's top button ends the round; its summary has the way back.
+      await expect(back).toHaveText('End round');
+      await back.tap();
+      await page.locator('.w3d-summary').getByRole('button', { name: 'Back to camp' }).tap();
+    } else {
+      await expect(back).toHaveText('Back to camp');
+      await back.tap();
+    }
     await viewIs(page, 'camp');
     await expect(page.locator('#screen-phaser canvas')).toBeVisible();
   }
@@ -61,4 +69,29 @@ test('every station and the chest can be entered and exited by touch', async ({ 
   );
   expect(exported.events.map((event) => event.type)).toContain('warchest.open');
   expect(errors).toEqual([]);
+});
+
+test('the camp comes back at the right size after the window resizes in a station', async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('warchest.woodcutting.treeStyle', 'kenney');
+  });
+  await page.goto('/');
+  await viewIs(page, 'camp');
+  const station = stations.find((entry) => entry.mechanic === 'woodcutting3d');
+  if (!station) throw new Error('No 3D woodcutting station in data');
+  await tapCampSpot(page, station.camp);
+  await expect(page.locator('body')).toHaveAttribute('data-woodcutting', 'pick', {
+    timeout: 20_000,
+  });
+  // e.g. a phone's address bar hiding, or the window being resized, while the camp is hidden.
+  await page.setViewportSize({ width: 400, height: 820 });
+  await page.locator('#back-button').tap();
+  await page.locator('.w3d-summary').getByRole('button', { name: 'Back to camp' }).tap();
+  await viewIs(page, 'camp');
+  const canvas = page.locator('#screen-phaser canvas');
+  await expect
+    .poll(async () => canvas.evaluate((element: HTMLCanvasElement) => element.clientWidth))
+    .toBe(400);
 });

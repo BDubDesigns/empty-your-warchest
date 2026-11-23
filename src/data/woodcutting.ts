@@ -1,7 +1,7 @@
 import type { GameDataInput } from './schema';
 
-// Feel prototype: one hand-made clearing. All numbers are first guesses,
-// meant to be tuned live from the debug menu on a phone.
+// The hand-made tutorial clearing, the generator for every round after it, and the feel. All
+// numbers are first guesses, meant to be tuned on a phone.
 export const woodcutting = {
   recipe: 'fell_tree',
   chainExponent: 2,
@@ -41,6 +41,23 @@ export const woodcutting = {
       ],
     },
   ],
+  tutorialClearing: 'first_clearing',
+  generator: {
+    trees: { min: 14, max: 18 },
+    height: { min: 90, max: 120 },
+    heightStep: 5,
+    spacing: 66,
+    margin: 30,
+    forkedShare: 0.12,
+    forkSpread: { min: 20, max: 30 },
+    minBestChain: 3,
+    attempts: 40,
+    aimSamples: 120,
+  },
+  // Par comes from trying every fall direction, so it finds chains people often miss: stars are
+  // given well short of it.
+  stars: { two: 0.4, three: 0.7 },
+  starBonus: { two: 0.1, three: 0.25 },
   feel: {
     meterSpeed: 1.1,
     timingWindow: 0.46,

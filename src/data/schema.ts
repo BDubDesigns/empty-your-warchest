@@ -197,6 +197,40 @@ export const woodcuttingSchema = z.object({
   /** Words shouted as a chain grows: the last one whose `trees` is reached shows. */
   comboCallouts: z.array(z.object({ trees: z.number().int().min(2), text: z.string().min(1) })),
   clearings: z.array(clearingSchema).min(1),
+  /** The first round ever plays this hand-made clearing; every round after is generated. */
+  tutorialClearing: id,
+  /**
+   * Random clearings. They share the tutorial clearing's size and tree shape (canopy, trunk), so
+   * the view and the rules see the same kind of forest every round.
+   */
+  generator: z.object({
+    trees: z.object({ min: positiveInt, max: positiveInt }),
+    /** Tree heights (how far a tree reaches), rounded to `heightStep`. */
+    height: z.object({ min: positive, max: positive }),
+    heightStep: positive,
+    /** Closest two trunks may stand, and how far trees stay from the clearing's edges. */
+    spacing: positive,
+    margin: nonNegative,
+    /** Share of trees that are forked, and how far each fork turns from the fall (degrees). */
+    forkedShare: fraction,
+    forkSpread: z.object({ min: positive, max: positive }),
+    /** Every clearing has at least one chain this long; a layout without one is rerolled. */
+    minBestChain: positiveInt,
+    /** Layouts tried per seed before settling for the best one found. */
+    attempts: positiveInt,
+    /** Fall directions tried per tree when looking for chains (for the check and for par). */
+    aimSamples: positiveInt,
+  }),
+  /**
+   * Stars for a finished round, from its logs against the clearing's par (what a solid player
+   * would bank, taking the biggest chain they can find each time). 1 star for any banked chain.
+   */
+  stars: z.object({ two: fraction, three: fraction }),
+  /**
+   * Bonus logs when the round ends, as a share of its logs: none for 1 star, then these for 2 and
+   * 3 stars. Small, because logs already reward long chains (N × N).
+   */
+  starBonus: z.object({ two: nonNegative, three: nonNegative }),
   feel: woodcuttingFeelSchema,
 });
 
