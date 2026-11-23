@@ -106,6 +106,79 @@ export const tuningSchema = z.object({
   weaponRecoveryOnWin: z.record(id, fraction),
 });
 
+const clearingSchema = z.object({
+  id,
+  /** Size of the clearing in its own units; it's scaled to fit the phone screen. */
+  width: positive,
+  height: positive,
+  /**
+   * Radius of every tree's canopy. Collisions use exactly what's drawn: a falling tree
+   * knocks over any standing tree its canopy or trunk touches on the way down.
+   */
+  canopyRadius: positive,
+  trees: z
+    .array(
+      z.object({
+        id,
+        x: nonNegative,
+        y: nonNegative,
+        /** How far the tree reaches when it falls. */
+        height: positive,
+        /**
+         * A forked tree falls as 2–3 trunks fanning out: one per offset (degrees) from the
+         * fall direction. Each trunk knocks trees over on its own line.
+         */
+        forks: z.array(z.number().min(-90).max(90)).min(2).max(3).optional(),
+      }),
+    )
+    .min(1),
+});
+
+/** Feel numbers for the woodcutting mini game. The debug menu can override them live. */
+export const woodcuttingFeelSchema = z.object({
+  /** Passes per second the chop bar's marker sweeps across while you hold the axe back. */
+  meterSpeed: positive,
+  /** Width of the green (good) zone around the yellow, as a share of the bar. */
+  timingWindow: fraction,
+  /**
+   * Width of the yellow (perfect) zone at a full pull. A lighter pull makes it wider, up to
+   * perfectWindowLight at the lightest pull. It moves to a new spot after every chop.
+   */
+  perfectWindow: fraction,
+  perfectWindowLight: fraction,
+  /** Seconds for the axe to swing from wound-up into the tree. */
+  swingSeconds: positive,
+  /** Most a good chop can knock the fall direction off, in degrees (perfect: never). */
+  goodScatter: z.number().min(0).max(90),
+  /** Most a glancing chop can knock the fall direction off, in degrees. */
+  glancingScatter: z.number().min(0).max(90),
+  /** Chop points needed to fell a tree. */
+  chopPoints: positiveInt,
+  /** Points a full pull of the axe deals; a partial pull deals its share (at least 1). */
+  fullPullPoints: positiveInt,
+  /** Extra points for a chop released on yellow. A glancing chop deals half. */
+  perfectBonus: nonNegative,
+  /** Degrees each tap of a fine-tune button turns the aim. */
+  fineAimStep: positive,
+  /** Seconds for a tree to fall from upright to the ground. */
+  fallSeconds: positive,
+  /** How sharply a fall speeds up: 1 = steady, higher = slower start and faster finish. */
+  fallEase: z.number().min(1),
+  /** Extra pause before a hit tree starts to fall, so the cascade ripples. */
+  chainDelay: nonNegative,
+  /** Multiplier for every screen shake. 0 turns shake off. */
+  shakeStrength: nonNegative,
+  /** How long the game freezes on a perfect chop (hit-stop), in milliseconds. */
+  hitStopMs: nonNegative,
+});
+
+export const woodcuttingSchema = z.object({
+  /** Recipe that turns each felled tree into logs. */
+  recipe: id,
+  clearings: z.array(clearingSchema).min(1),
+  feel: woodcuttingFeelSchema,
+});
+
 export const gameDataShape = z.object({
   /** Ordered worst to best. */
   qualities: z.array(qualitySchema).min(1),
@@ -117,6 +190,7 @@ export const gameDataShape = z.object({
   enemies: z.array(enemySchema),
   levels: z.array(levelSchema),
   camp: campSchema,
+  woodcutting: woodcuttingSchema,
   tuning: tuningSchema,
 });
 
@@ -134,3 +208,6 @@ export type Level = GameData['levels'][number];
 export type Tuning = GameData['tuning'];
 export type Camp = GameData['camp'];
 export type CampSpot = Camp['chest'];
+export type Clearing = GameData['woodcutting']['clearings'][number];
+export type ClearingTree = Clearing['trees'][number];
+export type WoodcuttingFeel = GameData['woodcutting']['feel'];

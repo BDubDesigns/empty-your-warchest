@@ -55,3 +55,17 @@ describe('Game', () => {
     });
   });
 });
+
+describe('Game.craft without XP', () => {
+  it('adds the outputs but no XP', async () => {
+    const { game, logger } = newGame();
+    const result = game.craft('fell_tree', { batches: 3 }, { awardXp: false });
+    expect(game.inventory.count('log')).toBe(3);
+    expect(game.xp('woodcutting')).toBe(0);
+    expect(result.xp).toBe(0);
+    expect((await logger.readAll()).at(-1)).toMatchObject({
+      type: 'recipe.craft',
+      data: { xp: 0 },
+    });
+  });
+});

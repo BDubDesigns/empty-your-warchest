@@ -11,6 +11,7 @@ import { skills } from './skills';
 import { stations } from './stations';
 import { tuning } from './tuning';
 import { enemies, units } from './units';
+import { woodcutting } from './woodcutting';
 import { parseGameData } from './validate';
 
 export * from './schema';
@@ -26,6 +27,7 @@ export const rawGameData: GameDataInput = {
   enemies,
   levels,
   camp,
+  woodcutting,
   tuning,
 };
 

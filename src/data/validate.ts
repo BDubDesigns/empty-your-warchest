@@ -104,6 +104,39 @@ function checkReferences(data: GameData, ctx: z.RefinementCtx): void {
   });
 
   coversAllQualities(['tuning', 'weaponRecoveryOnWin'], data.tuning.weaponRecoveryOnWin);
+
+  const woodcutting = data.woodcutting;
+  if (!data.recipes.some((recipe) => recipe.id === woodcutting.recipe)) {
+    issue(['woodcutting', 'recipe'], `Unknown recipe "${woodcutting.recipe}"`);
+  }
+  woodcutting.clearings.forEach((clearing, index) => {
+    const path = ['woodcutting', 'clearings', index];
+    const treeIds = new Set<string>();
+    clearing.trees.forEach((tree, treeIndex) => {
+      if (treeIds.has(tree.id))
+        issue([...path, 'trees', treeIndex, 'id'], `Duplicate tree "${tree.id}"`);
+      treeIds.add(tree.id);
+      if (tree.x > clearing.width || tree.y > clearing.height) {
+        issue([...path, 'trees', treeIndex], `Tree "${tree.id}" is outside the clearing`);
+      }
+    });
+  });
+  const feel = woodcutting.feel;
+  if (feel.perfectWindow > feel.timingWindow) {
+    issue(
+      ['woodcutting', 'feel', 'perfectWindow'],
+      'The perfect window must fit inside the timing window',
+    );
+  }
+  if (feel.perfectWindowLight > feel.timingWindow) {
+    issue(
+      ['woodcutting', 'feel', 'perfectWindowLight'],
+      'The yellow zone must fit inside the green one',
+    );
+  }
+  if (feel.timingWindow >= 1) {
+    issue(['woodcutting', 'feel', 'timingWindow'], 'The green zone must be narrower than the bar');
+  }
 }
 
 export const gameDataSchema = gameDataShape.superRefine(checkReferences);

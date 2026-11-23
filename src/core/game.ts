@@ -67,19 +67,28 @@ export class Game {
     this.#changed();
   }
 
-  /** Runs a recipe and pays its XP to the station's skill. */
-  craft(recipeId: string, outcome?: CraftOutcome): CraftResult {
+  /**
+   * Runs a recipe and pays its XP to the station's skill.
+   * `awardXp: false` skips the XP, for mini games still in their feel-test stage.
+   */
+  craft(
+    recipeId: string,
+    outcome?: CraftOutcome,
+    options: { awardXp?: boolean } = {},
+  ): CraftResult {
     const recipe = byId(this.data.recipes, recipeId);
     const station = byId(this.data.stations, recipe.station);
     const result = craft(this.#inventory, recipe, outcome);
+    const xp = options.awardXp === false ? 0 : result.xp;
     this.#logger.log('recipe.craft', {
       recipe: recipe.id,
       consumed: result.consumed,
       produced: result.produced,
-      xp: result.xp,
+      xp,
     });
-    this.addXp(station.skill, result.xp);
-    return result;
+    if (xp > 0) this.addXp(station.skill, xp);
+    else this.#changed();
+    return { ...result, xp };
   }
 
   /** Replaces everything with `state`, e.g. after a save reset. */

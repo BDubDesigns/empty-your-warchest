@@ -1,10 +1,12 @@
-import type { EventLogger, Game, LogEvent, SaveStore } from '../core';
+import type { EventLogger, Game, LiveTuning, LogEvent, SaveStore } from '../core';
 import { canShareFile, downloadFile, shareFile } from './exportFile';
 
 export interface DebugDeps {
   game: Game;
   logger: EventLogger;
   saves: SaveStore;
+  /** Feel numbers the menu can change live with sliders. */
+  tuning: readonly LiveTuning<Record<string, number>>[];
   buildLabel: string;
 }
 
@@ -250,6 +252,75 @@ export function mountDebugMenu(root: HTMLElement, deps: DebugDeps): void {
     say('Save wiped. Logs are kept.');
   });
 
+  // Live tuning
+  const tuningSections = deps.tuning.map((tuning) => {
+    const sliders = tuning.tunables.map((tunable) => {
+      const value = el('span', { className: 'debug-tune-value' });
+      const input = el('input', {
+        type: 'range',
+        min: String(tunable.min),
+        max: String(tunable.max),
+        step: String(tunable.step),
+        ariaLabel: tunable.label,
+      });
+      const show = (): void => {
+        const current = tuning.values[tunable.key] ?? 0;
+        input.value = String(current);
+        value.textContent = `${current}${tuning.isOverridden(tunable.key) ? ' •' : ''}`;
+      };
+      input.addEventListener('input', () => {
+        tuning.set(tunable.key, Number(input.value));
+      });
+      input.addEventListener('change', () => {
+        logger.log('debug.tune', {
+          group: tuning.name,
+          key: tunable.key,
+          value: Number(input.value),
+        });
+      });
+      const row = el('label', { className: 'debug-tune' }, [
+        el('span', { className: 'debug-tune-label' }, [tunable.label, value]),
+        input,
+      ]);
+      return { row, show };
+    });
+    const showAll = (): void => {
+      for (const slider of sliders) slider.show();
+    };
+    tuning.onChange(showAll);
+    showAll();
+
+    const copy = el('button', { type: 'button', textContent: 'Copy as data' });
+    copy.addEventListener('click', () => {
+      const json = JSON.stringify(tuning.values, null, 2);
+      logger.log('debug.tuneCopy', { group: tuning.name });
+      navigator.clipboard.writeText(json).then(
+        () => {
+          say(`Copied ${tuning.name} feel values; paste them into src/data`);
+        },
+        () => {
+          say(`Couldn't copy. Values: ${JSON.stringify(tuning.values)}`);
+        },
+      );
+    });
+    const reset = el('button', { type: 'button', textContent: 'Reset to data' });
+    reset.addEventListener('click', () => {
+      tuning.reset();
+      logger.log('debug.tuneReset', { group: tuning.name });
+      say(`${tuning.name} feel reset to the values in data`);
+    });
+    return section(
+      `Live tuning: ${tuning.name}`,
+      el('p', {
+        className: 'debug-note',
+        textContent:
+          'Changes apply instantly and stay on this phone until reset. • = changed from data.',
+      }),
+      ...sliders.map((slider) => slider.row),
+      el('div', { className: 'debug-row' }, [copy, reset]),
+    );
+  });
+
   const update = (): void => {
     warchestList.replaceChildren(
       ...(game.inventory.stacks().length === 0
@@ -294,6 +365,7 @@ export function mountDebugMenu(root: HTMLElement, deps: DebugDeps): void {
         warchestList,
       ),
       section('Skills', ...skillRows.map((skill) => skill.row)),
+      ...tuningSections,
       section('Time', lastSeen, el('div', { className: 'debug-row' }, skipButtons)),
       section('Save', resetButton),
     ],

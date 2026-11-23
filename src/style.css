@@ -88,6 +88,11 @@ body {
   pointer-events: none;
 }
 
+/* Only on the camp; in mini games it would sit on top of the controls. The debug menu shows it too. */
+body:not([data-view='camp']) #build-label {
+  display: none;
+}
+
 #rotate-hint {
   display: none;
 }
@@ -247,4 +252,33 @@ body {
   min-width: 0;
   color: var(--muted);
   font-size: 13px;
+}
+
+.debug-note {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.debug-tune {
+  display: block;
+  margin-bottom: 10px;
+}
+
+.debug-tune-label {
+  display: flex;
+  justify-content: space-between;
+  font-size: 14px;
+}
+
+.debug-tune-value {
+  color: var(--accent);
+}
+
+.debug-panel input[type='range'] {
+  width: 100%;
+  min-height: 36px;
+  padding: 0;
+  border: 0;
+  background: none;
+  accent-color: var(--accent);
 }
