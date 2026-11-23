@@ -5,11 +5,6 @@ export interface Point {
   y: number;
 }
 
-export interface ChainRules {
-  /** Degrees a hit tree turns away from the hitter's direction for an edge hit. */
-  maxDeflection: number;
-}
-
 /** One tree going down in a chain. */
 export interface FallStep {
   tree: string;
@@ -71,22 +66,32 @@ export function treesHit(
 }
 
 /**
+ * Billiards: a hit tree falls along the line from the hitter's canopy center at the moment
+ * they touch (the ghost ball) through the hit tree's center. A dead-center hit carries
+ * straight on; an edge hit sends it off nearly sideways.
+ */
+export function knockAngle(hitter: ClearingTree, angle: number, hit: Hit): number {
+  const contact = {
+    x: hitter.x + Math.cos(angle) * hit.contactAt,
+    y: hitter.y + Math.sin(angle) * hit.contactAt,
+  };
+  return Math.atan2(hit.tree.y - contact.y, hit.tree.x - contact.x);
+}
+
+/**
  * Works out the whole chain before anything is animated. The chopped tree falls at `angle`;
- * each tree it hits falls in the hitter's direction, turned away by up to `maxDeflection`
- * depending on how far off-center the hit was, and so on.
- * Deterministic: the same clearing, standing trees, angle and rules give the same chain.
+ * each tree it hits is knocked over billiards-style (see knockAngle), and so on.
+ * Deterministic: the same clearing, standing trees and angle give the same chain.
  */
 export function resolveChain(
   clearing: Clearing,
   standing: ReadonlySet<string>,
   startId: string,
   angle: number,
-  rules: ChainRules,
 ): FallStep[] {
   const start = clearing.trees.find((tree) => tree.id === startId);
   if (!start || !standing.has(startId)) throw new Error(`Tree "${startId}" isn't standing`);
 
-  const maxTurn = (rules.maxDeflection * Math.PI) / 180;
   const stillStanding = new Set(standing);
   stillStanding.delete(startId);
   const steps: FallStep[] = [{ tree: startId, angle, depth: 0 }];
@@ -95,7 +100,7 @@ export function resolveChain(
     const next: { tree: ClearingTree; angle: number }[] = [];
     for (const faller of frontier) {
       for (const hit of treesHit(clearing, stillStanding, faller.tree, faller.angle)) {
-        const hitAngle = faller.angle + hit.offset * maxTurn;
+        const hitAngle = knockAngle(faller.tree, faller.angle, hit);
         stillStanding.delete(hit.tree.id);
         steps.push({
           tree: hit.tree.id,
@@ -128,7 +133,6 @@ export function previewFall(
   standing: ReadonlySet<string>,
   tree: ClearingTree,
   angle: number,
-  rules: ChainRules,
 ): FallPreview {
   const [first] = treesHit(clearing, standing, tree, angle);
   if (!first) return { ghost: fallTip(tree, angle) };
@@ -139,7 +143,7 @@ export function previewFall(
     },
     hit: {
       tree: first.tree.id,
-      angle: angle + first.offset * ((rules.maxDeflection * Math.PI) / 180),
+      angle: knockAngle(tree, angle, first),
     },
   };
 }

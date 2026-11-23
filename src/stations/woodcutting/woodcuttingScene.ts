@@ -470,7 +470,7 @@ export class WoodcuttingScene extends Phaser.Scene {
 
   #startChain(treeId: string, angle: number): void {
     // The chain is decided here, before anything moves; the animation only plays it back.
-    const steps = resolveChain(this.#clearing, this.#standing, treeId, angle, this.#feel);
+    const steps = resolveChain(this.#clearing, this.#standing, treeId, angle);
     const feel = this.#feel;
     const starts = new Map<string, number>();
     this.#fallers = steps.map((step) => {
@@ -671,7 +671,7 @@ export class WoodcuttingScene extends Phaser.Scene {
     const g = this.#graphics;
     const fit = this.#fit();
     const base = toScreen(fit, tree);
-    const preview = previewFall(this.#clearing, this.#standing, tree, angle, this.#feel);
+    const preview = previewFall(this.#clearing, this.#standing, tree, angle);
     const ghost = toScreen(fit, preview.ghost);
     g.lineStyle(2, theme.fgHex, 0.45).lineBetween(base.x, base.y, ghost.x, ghost.y);
     g.lineStyle(2, theme.fgHex, 0.55).strokeCircle(ghost.x, ghost.y, canopy);

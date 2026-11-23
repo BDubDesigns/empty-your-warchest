@@ -152,11 +152,6 @@ export const woodcuttingFeelSchema = z.object({
   fallSeconds: positive,
   /** How sharply a fall speeds up: 1 = steady, higher = slower start and faster finish. */
   fallEase: z.number().min(1),
-  /**
-   * Most a hit tree turns away from the hitter's direction, in degrees, for a hit at the very
-   * edge of its canopy. A dead-center hit falls straight on; in between scales evenly.
-   */
-  maxDeflection: z.number().min(0).max(90),
   /** Extra pause before a hit tree starts to fall, so the cascade ripples. */
   chainDelay: nonNegative,
   /** Multiplier for every screen shake. 0 turns shake off. */

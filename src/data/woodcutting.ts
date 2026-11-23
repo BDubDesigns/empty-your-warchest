@@ -44,7 +44,6 @@ export const woodcutting = {
     perfectPoints: 2,
     fallSeconds: 0.9,
     fallEase: 2.5,
-    maxDeflection: 60,
     chainDelay: 0.12,
     shakeStrength: 1,
     hitStopMs: 70,

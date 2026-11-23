@@ -26,7 +26,6 @@ function firstOf<T>(list: readonly T[]): T {
 const RIGHT = 0;
 const DOWN = Math.PI / 2;
 const LEFT = Math.PI;
-const STRAIGHT = { maxDeflection: 0 };
 
 /** Canopies of radius 5: two canopies touch when centers are within 10. */
 function clearing(trees: Clearing['trees'], canopyRadius = 5): Clearing {
@@ -46,24 +45,24 @@ describe('chain resolution', () => {
   ]);
 
   it('knocks over every tree in line', () => {
-    const steps = resolveChain(row, all(row), 'a', RIGHT, STRAIGHT);
+    const steps = resolveChain(row, all(row), 'a', RIGHT);
     expect(ids(steps)).toEqual(['a', 'b', 'c']);
     expect(steps.map((step) => step.depth)).toEqual([0, 1, 2]);
     expect(steps[1]).toMatchObject({ hitBy: 'a', hitAt: 80 });
   });
 
   it('stops when the next tree is out of reach', () => {
-    expect(ids(resolveChain(row, all(row), 'c', RIGHT, STRAIGHT))).toEqual(['c']);
+    expect(ids(resolveChain(row, all(row), 'c', RIGHT))).toEqual(['c']);
   });
 
   it('only hits trees in front of the tree, not behind it', () => {
-    expect(ids(resolveChain(row, all(row), 'b', LEFT, STRAIGHT))).toEqual(['b', 'a']);
-    expect(ids(resolveChain(row, all(row), 'b', DOWN, STRAIGHT))).toEqual(['b']);
+    expect(ids(resolveChain(row, all(row), 'b', LEFT))).toEqual(['b', 'a']);
+    expect(ids(resolveChain(row, all(row), 'b', DOWN))).toEqual(['b']);
   });
 
   it('ignores trees that are already down', () => {
     const standing = new Set(['a', 'c', 'far']);
-    expect(ids(resolveChain(row, standing, 'a', RIGHT, STRAIGHT))).toEqual(['a']);
+    expect(ids(resolveChain(row, standing, 'a', RIGHT))).toEqual(['a']);
   });
 
   it('hits any tree whose canopy the falling canopy touches, inclusive', () => {
@@ -86,10 +85,7 @@ describe('chain resolution', () => {
       ],
       18,
     );
-    expect(ids(resolveChain(landing, all(landing), 'faller', DOWN, STRAIGHT))).toEqual([
-      'faller',
-      'under',
-    ]);
+    expect(ids(resolveChain(landing, all(landing), 'faller', DOWN))).toEqual(['faller', 'under']);
   });
 
   it('branches when one tree hits two, nearest first', () => {
@@ -98,23 +94,25 @@ describe('chain resolution', () => {
       { id: 'near', x: 40, y: 5, height: 30 },
       { id: 'far', x: 80, y: -5, height: 30 },
     ]);
-    const steps = resolveChain(fork, all(fork), 'a', RIGHT, STRAIGHT);
+    const steps = resolveChain(fork, all(fork), 'a', RIGHT);
     expect(ids(steps)).toEqual(['a', 'near', 'far']);
     expect(steps.map((step) => step.depth)).toEqual([0, 1, 1]);
   });
 
-  it('turns hit trees away by how far off-center they were hit', () => {
+  it('knocks hit trees along the line from the ghost canopy through their center, like billiards', () => {
     const fork = clearing([
       { id: 'a', x: 0, y: 0, height: 100 },
       { id: 'center', x: 30, y: 0, height: 10 },
       { id: 'half', x: 60, y: 5, height: 10 },
       { id: 'edge', x: 90, y: -10, height: 10 },
     ]);
-    const steps = resolveChain(fork, all(fork), 'a', RIGHT, { maxDeflection: 60 });
+    const steps = resolveChain(fork, all(fork), 'a', RIGHT);
     const angleOf = (id: string) => degrees(steps.find((step) => step.tree === id)?.angle ?? NaN);
     expect(angleOf('center')).toBe(0);
+    // Half-ball hit: 30° off, as in billiards
     expect(angleOf('half')).toBe(30);
-    expect(angleOf('edge')).toBe(-60);
+    // Hit at the very edge: knocked off at right angles
+    expect(angleOf('edge')).toBe(-90);
   });
 
   it('carries deflection down the chain', () => {
@@ -123,21 +121,20 @@ describe('chain resolution', () => {
       { id: 'b', x: 80, y: 5, height: 100 },
       { id: 'c', x: 150, y: 50, height: 100 },
     ]);
-    const steps = resolveChain(bend, all(bend), 'a', RIGHT, { maxDeflection: 60 });
+    const steps = resolveChain(bend, all(bend), 'a', RIGHT);
     expect(ids(steps)).toEqual(['a', 'b', 'c']);
     expect(degrees(steps[1]?.angle ?? NaN)).toBe(30);
   });
 
   it('gives the same chain every time', () => {
     const c = firstOf(data.woodcutting.clearings);
-    const rules = data.woodcutting.feel;
-    const first = resolveChain(c, all(c), 'a1', Math.atan2(60, 70), rules);
-    expect(resolveChain(c, all(c), 'a1', Math.atan2(60, 70), rules)).toEqual(first);
+    const first = resolveChain(c, all(c), 'a1', Math.atan2(60, 70));
+    expect(resolveChain(c, all(c), 'a1', Math.atan2(60, 70))).toEqual(first);
     expect(first.length).toBeGreaterThan(1);
   });
 
   it('refuses a tree that is already down', () => {
-    expect(() => resolveChain(row, new Set(['b']), 'a', RIGHT, STRAIGHT)).toThrow("isn't standing");
+    expect(() => resolveChain(row, new Set(['b']), 'a', RIGHT)).toThrow("isn't standing");
   });
 
   it('puts the fallen top exactly one tree height away', () => {
@@ -151,12 +148,7 @@ describe('the hand-made clearing', () => {
   it('has the diagonal chain it was laid out for', () => {
     const c = firstOf(data.woodcutting.clearings);
     const angle = Math.atan2(170 - 110, 140 - 70);
-    expect(ids(resolveChain(c, all(c), 'a1', angle, data.woodcutting.feel)).slice(0, 4)).toEqual([
-      'a1',
-      'a2',
-      'a3',
-      'a4',
-    ]);
+    expect(ids(resolveChain(c, all(c), 'a1', angle)).slice(0, 4)).toEqual(['a1', 'a2', 'a3', 'a4']);
   });
 });
 
@@ -224,7 +216,7 @@ describe('aim guide (billiards ghost)', () => {
   ]);
 
   it('puts the ghost canopy where it first touches the nearest tree, on its near edge', () => {
-    const preview = previewFall(pair, all(pair), firstOf(pair.trees), RIGHT, STRAIGHT);
+    const preview = previewFall(pair, all(pair), firstOf(pair.trees), RIGHT);
     // Canopies of radius 5 touch at 10 apart: 5 off the line, so √(10² − 5²) ≈ 8.66 short of b.
     expect(preview.ghost.x).toBeCloseTo(90 - Math.sqrt(75));
     expect(preview.ghost.y).toBeCloseTo(100);
@@ -232,16 +224,18 @@ describe('aim guide (billiards ghost)', () => {
     expect(preview.hit?.tree).toBe('b');
   });
 
-  it('shows which way the hit tree will go, matching the chain', () => {
-    const rules = { maxDeflection: 60 };
-    const preview = previewFall(pair, all(pair), firstOf(pair.trees), RIGHT, rules);
-    const chain = resolveChain(pair, all(pair), 'a', RIGHT, rules);
+  it("points the hit tree's arrow straight along the ghost-to-tree line, matching the chain", () => {
+    const preview = previewFall(pair, all(pair), firstOf(pair.trees), RIGHT);
+    const chain = resolveChain(pair, all(pair), 'a', RIGHT);
     expect(preview.hit?.angle).toBeCloseTo(chain[1]?.angle ?? NaN);
     expect(degrees(preview.hit?.angle ?? NaN)).toBe(30);
+    const target = firstOf(pair.trees.slice(1));
+    const ghostToTree = Math.atan2(target.y - preview.ghost.y, target.x - preview.ghost.x);
+    expect(preview.hit?.angle).toBeCloseTo(ghostToTree);
   });
 
   it('falls back to the full reach when nothing is in the way', () => {
-    const preview = previewFall(pair, all(pair), firstOf(pair.trees), LEFT, STRAIGHT);
+    const preview = previewFall(pair, all(pair), firstOf(pair.trees), LEFT);
     expect(preview.hit).toBeUndefined();
     expect(preview.ghost.x).toBeCloseTo(-100);
   });
