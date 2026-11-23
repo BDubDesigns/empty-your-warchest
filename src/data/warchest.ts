@@ -1,13 +1,14 @@
 import type { GameDataInput } from './schema';
 
-// How deposits pour into the warchest in the HUD. Feel numbers, first guesses.
+// How deposits pour into the warchest in the HUD. Feel numbers: halved in speed after the
+// first phone test (it was too fast to enjoy).
 export const warchest = {
   pour: {
     maxPieces: 20,
-    stagger: 0.05,
-    popSeconds: 0.22,
-    flightSeconds: 0.6,
+    stagger: 0.1,
+    popSeconds: 0.44,
+    flightSeconds: 1.2,
     arcHeight: 0.35,
-    closeDelay: 0.3,
+    closeDelay: 0.6,
   },
 } satisfies GameDataInput['warchest'];
