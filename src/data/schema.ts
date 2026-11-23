@@ -175,6 +175,8 @@ export const woodcuttingFeelSchema = z.object({
 export const woodcuttingSchema = z.object({
   /** Recipe that turns each felled tree into logs. */
   recipe: id,
+  /** A chain of N felled trees banks N^chainExponent logs (a forked tree counts once). */
+  chainExponent: positive,
   clearings: z.array(clearingSchema).min(1),
   feel: woodcuttingFeelSchema,
 });

@@ -58,8 +58,6 @@ export async function startApp(): Promise<void> {
         const { PhaserView } = await import('./phaserView');
         phaser = await PhaserView.create(phaserElement, {
           game,
-          logger,
-          feel: feel.woodcutting,
           onStationTap: (stationId) => {
             run(() => navigation.openStation(stationId))();
           },

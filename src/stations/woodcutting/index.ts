@@ -1,4 +1,4 @@
-// Woodcutting mini game (domino felling). Renderer-free parts; the scene loads with Phaser.
+// Woodcutting mini game (domino felling). Renderer-free parts; the 3D view lives in three/.
 
 export * from './feel';
 export * from './logic/aim';

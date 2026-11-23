@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { WoodcuttingRound, type RoundEvent } from '../src/stations/woodcutting';
+import { chainLogs, WoodcuttingRound, type RoundEvent } from '../src/stations/woodcutting';
 import { data, testLogger } from './helpers';
 
 const clearing = data.woodcutting.clearings[0];
@@ -16,9 +16,10 @@ function setup(seed = 7) {
     {
       logger,
       feel: () => feel,
-      bank: (trees) => {
-        banked += trees;
-        return trees;
+      chainExponent: data.woodcutting.chainExponent,
+      bank: (batches) => {
+        banked += batches;
+        return batches;
       },
       onEvent: (event) => events.push(event),
       view: 'test',
@@ -57,8 +58,10 @@ describe('WoodcuttingRound', () => {
     expect(round.phase.kind).toBe('falling');
     for (let i = 0; i < 200 && round.phase.kind === 'falling'; i++) round.tick(0.05);
     expect(round.phase.kind).toBe('pick');
-    expect(banked()).toBe(4);
-    expect(round.logs).toBe(4);
+    // A chain of 4 trees banks 4² logs.
+    expect(banked()).toBe(16);
+    expect(round.logs).toBe(16);
+    expect(events).toContainEqual({ type: 'banked', trees: 4, logs: 16 });
     expect(events.filter((event) => event.type === 'landed')).toHaveLength(4);
 
     const types = (await logger.readAll()).map((event) => event.type);
@@ -74,6 +77,8 @@ describe('WoodcuttingRound', () => {
     );
     const fell = (await logger.readAll()).find((event) => event.type === 'woodcutting.fell');
     expect(fell?.data?.chain).toEqual(['a1', 'a2', 'a3', 'a4']);
+    const bank = (await logger.readAll()).find((event) => event.type === 'woodcutting.bank');
+    expect(bank?.data).toEqual({ trees: 4, logs: 16, roundLogs: 16 });
   });
 
   it('a perfect full pull deals full power plus the bonus, and keeps the aim', () => {
@@ -149,6 +154,19 @@ describe('WoodcuttingRound', () => {
     aimAndChop(round, 'a1', towardA2);
     while (round.phase.kind === 'chop') perfectChop(round);
     round.exit();
-    expect(banked()).toBe(4);
+    expect(banked()).toBe(16);
+  });
+
+  it('an exponent of 1 is a log per tree', () => {
+    expect(chainLogs(4, 1)).toBe(4);
+  });
+});
+
+describe('chainLogs', () => {
+  it('banks trees^exponent logs, as a whole number', () => {
+    expect([1, 2, 3, 4, 6].map((trees) => chainLogs(trees, 2))).toEqual([1, 4, 9, 16, 36]);
+    expect(chainLogs(3, 1.5)).toBe(5);
+    expect(chainLogs(1, 0.5)).toBe(1);
+    expect(chainLogs(2, 0.1)).toBe(1);
   });
 });

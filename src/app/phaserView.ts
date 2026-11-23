@@ -2,19 +2,14 @@ import * as Phaser from 'phaser';
 import { CampScene, type CampDeps } from '../camp/campScene';
 import { WarchestScene } from '../camp/warchestScene';
 import { StationPlaceholderScene } from '../stations/placeholderScene';
-import {
-  WoodcuttingScene,
-  WOODCUTTING_SCENE,
-  type WoodcuttingDeps,
-} from '../stations/woodcutting/woodcuttingScene';
 import type { ScreenView } from './screen';
 import { theme } from './theme';
 
-export interface PhaserDeps extends CampDeps, WoodcuttingDeps {
+export interface PhaserDeps extends CampDeps {
   onWarchestClose: () => void;
 }
 
-const STATION_SCENES = ['station-placeholder', WOODCUTTING_SCENE];
+const STATION_SCENES = ['station-placeholder'];
 
 /** The Phaser game: camp, station scenes, and the warchest view on top. */
 export class PhaserView implements ScreenView {
@@ -38,7 +33,6 @@ export class PhaserView implements ScreenView {
       scene: [
         new CampScene(deps),
         new StationPlaceholderScene(deps.game),
-        new WoodcuttingScene(deps),
         new WarchestScene({ game: deps.game, onClose: deps.onWarchestClose }),
       ],
     });

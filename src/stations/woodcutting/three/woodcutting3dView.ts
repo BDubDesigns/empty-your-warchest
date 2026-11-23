@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { TrunkCarver } from './carve';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import type { ScreenView } from '../../../app/screen';
 import { Sfx } from '../../../app/sfx';
@@ -25,7 +26,10 @@ interface Models {
 
 /** World units per clearing unit: the 360×640 clearing becomes 12×21 units. */
 const SCALE = 1 / 30;
-const STYLE_KEY = 'warchest.spike.treeStyle';
+const STYLE_KEY = 'warchest.woodcutting.treeStyle';
+/** Frames (while aiming) to judge the detailed trees by, and the median frame time that's too slow. */
+const FALLBACK_FRAMES = 90;
+const FALLBACK_MS = 25;
 const MODELS = {
   kenney: ['tree_default', 'tree_oak', 'tree_detailed'].map((name) => `models/kenney/${name}.glb`),
   quaternius: ['CommonTree_1', 'CommonTree_3', 'Pine_1'].map(
@@ -76,6 +80,17 @@ const TRUNK_RADIUS = 0.16;
 const CUT_HEIGHT = 0.7;
 /** How far the axe head swings back toward the camera, around the hands, at full pull. */
 const WIND_ARC = (100 * Math.PI) / 180;
+/** The swing plane tips this far from level, so the blade comes down into the cut a little. */
+const SWING_TILT = (15 * Math.PI) / 180;
+/** Between chops the axe rests this far back out of the notch (share of the full wind), so the cut shows. */
+const AXE_REST = 0.35;
+/** Seconds the axe takes to come back out of the notch after a hit. */
+const AXE_RECOVER = 0.3;
+/** Level reach from the head back to the hands, and how much higher the hands are. */
+const HANDLE_REACH = 0.9;
+/** The struck face turns this far from facing the camera, so the notch shows beside the resting axe. */
+const STRIKE_TURN = (50 * Math.PI) / 180;
+const HANDS_ABOVE = 0.2;
 const DEG = Math.PI / 180;
 
 interface TreeVisual {
@@ -86,6 +101,8 @@ interface TreeVisual {
   stump: THREE.Object3D;
   /** Trunk directions once it has fallen, and when it started sinking away. */
   fallen?: { trunks: number[]; sinkAt?: number };
+  /** Set once the chopped tree has broken at its notch: the trunks tip from this height. */
+  brokenAt?: number;
 }
 
 interface CloseUpFrame {
@@ -158,7 +175,8 @@ export class Woodcutting3DView implements ScreenView {
   #ui!: ReturnType<Woodcutting3DView['buildUi']>;
   #guides!: ReturnType<Woodcutting3DView['buildGuides']>;
   #axe!: { rig: THREE.Group; model: THREE.Group };
-  #bite!: THREE.Mesh;
+  /** The real notch in each tree chopped this round. */
+  #carvers = new Map<string, TrunkCarver>();
   #overview!: CameraPose;
   #cameraFrom: CameraPose | undefined;
   #cameraTo: CameraPose | undefined;
@@ -167,6 +185,10 @@ export class Woodcutting3DView implements ScreenView {
   #shake = 0;
   #frozenUntil = 0;
   #frameTimes: number[] = [];
+  /** Frame times while aiming, for the older-phone fallback. */
+  #aimFrames: number[] = [];
+  /** The player picked a tree style (or the fallback already decided), so leave it alone. */
+  #styleChosen = false;
   #pointer: { id: number; startX: number; startY: number } | undefined;
   #tether: THREE.Vector3 | undefined;
   #lastPhase = '';
@@ -193,12 +215,6 @@ export class Woodcutting3DView implements ScreenView {
     this.#ui = this.buildUi();
     this.#guides = this.buildGuides();
     this.#axe = this.#buildAxe();
-    this.#bite = new THREE.Mesh(
-      new THREE.BoxGeometry(1, 1, 1),
-      new THREE.MeshLambertMaterial({ color: COLORS.wood }),
-    );
-    this.#bite.visible = false;
-    this.#scene.add(this.#bite);
     this.#buildTrees();
     this.#sfx.load(SOUNDS);
     this.#listen();
@@ -229,13 +245,10 @@ export class Woodcutting3DView implements ScreenView {
       {
         logger: this.#deps.logger,
         feel: () => this.#deps.feel.values,
-        bank: (trees) => {
+        chainExponent: this.#deps.game.data.woodcutting.chainExponent,
+        bank: (batches) => {
           const { game } = this.#deps;
-          const result = game.craft(
-            game.data.woodcutting.recipe,
-            { batches: trees },
-            { awardXp: false },
-          );
+          const result = game.craft(game.data.woodcutting.recipe, { batches }, { awardXp: false });
           return result.produced.reduce((sum, stack) => sum + stack.count, 0);
         },
         onEvent: (event) => {
@@ -335,6 +348,8 @@ export class Woodcutting3DView implements ScreenView {
   }
 
   #buildTrees(): void {
+    for (const carver of this.#carvers.values()) carver.dispose();
+    this.#carvers.clear();
     for (const visual of this.#trees.values()) this.#scene.remove(visual.root);
     this.#trees.clear();
     const sources = this.#models[this.#style];
@@ -367,6 +382,11 @@ export class Woodcutting3DView implements ScreenView {
   }
 
   #resetTrees(): void {
+    if (this.#carvers.size > 0) {
+      // Carved and broken trees are rebuilt from the models rather than patched back.
+      this.#buildTrees();
+      return;
+    }
     for (const visual of this.#trees.values()) {
       delete visual.fallen;
       visual.stump.visible = false;
@@ -376,6 +396,21 @@ export class Woodcutting3DView implements ScreenView {
         trunk.scale.setScalar(1);
         trunk.position.y = 0;
       }
+    }
+  }
+
+  /**
+   * The felling chop: finish the notch, break the trunk there, and make each trunk tip over from
+   * the break, leaving the notched stump standing.
+   */
+  #breakAtNotch(visual: TreeVisual, carver: TrunkCarver): void {
+    carver.carve(1);
+    const top = visual.trunks[0];
+    if (top) carver.split(top);
+    visual.brokenAt = CUT_HEIGHT;
+    for (const trunk of visual.trunks) {
+      trunk.position.y = CUT_HEIGHT;
+      for (const child of trunk.children) child.position.y -= CUT_HEIGHT;
     }
   }
 
@@ -520,33 +555,85 @@ export class Woodcutting3DView implements ScreenView {
   }
 
   /**
-   * The flat (horizontal) chop: the hands are left of the trunk and toward the camera, and the
-   * handle lies level, touching the trunk where the blade bites, so the blade faces straight into
-   * it. `cut` points out of the trunk at the bite.
+   * Which side of the trunk the axe strikes (`cut`, level, out of the trunk) and which way the
+   * handle runs from the head back to the hands (`toHands`, level): the hands stand left of the
+   * trunk and toward the camera, with the handle square to `cut` so the blade faces straight in.
    */
-  #grip(frame: CloseUpFrame) {
-    const { base, back, up, right } = frame;
-    const hands = base
+  #strikeSide(frame: CloseUpFrame) {
+    const { back, right } = frame;
+    const turn = STRIKE_TURN;
+    // `right` points to the screen's left in the close-up; the struck face turns to screen right.
+    const cut = back.clone().multiplyScalar(Math.cos(turn)).addScaledVector(right, -Math.sin(turn));
+    const toHands = right
       .clone()
-      .addScaledVector(back, 0.9)
-      .addScaledVector(right, 0.4)
-      .addScaledVector(up, CUT_HEIGHT);
-    const reach = TRUNK_RADIUS + 0.06;
-    const flat = hands.clone().sub(base).setY(0);
-    const distance = flat.length();
-    const length = Math.sqrt(distance * distance - reach * reach);
-    const along = flat
-      .negate()
-      .normalize()
-      .applyAxisAngle(up, -Math.asin(reach / distance));
-    const head = hands.clone().addScaledVector(along, length);
-    const cut = head.clone().sub(base).setY(0).normalize();
-    return { hands, head, along, cut, length };
+      .multiplyScalar(Math.cos(turn))
+      .addScaledVector(back, Math.sin(turn));
+    return { cut, toHands };
   }
 
   /**
-   * Poses the axe lying level at the cut. Pulling back swings the head around the hands, back
-   * toward the camera; letting go swings it flat into the trunk.
+   * The axe at the moment of impact: the head in the notch (deeper as the notch deepens), the
+   * hands back along the handle and a little higher, for a slightly downward strike.
+   */
+  #grip(treeId: string, frame: CloseUpFrame) {
+    const { base, up } = frame;
+    const { cut, toHands } = this.#strikeSide(frame);
+    const carver = this.#carvers.get(treeId);
+    const surface = carver?.surface ?? TRUNK_RADIUS;
+    const depth = carver?.depth ?? 0;
+    const head = base
+      .clone()
+      .addScaledVector(cut, surface + 0.03 - depth * 0.7)
+      .addScaledVector(up, CUT_HEIGHT);
+    const hands = head
+      .clone()
+      .addScaledVector(toHands, HANDLE_REACH)
+      .addScaledVector(up, HANDS_ABOVE);
+    const handle = head.clone().sub(hands);
+    return { hands, head, along: handle.clone().normalize(), cut, length: handle.length() };
+  }
+
+  /**
+   * How far the axe is wound back (share of the full arc). It rests a little out of the notch,
+   * swings all the way in on a hit, then eases back out to rest.
+   */
+  #axeOut(): number {
+    const phase = this.#round.phase;
+    if (phase.kind !== 'chop') return 0;
+    const wound = (pull: number) => AXE_REST + (1 - AXE_REST) * pull;
+    if (phase.hold) return wound(phase.hold.pull);
+    const swing = phase.swing;
+    if (!swing) return AXE_REST;
+    const since = this.#round.now - swing.at;
+    const swingSeconds = this.#round.feel.swingSeconds;
+    if (since < swingSeconds) {
+      const t = since / swingSeconds;
+      return wound(swing.pull) * (1 - t * t);
+    }
+    const back = Math.min((since - swingSeconds) / AXE_RECOVER, 1);
+    return AXE_REST * back * back * (3 - 2 * back);
+  }
+
+  /** The chopped tree's notch, measured the first time it is needed. */
+  #carverFor(treeId: string, frame: CloseUpFrame): TrunkCarver | undefined {
+    const existing = this.#carvers.get(treeId);
+    if (existing) return existing;
+    const visual = this.#trees.get(treeId);
+    if (!visual) return undefined;
+    const carver = new TrunkCarver(
+      visual.root,
+      frame.base,
+      this.#strikeSide(frame).cut,
+      CUT_HEIGHT,
+      TRUNK_RADIUS,
+    );
+    this.#carvers.set(treeId, carver);
+    return carver;
+  }
+
+  /**
+   * Poses the axe at the cut. Pulling back swings the head around the hands, back toward the
+   * camera and a little up; letting go swings it into the notch on a slightly downward path.
    */
   #updateAxe(): void {
     const phase = this.#round.phase;
@@ -557,38 +644,19 @@ export class Woodcutting3DView implements ScreenView {
     }
     const frame = this.#closeUpFrame(phase.tree, phase.angle);
     if (!frame) return;
-    const { hands, along, cut, length } = this.#grip(frame);
+    this.#carverFor(phase.tree, frame);
+    const { hands, along, cut, length } = this.#grip(phase.tree, frame);
     // Model axes: +Y along the handle, −X toward the blade (into the trunk), Z square to both.
     const side = new THREE.Vector3().crossVectors(cut, along).normalize();
     model.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(cut, along, side));
     model.scale.setScalar(length);
     rig.position.copy(hands);
-    // Turn about the vertical through the hands, the way that moves the head out of the cut.
-    const outward = new THREE.Vector3().crossVectors(frame.up, along).dot(cut) >= 0 ? 1 : -1;
-    rig.quaternion.setFromAxisAngle(frame.up, outward * WIND_ARC * this.#round.axeBack);
+    // Turn around the hands so the head heads out of the cut and slightly up: a swing plane tipped
+    // a little from level, so the blade comes back down into the notch.
+    const outward = cut.clone().addScaledVector(frame.up, Math.tan(SWING_TILT)).normalize();
+    const axis = new THREE.Vector3().crossVectors(along, outward).normalize();
+    rig.quaternion.setFromAxisAngle(axis, WIND_ARC * this.#axeOut());
     rig.visible = true;
-  }
-
-  #updateBite(): void {
-    const phase = this.#round.phase;
-    if (phase.kind !== 'chop' || phase.points === 0) {
-      this.#bite.visible = false;
-      return;
-    }
-    const frame = this.#closeUpFrame(phase.tree, phase.angle);
-    if (!frame) return;
-    const depth = Math.min(phase.points / this.#round.feel.chopPoints, 1);
-    const { cut } = this.#grip(frame);
-    const at = frame.base
-      .clone()
-      .addScaledVector(cut, TRUNK_RADIUS * 0.7)
-      .addScaledVector(frame.up, CUT_HEIGHT);
-    // A flat notch, wider than tall, the shape a level swing leaves.
-    this.#bite.position.copy(at);
-    this.#bite.lookAt(at.clone().add(cut));
-    const size = 0.12 + depth * 0.2;
-    this.#bite.scale.set(size * 1.1, size * 0.4, 0.08 + depth * 0.12);
-    this.#bite.visible = true;
   }
 
   // Camera
@@ -771,11 +839,13 @@ export class Woodcutting3DView implements ScreenView {
       const { swing } = event;
       const phase = this.#round.phase;
       const frame = phase.kind === 'chop' ? this.#closeUpFrame(phase.tree, phase.angle) : undefined;
-      if (frame) {
-        const { cut } = this.#grip(frame);
+      const carver = frame && this.#carverFor(event.tree, frame);
+      if (frame && carver) {
+        carver.carve(event.points / feel.chopPoints);
+        const { cut } = this.#strikeSide(frame);
         const at = frame.base
           .clone()
-          .addScaledVector(cut, TRUNK_RADIUS)
+          .addScaledVector(cut, carver.surface)
           .addScaledVector(frame.up, CUT_HEIGHT);
         this.#burst('chip', at, 6 + swing.points * 5, cut);
       }
@@ -801,6 +871,8 @@ export class Woodcutting3DView implements ScreenView {
       for (const step of event.steps) {
         const visual = this.#trees.get(step.tree);
         if (visual) visual.fallen = { trunks: step.trunks };
+        const carver = this.#carvers.get(step.tree);
+        if (visual && carver && visual.brokenAt === undefined) this.#breakAtNotch(visual, carver);
       }
       this.#moveCamera(this.#overview);
       this.#play(`creak-${1 + Math.floor(Math.random() * 3)}`, 0.7);
@@ -819,7 +891,12 @@ export class Woodcutting3DView implements ScreenView {
         if (visual.fallen && visual.fallen.sinkAt === undefined)
           visual.fallen.sinkAt = this.#round.now + 0.5;
       }
-      this.#flash(`+${event.logs} log${event.logs === 1 ? '' : 's'}`, 'good');
+      const { trees, logs } = event;
+      const sum =
+        trees > 1 && logs === trees * trees
+          ? `${trees} × ${trees} = ${logs} logs!`
+          : `+${logs} log${logs === 1 ? '' : 's'}`;
+      this.#flash(sum, trees > 1 ? 'perfect' : 'good');
     } else {
       this.#ui.summaryText.textContent = `${this.#round.felled} trees · ${this.#round.logs} logs to the warchest`;
       this.#ui.summary.hidden = false;
@@ -891,6 +968,7 @@ export class Woodcutting3DView implements ScreenView {
     this.#timer.update(time);
     const realDt = Math.min(this.#timer.getDelta(), 0.05);
     this.#frameTimes.push(realDt * 1000);
+    this.#checkFallback(realDt * 1000);
     const dt = performance.now() < this.#frozenUntil ? 0 : realDt;
     this.#round.tick(dt);
     // Chop is a button, so the phase can change between frames: compare with last frame's.
@@ -902,7 +980,6 @@ export class Woodcutting3DView implements ScreenView {
     this.#updateTrees();
     this.#updateGuides();
     this.#updateAxe();
-    this.#updateBite();
     this.#updateParticles(dt);
     this.#updateCamera();
     this.#updateUi();
@@ -943,15 +1020,18 @@ export class Woodcutting3DView implements ScreenView {
       const faller = falling.get(visual.tree.id);
       if (faller) {
         const started = round.now >= faller.start;
-        visual.stump.visible = started;
+        visual.stump.visible = started && visual.brokenAt === undefined;
         const tilt = started
           ? fallTilt((round.now - faller.start) / feel.fallSeconds, feel.fallEase)
           : 0;
         visual.trunks.forEach((trunk, index) => {
           this.#tip(trunk, faller.step.trunks[index] ?? faller.step.angle, tilt);
+          // A tree broken at its notch tips over the stump, then its butt drops to the ground.
+          if (visual.brokenAt !== undefined)
+            trunk.position.y = visual.brokenAt * (1 - Math.sin(tilt));
         });
       } else if (visual.fallen) {
-        visual.stump.visible = true;
+        visual.stump.visible = visual.brokenAt === undefined;
         const sinking =
           visual.fallen.sinkAt === undefined
             ? 0
@@ -1154,24 +1234,52 @@ export class Woodcutting3DView implements ScreenView {
 
   // Style toggle and logs
 
+  /** The player's pick if they made one; otherwise the detailed trees, watched for slow frames. */
   #savedStyle(): TreeStyle {
+    let saved: string | null = null;
     try {
-      return localStorage.getItem(STYLE_KEY) === 'quaternius' ? 'quaternius' : 'kenney';
+      saved = localStorage.getItem(STYLE_KEY);
     } catch {
-      return 'kenney';
+      // No storage: use the default.
     }
+    this.#styleChosen = saved === 'kenney' || saved === 'quaternius';
+    return saved === 'kenney' ? 'kenney' : 'quaternius';
   }
 
-  #setStyle(style: TreeStyle): void {
+  /**
+   * Older phones: if the detailed trees run slowly while aiming (when nothing heavy is happening),
+   * switch to the simpler trees for good. Only when the player hasn't picked a style themselves.
+   */
+  #checkFallback(frameMs: number): void {
+    const kind = this.#round.phase.kind;
+    if (this.#styleChosen || this.#style !== 'quaternius') return;
+    if (kind !== 'pick' && kind !== 'aim') return;
+    this.#aimFrames.push(frameMs);
+    if (this.#aimFrames.length < FALLBACK_FRAMES) return;
+    const sorted = [...this.#aimFrames].sort((a, b) => a - b);
+    const median = sorted[Math.floor(sorted.length / 2)] ?? 0;
+    this.#styleChosen = true;
+    if (median > FALLBACK_MS) this.#setStyle('kenney', { auto: true, p50: median });
+  }
+
+  #setStyle(style: TreeStyle, auto?: { auto: true; p50: number }): void {
     this.#style = style;
+    this.#styleChosen = true;
     try {
       localStorage.setItem(STYLE_KEY, style);
     } catch {
       // Not saved; it still applies until the page reloads.
     }
     this.#buildTrees();
+    // Mid-chop the notch was rebuilt away with the old trees: cut it again.
+    const phase = this.#round.phase;
+    if (phase.kind === 'chop' && phase.points > 0) {
+      const frame = this.#closeUpFrame(phase.tree, phase.angle);
+      if (frame)
+        this.#carverFor(phase.tree, frame)?.carve(phase.points / this.#round.feel.chopPoints);
+    }
     this.#updateTrees();
-    this.#deps.logger.log('woodcutting3d.style', { style });
+    this.#deps.logger.log('woodcutting3d.style', { style, ...auto });
   }
 
   #logPerformance(): void {
@@ -1186,6 +1294,7 @@ export class Woodcutting3DView implements ScreenView {
       max: at(1),
       style: this.#style,
       pixelRatio: this.#renderer.getPixelRatio(),
+      carveMs: Math.round(Math.max(0, ...[...this.#carvers.values()].map((c) => c.slowestMs))),
     });
   }
 }

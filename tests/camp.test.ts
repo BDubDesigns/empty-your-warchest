@@ -10,7 +10,6 @@ describe('camp layout', () => {
     const spots = campSpots(data);
     expect(spots.filter((spot) => spot.kind === 'station').map((spot) => spot.id)).toEqual([
       'tree_line',
-      'tree_line_3d',
       'workbench',
       'fire_pit',
       'war_tent',
@@ -27,7 +26,7 @@ describe('camp layout', () => {
         id: 'sawmill',
         name: 'Sawmill',
         skill: 'woodcutting',
-        mechanic: 'woodcutting',
+        mechanic: 'woodcutting3d',
         camp: { x: 0.2, y: 0.7 },
       });
     });

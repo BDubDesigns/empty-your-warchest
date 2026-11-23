@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { expect, test, type Page } from '@playwright/test';
 import { stations } from '../src/data/stations';
 
-const tile = stations.find((station) => station.id === 'tree_line_3d');
+const tile = stations.find((station) => station.id === 'tree_line');
 
 async function touch(
   page: Page,
@@ -35,6 +35,10 @@ test('3D woodcutting: aim, Chop, chop in the close-up, the tree falls, logs to t
   if (!tile) throw new Error('No 3D tree line in data');
   const errors: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));
+  // The simpler trees: the detailed ones (and carving them) are slow in software rendering.
+  await page.addInitScript(() => {
+    localStorage.setItem('warchest.woodcutting.treeStyle', 'kenney');
+  });
   await page.goto('/');
   await expect(page.locator('body')).toHaveAttribute('data-view', 'camp');
   const camp = await page.locator('#screen-phaser canvas').boundingBox();

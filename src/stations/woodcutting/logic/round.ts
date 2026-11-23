@@ -78,11 +78,21 @@ export interface RoundHooks {
   logger: EventLogger;
   /** Read every time, so live tuning applies at once. */
   feel: () => WoodcuttingFeel;
-  /** Banks felled trees into the warchest; returns the logs gained. */
-  bank: (trees: number) => number;
+  /**
+   * Banks a chain into the warchest: `batches` runs of the felling recipe (a chain of N trees
+   * is worth N^chainExponent of them; `trees` is N). Returns the logs gained.
+   */
+  bank: (batches: number, trees: number) => number;
+  /** Economy: a chain of N trees banks N^chainExponent logs. Defaults to 1 (a log per tree). */
+  chainExponent?: number;
   onEvent?: (event: RoundEvent) => void;
   /** Which view is playing, for the logs (e.g. '3d'). */
   view: string;
+}
+
+/** Logs a chain of `trees` is worth: trees^exponent, as a whole number (at least 1). */
+export function chainLogs(trees: number, exponent: number): number {
+  return Math.max(1, Math.round(trees ** exponent));
 }
 
 /**
@@ -373,7 +383,7 @@ export class WoodcuttingRound {
     if (this.fallers.length === 0) return;
     const trees = this.fallers.length;
     this.fallers = [];
-    const logs = this.#hooks.bank(trees);
+    const logs = this.#hooks.bank(chainLogs(trees, this.#hooks.chainExponent ?? 1), trees);
     this.felled += trees;
     this.logs += logs;
     this.#log('woodcutting.bank', { trees, logs, roundLogs: this.logs });
