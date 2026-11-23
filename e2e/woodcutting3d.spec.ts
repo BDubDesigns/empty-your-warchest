@@ -78,10 +78,16 @@ test('3D woodcutting: aim, Chop, chop in the close-up, the tree falls, logs to t
     timeout: 15_000,
   });
 
+  // The logs pour into the HUD chest, which then shows the warchest's total.
+  const chest = page.locator('.warchest-hud');
+  await expect(chest).toHaveAttribute('data-settled', 'true', { timeout: 20_000 });
+  const shown = await chest.getAttribute('data-count');
+
   await page.getByRole('button', { name: 'Back to camp' }).tap();
   await expect(page.locator('body')).toHaveAttribute('data-view', 'camp');
   await page.getByRole('button', { name: 'Open debug menu' }).tap();
   await expect(page.getByText(/^Log × \d+$/)).toBeVisible();
+  await expect(page.getByText(`Log × ${shown ?? '?'}`)).toBeVisible();
   const download = page.getByRole('button', { name: 'Download logs' });
   await expect(download).toBeEnabled();
   const [file] = await Promise.all([page.waitForEvent('download'), download.tap()]);

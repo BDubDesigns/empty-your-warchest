@@ -5,6 +5,7 @@ export * from './clock';
 export * from './game';
 export * from './indexedDbSink';
 export * from './inventory';
+export * from './liveChoice';
 export * from './liveTuning';
 export * from './logger';
 export * from './recipes';

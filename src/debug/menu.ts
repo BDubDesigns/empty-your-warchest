@@ -1,4 +1,4 @@
-import type { EventLogger, Game, LiveTuning, LogEvent, SaveStore } from '../core';
+import type { Choice, EventLogger, Game, LiveTuning, LogEvent, SaveStore } from '../core';
 import { canShareFile, downloadFile, shareFile } from './exportFile';
 
 export interface DebugDeps {
@@ -7,6 +7,8 @@ export interface DebugDeps {
   saves: SaveStore;
   /** Feel numbers the menu can change live with sliders. */
   tuning: readonly LiveTuning<Record<string, number>>[];
+  /** Picks kept on this phone (e.g. the tree style), shown as buttons. */
+  choices: readonly Choice[];
   buildLabel: string;
 }
 
@@ -61,7 +63,8 @@ function logFile(events: LogEvent[], buildLabel: string, type: LogFileType): Fil
 }
 
 /**
- * Debug menu: export logs, add items, set skill levels, fake time passing, reset the save.
+ * Debug menu: export logs, add items, set skill levels, pick options, fake time passing, reset
+ * the save.
  * Built from the data, so new items and skills show up here without code changes.
  */
 export function mountDebugMenu(root: HTMLElement, deps: DebugDeps): void {
@@ -252,6 +255,33 @@ export function mountDebugMenu(root: HTMLElement, deps: DebugDeps): void {
     say('Save wiped. Logs are kept.');
   });
 
+  // Options
+  const choiceRows = deps.choices.map((choice) => {
+    const buttons = choice.options.map((option) => {
+      const button = el('button', { type: 'button', textContent: option.label });
+      button.addEventListener('click', () => {
+        choice.set(option.value);
+        logger.log('debug.choice', { choice: choice.label, value: option.value });
+      });
+      return { button, value: option.value };
+    });
+    const show = (): void => {
+      for (const { button, value } of buttons) {
+        button.setAttribute('aria-pressed', String(value === choice.value));
+      }
+    };
+    choice.onChange(show);
+    show();
+    return el('div', { className: 'debug-choice' }, [
+      el('p', { className: 'debug-choice-label', textContent: choice.label }),
+      el(
+        'div',
+        { className: 'debug-row' },
+        buttons.map(({ button }) => button),
+      ),
+    ]);
+  });
+
   // Live tuning
   const tuningSections = deps.tuning.map((tuning) => {
     const sliders = tuning.tunables.map((tunable) => {
@@ -365,6 +395,7 @@ export function mountDebugMenu(root: HTMLElement, deps: DebugDeps): void {
         warchestList,
       ),
       section('Skills', ...skillRows.map((skill) => skill.row)),
+      ...(choiceRows.length > 0 ? [section('Options', ...choiceRows)] : []),
       ...tuningSections,
       section('Time', lastSeen, el('div', { className: 'debug-row' }, skipButtons)),
       section('Save', resetButton),

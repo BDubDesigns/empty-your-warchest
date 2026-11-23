@@ -8,12 +8,13 @@ import {
   systemClock,
   type Clock,
   type EventSink,
+  type LiveChoice,
   type LiveTuning,
 } from '../core';
 import type { WoodcuttingFeel } from '../data';
 import { loadGameData } from '../data';
 import { checkMechanics } from '../stations';
-import { woodcuttingFeel } from '../stations/woodcutting';
+import { treeStyleChoice, woodcuttingFeel, type TreeStyle } from '../stations/woodcutting';
 
 export interface Booted {
   game: Game;
@@ -21,6 +22,8 @@ export interface Booted {
   logger: EventLogger;
   saves: SaveStore;
   feel: { woodcutting: LiveTuning<WoodcuttingFeel> };
+  /** Picks kept on this phone, shown in the debug menu. */
+  choices: { treeStyle: LiveChoice<TreeStyle> };
 }
 
 async function openSink(): Promise<{ sink: EventSink; fallback?: string }> {
@@ -77,6 +80,7 @@ export async function bootGame(buildLabel: string): Promise<Booted> {
   });
 
   const feel = { woodcutting: woodcuttingFeel(data.woodcutting.feel, localStorageStore()) };
+  const choices = { treeStyle: treeStyleChoice(localStorageStore()) };
 
-  return { game, clock, logger, saves, feel };
+  return { game, clock, logger, saves, feel, choices };
 }

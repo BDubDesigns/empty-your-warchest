@@ -1,21 +1,23 @@
 import * as THREE from 'three';
 import { TrunkCarver } from './carve';
-import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import type { ScreenView } from '../../../app/screen';
+import { loadModel } from '../../../app/models';
 import { Sfx } from '../../../app/sfx';
-import type { EventLogger, Game, LiveTuning } from '../../../core';
+import { WarchestHud, type Deposit, type ScreenPoint } from '../../../app/warchestHud';
+import type { EventLogger, Game, LiveChoice, LiveTuning } from '../../../core';
 import type { Clearing, ClearingTree, WoodcuttingFeel } from '../../../data';
 import { fallTip, previewFall, trunkAngles, type FallStep, type Point } from '../logic/chain';
 import { fallTilt } from '../logic/fall';
 import { WoodcuttingRound, chainLogs, type RoundEvent } from '../logic/round';
+import type { TreeStyle } from '../treeStyle';
 
 export interface Woodcutting3DDeps {
   game: Game;
   logger: EventLogger;
   feel: LiveTuning<WoodcuttingFeel>;
+  /** Which trees to draw; picked in the debug menu. */
+  treeStyle: LiveChoice<TreeStyle>;
 }
-
-type TreeStyle = 'kenney' | 'quaternius';
 
 interface Models {
   kenney: THREE.Object3D[];
@@ -26,7 +28,6 @@ interface Models {
 
 /** World units per clearing unit: the 360×640 clearing becomes 12×21 units. */
 const SCALE = 1 / 30;
-const STYLE_KEY = 'warchest.woodcutting.treeStyle';
 /** Frames (while aiming) to judge the detailed trees by, and the median frame time that's too slow. */
 const FALLBACK_FRAMES = 90;
 const FALLBACK_MS = 25;
@@ -143,24 +144,6 @@ interface Particle {
   kind: 'chip' | 'dust';
 }
 
-/**
- * Makes every material plain and matte. Some packs export full metalness, which renders
- * black without a reflection map.
- */
-function matte(model: THREE.Object3D): THREE.Object3D {
-  model.traverse((child) => {
-    if (!(child instanceof THREE.Mesh)) return;
-    const materials: unknown[] = Array.isArray(child.material) ? child.material : [child.material];
-    for (const material of materials) {
-      if (material instanceof THREE.MeshStandardMaterial) {
-        material.metalness = 0;
-        material.roughness = 1;
-      }
-    }
-  });
-  return model;
-}
-
 function treeSeed(id: string): number {
   let hash = 0;
   for (const char of id) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
@@ -168,8 +151,8 @@ function treeSeed(id: string): number {
 }
 
 /**
- * 3D spike of the woodcutting mini game: the same rules (WoodcuttingRound) drawn with
- * three.js and low-poly CC0 models. An angled overview of the clearing for aiming and
+ * The woodcutting mini game in 3D: the rules (WoodcuttingRound) drawn with three.js and
+ * low-poly CC0 models. An angled overview of the clearing for aiming and
  * watching chains; a close-up facing the trunk for chopping.
  */
 export class Woodcutting3DView implements ScreenView {
@@ -181,6 +164,10 @@ export class Woodcutting3DView implements ScreenView {
   readonly #camera = new THREE.PerspectiveCamera(42, 1, 0.1, 200);
   readonly #models: Models;
   readonly #sfx = new Sfx();
+  /** The warchest in the HUD, which banked logs pour into. */
+  readonly #hud: WarchestHud;
+  /** A banked chain waiting for the camera to settle on the overview before its logs pour. */
+  #pendingPour: { deposit: Deposit; trees: string[] } | undefined;
   readonly #timer = new THREE.Timer();
   readonly #raycaster = new THREE.Raycaster();
   readonly #groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
@@ -217,14 +204,21 @@ export class Woodcutting3DView implements ScreenView {
   readonly #framer = new THREE.PerspectiveCamera(42, 1, 0.1, 200);
   #frame = 0;
 
-  private constructor(element: HTMLElement, deps: Woodcutting3DDeps, models: Models) {
+  private constructor(
+    element: HTMLElement,
+    deps: Woodcutting3DDeps,
+    models: Models,
+    hud: WarchestHud,
+  ) {
+    this.#hud = hud;
     this.#element = element;
     this.#deps = deps;
     this.#models = models;
     const [clearing] = deps.game.data.woodcutting.clearings;
     if (!clearing) throw new Error('No woodcutting clearing in data');
     this.#clearing = clearing;
-    this.#style = this.#savedStyle();
+    this.#style = deps.treeStyle.value;
+    this.#styleChosen = deps.treeStyle.picked;
 
     this.#renderer = new THREE.WebGLRenderer({ antialias: true });
     this.#renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -240,6 +234,10 @@ export class Woodcutting3DView implements ScreenView {
     this.#buildTrees();
     this.#sfx.load(SOUNDS);
     this.#listen();
+    deps.treeStyle.onChange((style) => {
+      this.#styleChosen = true;
+      this.#applyStyle(style);
+    });
     new ResizeObserver(() => {
       this.#resize();
     }).observe(element);
@@ -247,15 +245,18 @@ export class Woodcutting3DView implements ScreenView {
 
   /** Loads the models, then builds the view. */
   static async create(element: HTMLElement, deps: Woodcutting3DDeps): Promise<Woodcutting3DView> {
-    const loader = new GLTFLoader();
-    const load = async (url: string) => matte((await loader.loadAsync(url)).scene);
-    const [kenney, quaternius, stump, axe] = await Promise.all([
-      Promise.all(MODELS.kenney.map(load)),
-      Promise.all(MODELS.quaternius.map(load)),
-      load(MODELS.stump),
-      load(MODELS.axe),
+    const { game } = deps;
+    const recipe = game.data.recipes.find((entry) => entry.id === game.data.woodcutting.recipe);
+    const item = recipe?.outputs[0]?.item;
+    if (!item) throw new Error('The woodcutting recipe makes nothing');
+    const [kenney, quaternius, stump, axe, hud] = await Promise.all([
+      Promise.all(MODELS.kenney.map(loadModel)),
+      Promise.all(MODELS.quaternius.map(loadModel)),
+      loadModel(MODELS.stump),
+      loadModel(MODELS.axe),
+      WarchestHud.create(element, { game, item }),
     ]);
-    return new Woodcutting3DView(element, deps, { kenney, quaternius, stump, axe });
+    return new Woodcutting3DView(element, deps, { kenney, quaternius, stump, axe }, hud);
   }
 
   // ScreenView
@@ -294,6 +295,8 @@ export class Woodcutting3DView implements ScreenView {
 
   stop(): void {
     this.#renderer.setAnimationLoop(null);
+    this.#pendingPour = undefined;
+    this.#hud.settle();
     this.#round.exit();
     this.#logPerformance();
     delete document.body.dataset.woodcutting;
@@ -1119,17 +1122,12 @@ export class Woodcutting3DView implements ScreenView {
       this.#shake = Math.min(0.05 + combo * 0.025, 0.22) * feel.shakeStrength;
       if (combo > 1) this.#showCounter(combo);
     } else if (event.type === 'banked') {
-      for (const visual of this.#trees.values()) {
-        if (visual.fallen && visual.fallen.sinkAt === undefined)
-          visual.fallen.sinkAt = this.#round.now + 0.5;
-      }
-      const { trees, logs } = event;
-      const sum =
-        trees > 1 && logs === trees * trees
-          ? `${trees} × ${trees} = ${logs} logs!`
-          : `+${logs} log${logs === 1 ? '' : 's'}`;
-      // Bigger chains, bigger payout.
-      this.#flash(sum, trees > 1 ? 'perfect' : 'good', Math.min(22 + (trees - 1) * 4, 40));
+      // The logs are in the warchest; the chest shows them arriving once the camera is back on
+      // the whole clearing, pouring out of each stump as the felled trunks are hauled off.
+      const trees = [...this.#trees.values()]
+        .filter((visual) => visual.fallen && visual.fallen.sinkAt === undefined)
+        .map((visual) => visual.tree.id);
+      this.#pendingPour = { deposit: this.#hud.hold(event.logs), trees };
     } else {
       this.#ui.summaryText.textContent = `${this.#round.felled} trees · ${this.#round.logs} logs to the warchest`;
       this.#ui.summary.hidden = false;
@@ -1215,8 +1213,27 @@ export class Woodcutting3DView implements ScreenView {
     this.#updateAxe();
     this.#updateParticles(dt);
     this.#updateCamera(realDt);
+    this.#startPendingPour();
     this.#updateUi();
     this.#renderer.render(this.#scene, this.#camera);
+  }
+
+  /** Once the camera has settled back on the overview, haul off the chain and pour its logs. */
+  #startPendingPour(): void {
+    const pending = this.#pendingPour;
+    if (!pending || this.#chase || this.#cameraTo) return;
+    this.#pendingPour = undefined;
+    const { clientWidth: width, clientHeight: height } = this.#element;
+    const points: ScreenPoint[] = [];
+    for (const id of pending.trees) {
+      const visual = this.#trees.get(id);
+      if (!visual) continue;
+      if (visual.fallen) visual.fallen.sinkAt = this.#round.now;
+      const projected = this.#world(visual.tree, 0.25).project(this.#camera);
+      points.push({ x: ((projected.x + 1) / 2) * width, y: ((1 - projected.y) / 2) * height });
+      this.#burst('chip', this.#world(visual.tree, 0.25), 8);
+    }
+    pending.deposit.pour(points);
   }
 
   #enterCloseUp(): void {
@@ -1289,13 +1306,7 @@ export class Woodcutting3DView implements ScreenView {
       return element;
     };
     const root = el('div', 'w3d-ui');
-    const total = el('div', 'w3d-total');
     const perf = el('div', 'w3d-perf');
-    const style = el('button', 'w3d-style');
-    style.type = 'button';
-    style.addEventListener('click', () => {
-      this.#setStyle(this.#style === 'kenney' ? 'quaternius' : 'kenney');
-    });
     const hint = el('div', 'w3d-hint');
     const panel = el('div', 'w3d-panel');
     const aim = el('div', 'w3d-aim');
@@ -1349,12 +1360,10 @@ export class Woodcutting3DView implements ScreenView {
     );
     summary.append(summaryTitle, summaryText, again);
     summary.hidden = true;
-    root.append(total, style, perf, hint, panel, flashes, counter, summary);
+    root.append(perf, hint, panel, flashes, counter, summary);
     this.#element.append(root);
     return {
-      total,
       perf,
-      style,
       hint,
       aim,
       chop,
@@ -1387,8 +1396,6 @@ export class Woodcutting3DView implements ScreenView {
       };
       ui.hint.textContent = hints[phase.kind] ?? '';
     }
-    ui.total.textContent = `Logs this round: ${round.logs}`;
-    ui.style.textContent = `Trees: ${this.#style === 'kenney' ? 'Kenney' : 'Quaternius'}`;
     ui.aim.hidden = phase.kind !== 'aim';
     ui.chop.disabled = !round.canChop;
     ui.chopPanel.hidden = phase.kind !== 'chop';
@@ -1488,19 +1495,7 @@ export class Woodcutting3DView implements ScreenView {
     counter.classList.add('w3d-pop');
   }
 
-  // Style toggle and logs
-
-  /** The player's pick if they made one; otherwise the detailed trees, watched for slow frames. */
-  #savedStyle(): TreeStyle {
-    let saved: string | null = null;
-    try {
-      saved = localStorage.getItem(STYLE_KEY);
-    } catch {
-      // No storage: use the default.
-    }
-    this.#styleChosen = saved === 'kenney' || saved === 'quaternius';
-    return saved === 'kenney' ? 'kenney' : 'quaternius';
-  }
+  // Tree style and logs
 
   /**
    * Older phones: if the detailed trees run slowly while aiming (when nothing heavy is happening),
@@ -1515,17 +1510,16 @@ export class Woodcutting3DView implements ScreenView {
     const sorted = [...this.#aimFrames].sort((a, b) => a - b);
     const median = sorted[Math.floor(sorted.length / 2)] ?? 0;
     this.#styleChosen = true;
-    if (median > FALLBACK_MS) this.#setStyle('kenney', { auto: true, p50: median });
+    if (median > FALLBACK_MS) {
+      this.#deps.logger.log('woodcutting3d.style', { style: 'kenney', auto: true, p50: median });
+      this.#deps.treeStyle.set('kenney');
+    }
   }
 
-  #setStyle(style: TreeStyle, auto?: { auto: true; p50: number }): void {
+  /** Redraws the clearing with the other trees (picked in the debug menu, or by the fallback). */
+  #applyStyle(style: TreeStyle): void {
+    if (style === this.#style) return;
     this.#style = style;
-    this.#styleChosen = true;
-    try {
-      localStorage.setItem(STYLE_KEY, style);
-    } catch {
-      // Not saved; it still applies until the page reloads.
-    }
     this.#buildTrees();
     // Mid-chop the notch was rebuilt away with the old trees: cut it again.
     const phase = this.#round.phase;
@@ -1535,7 +1529,6 @@ export class Woodcutting3DView implements ScreenView {
         this.#carverFor(phase.tree, frame)?.carve(phase.points / this.#round.feel.chopPoints);
     }
     this.#updateTrees();
-    this.#deps.logger.log('woodcutting3d.style', { style, ...auto });
   }
 
   #logPerformance(): void {
