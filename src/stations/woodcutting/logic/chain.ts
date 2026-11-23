@@ -191,6 +191,18 @@ function restTilt(
 interface BoulderHit {
   boulder: Boulder;
   contactAt: number;
+  /** -1 (clipped at one edge) … 0 (dead on) … 1 (other edge). */
+  offset: number;
+}
+
+/**
+ * Which way a falling tree knocks a boulder: the pool cut rule, from how squarely it hits. Dead on
+ * it rolls straight along the fall line; a half hit sends it 30° off to its side; clipping the
+ * edge squirts it out nearly sideways. Taken from the offset, not the contact point, so every
+ * change of aim turns it, even for a boulder right beside the stump.
+ */
+export function boulderKnock(angle: number, offset: number): number {
+  return angle + Math.asin(Math.max(-1, Math.min(1, offset)));
 }
 
 /** A standing tree a falling trunk knocks over: the hit, the line it was hit on, and when. */
@@ -222,7 +234,7 @@ export function fallPath(
     .flatMap((boulder) => {
       const contact = touch(clearing, tree, angle, boulder, boulder.radius);
       return contact && before(contact.contactAt)
-        ? [{ boulder, contactAt: contact.contactAt }]
+        ? [{ boulder, contactAt: contact.contactAt, offset: contact.offset }]
         : [];
     })
     .sort((a, b) => a.contactAt - b.contactAt);
@@ -447,7 +459,7 @@ export function knockAngle(hitter: ClearingTree, angle: number, hit: Hit): numbe
 /**
  * Works out the whole chain before anything is animated. The chopped tree falls at `angle`;
  * each tree it hits is knocked over billiards-style (see knockAngle), each boulder it touches is
- * knocked rolling the same way (see rollBoulder), and so on. Each boulder rolls once per chain.
+ * knocked rolling by the pool cut rule (see boulderKnock, rollBoulder), and so on. Each boulder rolls once per chain.
  * Deterministic: the same clearing, standing trees and angle give the same chain.
  */
 export function resolveFall(
@@ -551,12 +563,9 @@ export function resolveFall(
           } else {
             const boulder = resting.get(item.id);
             if (!boulder) continue;
-            const contact = {
-              x: mover.tree.x + Math.cos(item.angle) * item.at,
-              y: mover.tree.y + Math.sin(item.angle) * item.at,
-            };
             const by = { hitBy: mover.tree.id, byBoulder: false, hitAt: item.at };
-            next.push(roll(boulder, knockFrom(contact, boulder), clearing.boulderRoll, by, depth));
+            const knock = boulderKnock(item.angle, item.boulder.offset);
+            next.push(roll(boulder, knock, clearing.boulderRoll, by, depth));
           }
         }
       } else {
@@ -632,7 +641,7 @@ export function previewFall(
       clearing,
       left,
       boulder.boulder,
-      knockFrom(contact, boulder.boulder),
+      boulderKnock(angle, boulder.offset),
       clearing.boulderRoll,
       clearing.boulders.filter((other) => other.id !== boulder.boulder.id),
     );

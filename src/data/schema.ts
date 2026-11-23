@@ -141,8 +141,9 @@ const clearingSchema = z.object({
     )
     .min(1),
   /**
-   * Boulders: a falling tree that touches one (its trunk or canopy, lying down) knocks it rolling,
-   * billiards-style, along the line from its canopy centre at contact through the boulder's centre.
+   * Boulders: a falling tree that touches one (its trunk or canopy, lying down) knocks it rolling
+   * by the pool cut rule: dead on straight along the fall, a half hit 30° off to its side, an edge
+   * clipped nearly sideways.
    * It rolls `boulderRoll` units, knocking over every tree it runs into the same way, bounces off
    * the fence around the clearing (keeping `boulderBounce` of the roll left each time), and stops
    * early against the cabin (a crash) or another boulder (which it sets rolling). It stays where

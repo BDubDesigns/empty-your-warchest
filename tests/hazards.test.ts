@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { Clearing } from '../src/data';
 import {
   afterChain,
+  boulderKnock,
   hitsCabin,
   previewFall,
   resolveFall,
@@ -63,6 +64,26 @@ describe('boulders', () => {
     // It stays where it stopped.
     const moved = afterChain(c, chain).boulders[0];
     expect(moved?.x).toBeCloseTo(300, 0);
+  });
+
+  it('turns the roll with the aim, even for a boulder right beside the stump', () => {
+    const c = clearing([{ id: 'a', x: 100, y: 100, height: 60 }], {
+      boulders: [{ id: 'b', x: 135, y: 100, radius: 10 }],
+    });
+    const rollAt = (angle: number) => resolveFall(c, all(c), 'a', angle).rolls[0]?.angle;
+    const straight = rollAt(RIGHT);
+    expect(straight).toBeCloseTo(RIGHT, 5);
+    const nudged = rollAt(RIGHT - 0.2);
+    // Aimed a little up past it, it's clipped on its lower side and goes off further down.
+    expect(nudged).toBeDefined();
+    expect(nudged).not.toBeCloseTo(straight ?? 0, 2);
+    expect(nudged ?? 0).toBeGreaterThan(RIGHT - 0.2);
+  });
+
+  it('a half hit sends it 30° off, the pool cut rule', () => {
+    expect(boulderKnock(RIGHT, 0.5)).toBeCloseTo(Math.PI / 6, 5);
+    expect(boulderKnock(RIGHT, -0.5)).toBeCloseTo(-Math.PI / 6, 5);
+    expect(boulderKnock(RIGHT, 0)).toBe(RIGHT);
   });
 
   it('bounces off the fence like a cushion, angle in = angle out', () => {
