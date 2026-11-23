@@ -24,7 +24,7 @@ test('every station and the chest can be entered and exited by touch', async ({ 
   });
   await page.goto('/');
   await viewIs(page, 'camp');
-  const back = page.getByRole('button', { name: 'Back to camp' });
+  const back = page.locator('#back-button');
   await expect(back).toBeHidden();
 
   for (const station of stations) {
@@ -34,7 +34,15 @@ test('every station and the chest can be entered and exited by touch', async ({ 
     const screen = screens[station.mechanic] ?? 'phaser';
     await expect(page.locator('body')).toHaveAttribute('data-screen', screen);
     await expect(page.locator(`#screen-${screen} canvas`).first()).toBeVisible();
-    await back.tap();
+    if (screen === 'wood3d') {
+      // Woodcutting's top button ends the round; its summary has the way back.
+      await expect(back).toHaveText('End round');
+      await back.tap();
+      await page.locator('.w3d-summary').getByRole('button', { name: 'Back to camp' }).tap();
+    } else {
+      await expect(back).toHaveText('Back to camp');
+      await back.tap();
+    }
     await viewIs(page, 'camp');
     await expect(page.locator('#screen-phaser canvas')).toBeVisible();
   }

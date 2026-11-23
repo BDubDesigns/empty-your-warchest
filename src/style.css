@@ -624,6 +624,17 @@ body:not([data-view='camp']) #build-label {
   margin-top: 6px;
 }
 
+/* Ended early with trees still standing: going back to the round comes first. */
+.w3d-summary > .w3d-button {
+  width: 100%;
+  margin-top: 6px;
+  font-size: 20px;
+}
+
+.w3d-summary > .w3d-button[hidden] {
+  display: none;
+}
+
 .w3d-summary-buttons .w3d-button {
   padding: 0 16px;
   font-size: 18px;

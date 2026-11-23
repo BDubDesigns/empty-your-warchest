@@ -1,4 +1,5 @@
 import { mountDebugMenu } from '../debug';
+import { BackButton } from './backButton';
 import { bootGame } from './boot';
 import { Navigation, type View } from './navigation';
 import type { PhaserView } from './phaserView';
@@ -48,7 +49,9 @@ export async function startApp(): Promise<void> {
   const phaserElement = byId('screen-phaser');
   const threeElement = byId('screen-three');
   const wood3dElement = byId('screen-wood3d');
-  const backButton = byId('back-button');
+  const backButton = new BackButton(byId('back-button'), () => {
+    run(() => navigation.back())();
+  });
   let phaser: PhaserView | undefined;
   const run = (action: () => Promise<void>) => () => {
     action().catch(showFatal);
@@ -79,6 +82,7 @@ export async function startApp(): Promise<void> {
           haptics,
           clearings,
           onLeave: run((): Promise<void> => navigation.back()),
+          backButton,
         });
       }),
       three: lazyScreen(threeElement, async () => {
@@ -115,13 +119,9 @@ export async function startApp(): Promise<void> {
     },
     (view) => {
       document.body.dataset.view = viewName(view);
-      backButton.hidden = view.kind === 'camp';
+      backButton.setShown(view.kind !== 'camp');
     },
   );
 
-  backButton.addEventListener(
-    'click',
-    run(() => navigation.back()),
-  );
   await navigation.start().catch(showFatal);
 }

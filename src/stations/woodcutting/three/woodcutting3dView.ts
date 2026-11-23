@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { TrunkCarver } from './carve';
 import type { ScreenView } from '../../../app/screen';
+import type { BackButton } from '../../../app/backButton';
 import type { Haptics } from '../../../app/haptics';
 import { loadModel } from '../../../app/models';
 import { Sfx } from '../../../app/sfx';
@@ -26,6 +27,8 @@ export interface Woodcutting3DDeps {
   clearings: ClearingPicker;
   /** Leaves the station (the round summary's Back to camp). */
   onLeave: () => void;
+  /** The shell's top-left button, which becomes End round during a round. */
+  backButton: BackButton;
 }
 
 interface Models {
@@ -183,8 +186,11 @@ export class Woodcutting3DView implements ScreenView {
   readonly #hud: WarchestHud;
   /** A banked chain waiting for the camera to settle on the overview before its logs pour. */
   #pendingPour: { deposit: Deposit; trees: string[] } | undefined;
-  /** The clearing is cleared: the summary shows once the last logs are in the chest. */
-  #summaryPending = false;
+  /**
+   * The summary to show once the last logs are in the chest: the clearing is cleared, or the
+   * player tapped End round (and can still keep chopping).
+   */
+  #summaryPending: 'cleared' | 'paused' | undefined;
   #summaryTimers: number[] = [];
   /** The longest chain banked this round, for the summary. */
   #bestChain = 0;
@@ -310,7 +316,8 @@ export class Woodcutting3DView implements ScreenView {
     );
     this.#buildTrees({ keepFallen: false });
     this.#bestChain = 0;
-    this.#summaryPending = false;
+    this.#summaryPending = undefined;
+    this.#showEndRound();
     this.#frameTimes = [];
     this.#cameraPose = this.#overview;
     this.#cameraFrom = this.#cameraTo = undefined;
@@ -325,9 +332,9 @@ export class Woodcutting3DView implements ScreenView {
   stop(): void {
     this.#renderer.setAnimationLoop(null);
     this.#pendingPour = undefined;
-    this.#summaryPending = false;
-    for (const timer of this.#summaryTimers) window.clearTimeout(timer);
-    this.#summaryTimers = [];
+    this.#summaryPending = undefined;
+    this.#clearSummaryTimers();
+    this.#deps.backButton.set(undefined);
     this.#hud.settle();
     this.#round.exit();
     this.#deps.clearings.finished();
@@ -1007,6 +1014,8 @@ export class Woodcutting3DView implements ScreenView {
     const canvas = this.#renderer.domElement;
     canvas.addEventListener('pointerdown', (event) => {
       this.#sfx.unlock();
+      // The round waits while its summary is up (or about to be).
+      if (!this.#ui.summary.hidden || this.#summaryPending) return;
       canvas.setPointerCapture(event.pointerId);
       this.#pointer = { id: event.pointerId, startX: event.clientX, startY: event.clientY };
       const phase = this.#round.phase;
@@ -1155,17 +1164,62 @@ export class Woodcutting3DView implements ScreenView {
       this.#bestChain = Math.max(this.#bestChain, event.trees);
     } else {
       this.#deps.clearings.finished();
-      this.#summaryPending = true;
+      this.#summaryPending = 'cleared';
     }
   }
 
+  /** During a round the top-left button ends it, showing the summary first. */
+  #showEndRound(): void {
+    this.#deps.backButton.set({
+      label: 'End round',
+      onTap: () => {
+        this.#endRound();
+      },
+    });
+  }
+
+  /** End round: once anything still falling has landed and poured in, show the summary. */
+  #endRound(): void {
+    if (this.#summaryPending || !this.#ui.summary.hidden) return;
+    this.#deps.logger.log('woodcutting3d.endRound', {
+      phase: this.#round.phase.kind,
+      logs: this.#round.logs,
+      standing: this.#round.standing.size,
+    });
+    this.#deps.backButton.set('hidden');
+    this.#summaryPending = 'paused';
+  }
+
+  /** Keep chopping: back to the round from the summary. */
+  #resume(): void {
+    this.#clearSummaryTimers();
+    this.#ui.summary.hidden = true;
+    this.#deps.logger.log('woodcutting3d.resume', { logs: this.#round.logs });
+    this.#showEndRound();
+  }
+
+  #clearSummaryTimers(): void {
+    for (const timer of this.#summaryTimers) window.clearTimeout(timer);
+    this.#summaryTimers = [];
+  }
+
   /** The round's result: logs against par, then the stars pop in one by one. */
-  #showSummary(): void {
+  #showSummary(kind: 'cleared' | 'paused'): void {
     const ui = this.#ui;
     const round = this.#round;
     const plan = this.#plan;
     const earned = round.stars;
-    ui.summaryText.textContent = `${String(round.logs)} logs · par ${String(round.par ?? '?')} · best chain ${String(this.#bestChain)}`;
+    // Ended early with trees still standing: the round so far, and the choice to keep going.
+    const paused = kind === 'paused' && round.standing.size > 0;
+    ui.summaryTitle.textContent = paused ? 'Round so far' : 'Clearing cleared!';
+    ui.keepChopping.hidden = !paused;
+    this.#deps.backButton.set('hidden');
+    this.#clearSummaryTimers();
+    const par = `par ${String(round.par ?? '?')}`;
+    ui.summaryText.textContent =
+      round.logs === 0
+        ? `No logs yet · ${par}`
+        : `${String(round.logs)} logs · ${par} · best chain ${String(this.#bestChain)}`;
     ui.summarySeed.textContent =
       plan?.seed === undefined ? 'Tutorial clearing' : `Clearing #${String(plan.seed)}`;
     ui.summary.dataset.stars = String(earned);
@@ -1269,9 +1323,15 @@ export class Woodcutting3DView implements ScreenView {
     this.#updateParticles(dt);
     this.#updateCamera(realDt);
     this.#startPendingPour();
-    if (this.#summaryPending && !this.#pendingPour && this.#hud.settled) {
-      this.#summaryPending = false;
-      this.#showSummary();
+    const pending = this.#summaryPending;
+    if (
+      pending &&
+      !this.#pendingPour &&
+      this.#hud.settled &&
+      this.#round.phase.kind !== 'falling'
+    ) {
+      this.#summaryPending = undefined;
+      this.#showSummary(pending);
     }
     this.#updateUi();
     this.#renderer.render(this.#scene, this.#camera);
@@ -1421,9 +1481,16 @@ export class Woodcutting3DView implements ScreenView {
       this.stop();
       this.start();
     });
+    const keepChopping = button(
+      'Keep chopping',
+      () => {
+        this.#resume();
+      },
+      true,
+    );
     const summaryButtons = el('div', 'w3d-summary-buttons');
     summaryButtons.append(leave, next);
-    summary.append(summaryTitle, starRow, summaryText, summarySeed, summaryButtons);
+    summary.append(summaryTitle, starRow, summaryText, summarySeed, keepChopping, summaryButtons);
     summary.hidden = true;
     root.append(perf, hint, panel, flashes, counter, summary);
     this.#element.append(root);
@@ -1441,8 +1508,10 @@ export class Woodcutting3DView implements ScreenView {
       flashes,
       counter,
       summary,
+      summaryTitle,
       summaryText,
       summarySeed,
+      keepChopping,
       stars,
     };
   }
@@ -1463,9 +1532,10 @@ export class Woodcutting3DView implements ScreenView {
       };
       ui.hint.textContent = hints[phase.kind] ?? '';
     }
-    ui.aim.hidden = phase.kind !== 'aim';
+    const waiting = !ui.summary.hidden || this.#summaryPending !== undefined;
+    ui.aim.hidden = phase.kind !== 'aim' || waiting;
     ui.chop.disabled = !round.canChop;
-    ui.chopPanel.hidden = phase.kind !== 'chop';
+    ui.chopPanel.hidden = phase.kind !== 'chop' || waiting;
     if (phase.kind === 'chop') {
       const percent = (value: number) => `${value * 100}%`;
       ui.green.style.left = percent(phase.target - feel.timingWindow / 2);
