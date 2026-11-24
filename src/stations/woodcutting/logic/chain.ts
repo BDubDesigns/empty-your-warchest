@@ -624,9 +624,9 @@ export interface FallPreview {
   ghost: Point;
   path: TrunkPath;
   /** The first tree it would hit, and the way that tree would fall. */
-  hit?: { tree: string; angle: number; path: TrunkPath };
+  hit?: { tree: string; angle: number; path: TrunkPath; at: number };
   /** Or the first boulder it would set rolling, and where that rolls to. */
-  roll?: { boulder: string; path: Point[]; radius: number };
+  roll?: { boulder: string; path: Point[]; radius: number; at: number; cabin: boolean };
   /** What the guide shows reaches the cabin: the guide turns red. */
   danger: boolean;
 }
@@ -668,7 +668,13 @@ export function previewFall(
     return {
       ghost: contact,
       path,
-      roll: { boulder: boulder.boulder.id, path: rolled.path, radius: boulder.boulder.radius },
+      roll: {
+        boulder: boulder.boulder.id,
+        path: rolled.path,
+        radius: boulder.boulder.radius,
+        at: boulder.contactAt,
+        cabin: rolled.cabin,
+      },
       danger: crashes || rolled.cabin,
     };
   }
@@ -685,7 +691,44 @@ export function previewFall(
   return {
     ghost: along(first.hit.contactAt),
     path,
-    hit: { tree: first.hit.tree.id, angle: hitAngle, path: knocked },
+    hit: { tree: first.hit.tree.id, angle: hitAngle, path: knocked, at: first.at },
     danger: crashes || knocked.cabin !== undefined,
   };
+}
+
+/**
+ * The aim guide for every trunk of a tree felled at `angle` (one, or 2–3 for a forked tree). When
+ * two trunks reach the same tree or boulder, only the one that gets there first knocks it (as in
+ * resolveFall), so only that trunk's guide shows the knock.
+ */
+export function previewFelling(
+  clearing: Clearing,
+  standing: ReadonlySet<string>,
+  tree: ClearingTree,
+  angle: number,
+  rules: BoulderRules,
+): FallPreview[] {
+  const previews = trunkAngles(tree, angle).map((trunk) =>
+    previewFall(clearing, standing, tree, trunk, rules),
+  );
+  const first = new Map<string, number>();
+  previews.forEach((preview, index) => {
+    const struck = preview.hit ?? preview.roll;
+    if (!struck) return;
+    const id = preview.hit?.tree ?? preview.roll?.boulder ?? '';
+    const best = first.get(id);
+    const bestAt =
+      best === undefined ? Infinity : (previews[best]?.hit ?? previews[best]?.roll)?.at;
+    if (bestAt === undefined || struck.at < bestAt) first.set(id, index);
+  });
+  return previews.map((preview, index) => {
+    const id = preview.hit?.tree ?? preview.roll?.boulder;
+    if (id === undefined || first.get(id) === index) return preview;
+    // Another trunk knocks it first: this one just shows where it lands.
+    return {
+      ghost: preview.ghost,
+      path: preview.path,
+      danger: preview.path.cabin !== undefined,
+    };
+  });
 }

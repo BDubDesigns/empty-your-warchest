@@ -5,6 +5,7 @@ import {
   boulderKnock,
   hitsCabin,
   previewFall,
+  previewFelling,
   resolveFall,
   rollBoulder,
 } from '../src/stations/woodcutting/logic/chain';
@@ -77,6 +78,26 @@ describe('boulders', () => {
     expect(nudged).toBeDefined();
     expect(nudged).not.toBeCloseTo(straight ?? 0, 2);
     expect(nudged ?? 0).toBeGreaterThan(RIGHT - 0.2);
+  });
+
+  it('a forked tree whose trunks both reach a boulder shows only the roll that happens', () => {
+    const c = clearing([{ id: 'a', x: 100, y: 100, height: 80, forks: [-20, 20] }], {
+      boulders: [{ id: 'b', x: 160, y: 100, radius: 12 }],
+    });
+    const a = c.trees[0] as Clearing['trees'][number];
+    // Aimed a touch off-centre so one trunk reaches it first.
+    const angle = 0.05;
+    const raw = [-20, 20].map((fork) =>
+      previewFall(c, all(c), a, angle + (fork * Math.PI) / 180, ROLL),
+    );
+    expect(raw.filter((preview) => preview.roll)).toHaveLength(2);
+    const previews = previewFelling(c, all(c), a, angle, ROLL);
+    const rolls = previews.flatMap((preview) => (preview.roll ? [preview.roll] : []));
+    expect(rolls).toHaveLength(1);
+    const chain = resolveFall(c, all(c), 'a', angle, ROLL);
+    expect(chain.rolls).toHaveLength(1);
+    expect(rolls[0]?.path.at(-1)?.x).toBeCloseTo(chain.rolls[0]?.to.x ?? NaN, 5);
+    expect(rolls[0]?.path.at(-1)?.y).toBeCloseTo(chain.rolls[0]?.to.y ?? NaN, 5);
   });
 
   it('a half hit sends it 30° off, the pool cut rule', () => {

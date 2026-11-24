@@ -9,7 +9,7 @@ import { SkillBar, type XpDeposit } from '../../../app/skillBar';
 import { WarchestHud, type Deposit, type ScreenPoint } from '../../../app/warchestHud';
 import { Rng, type EventLogger, type Game, type LiveChoice, type LiveTuning } from '../../../core';
 import type { Clearing, ClearingTree, WoodcuttingFeel } from '../../../data';
-import { fallTip, previewFall, trunkAngles, type FallStep, type Point } from '../logic/chain';
+import { fallTip, previewFelling, type FallStep, type Point } from '../logic/chain';
 import { fallTilt, rollDistance } from '../logic/fall';
 import { WoodcuttingRound, type RoundEvent, type RoundRoller } from '../logic/round';
 import { chainLogs } from '../logic/score';
@@ -883,11 +883,17 @@ export class Woodcutting3DView implements ScreenView {
       this.#placeStrip(tether, base, this.#tether, 0.1);
     }
     if (phase.angle === undefined) return;
-    trunkAngles(tree, phase.angle).forEach((trunk, index) => {
+    const round = this.#round;
+    const previews = previewFelling(
+      round.clearing,
+      round.standing,
+      tree,
+      phase.angle,
+      round.boulderRules,
+    );
+    previews.forEach((preview, index) => {
       const set = sets[index];
       if (!set) return;
-      const round = this.#round;
-      const preview = previewFall(round.clearing, round.standing, tree, trunk, round.boulderRules);
       // Red: what the guide shows reaches the cabin.
       const tint = (mesh: THREE.Mesh, color: number) => {
         (mesh.material as THREE.MeshBasicMaterial).color.setHex(
