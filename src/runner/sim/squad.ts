@@ -12,8 +12,12 @@ export interface SquadCounts {
 
 /**
  * The squad: its units by what they carry, and the spears still in the run's supply. New recruits
- * take spears worst-first; extra recruits are unarmed. Losses take the unarmed first (they soak up
- * hits), then the worst spears, so the best ones last.
+ * take spears worst-first; extra recruits are unarmed.
+ *
+ * Spearmen lead the charge (decided Nov 24): fights and arrows hit the front line, armed first
+ * (worst spear first), and the unarmed only once the spearmen are gone. So every fight is paid for
+ * in spearmen, and extra bodies from a gate are a reserve, not a shield. Bad gates shed the
+ * unarmed extras first.
  */
 export class Squad {
   /** Spear qualities, worst to best. */
@@ -77,17 +81,29 @@ export class Squad {
     this.#unarmed += left;
   }
 
-  /** The next unit to fight (and fall): unarmed first, then the worst spear. */
+  /** The next unit to fight (and fall): the worst spear, then the unarmed once no spears are left. */
   front(): Fighter | undefined {
-    if (this.#unarmed > 0) return UNARMED;
-    return this.qualities.find((quality) => this.armed(quality) > 0);
+    const armed = this.qualities.find((quality) => this.armed(quality) > 0);
+    if (armed !== undefined) return armed;
+    return this.#unarmed > 0 ? UNARMED : undefined;
   }
 
-  /** Removes up to `n` units in fighting order. Returns what each one carried. */
-  lose(n: number): Fighter[] {
+  /** Removes up to `n` units from the front line (fights, arrows). Returns what each carried. */
+  fall(n: number): Fighter[] {
+    return this.#remove(n, () => this.front());
+  }
+
+  /** Removes up to `n` units, unarmed extras first (bad gates). Returns what each carried. */
+  shed(n: number): Fighter[] {
+    return this.#remove(n, () =>
+      this.#unarmed > 0 ? UNARMED : this.qualities.find((quality) => this.armed(quality) > 0),
+    );
+  }
+
+  #remove(n: number, next: () => Fighter | undefined): Fighter[] {
     const lost: Fighter[] = [];
     for (let i = 0; i < n; i++) {
-      const fighter = this.front();
+      const fighter = next();
       if (fighter === undefined) break;
       if (fighter === UNARMED) this.#unarmed--;
       else this.#armed.set(fighter, this.armed(fighter) - 1);
@@ -103,7 +119,7 @@ export class Squad {
       this.recruit(next - this.count);
       return [];
     }
-    return this.lose(this.count - next);
+    return this.shed(this.count - next);
   }
 
   clone(): Squad {

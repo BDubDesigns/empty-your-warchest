@@ -138,6 +138,7 @@ export class RunnerView implements ScreenView {
   readonly #spears: { shafts: THREE.InstancedMesh; tips: THREE.InstancedMesh };
   readonly #sparks: THREE.InstancedMesh;
   readonly #unitX = new Float32Array(MAX_UNITS);
+  readonly #unitZ = new Float32Array(MAX_UNITS);
   readonly #particles: Particle[] = [];
   #sim!: RunnerSim;
   #seed = 0;
@@ -249,6 +250,7 @@ export class RunnerView implements ScreenView {
     this.#arrows = [];
     this.#particles.length = 0;
     this.#unitX.fill(0);
+    this.#unitZ.fill(0);
     this.#buildWorld();
     this.#ui.results.hidden = true;
     this.#ui.label.hidden = false;
@@ -429,8 +431,8 @@ export class RunnerView implements ScreenView {
   }
 
   /**
-   * Bandits pack toward the front line as they fall: the unarmed stand in front (they fall first),
-   * the armed carry spears behind them.
+   * Bandits pack toward the front line as they fall: the armed lead (they fall first), the
+   * unarmed stand behind them.
    */
   #layoutBandits(event: TrackEnemies, index: number, time: number): void {
     const entry = this.#bandits.get(index);
@@ -461,7 +463,7 @@ export class RunnerView implements ScreenView {
       const y = Math.abs(Math.sin(time * 9 + i * 1.7)) * 0.05;
       matrix.makeTranslation(x, y, z);
       mesh.setMatrixAt(i, matrix);
-      const armed = i >= event.unarmed;
+      const armed = i < event.armed;
       mesh.setColorAt(i, armed ? armedColor : unarmedColor);
       if (armed) {
         this.#placeSpear(shafts, tips, spearCount, x - 0.18, y, z, 0.35, tipColor);
@@ -909,8 +911,9 @@ export class RunnerView implements ScreenView {
   }
 
   /**
-   * The crowd is a loose blob around the squad centre: best spears in the middle, the unarmed
-   * outside (they fall first). Units further out trail the centre on turns.
+   * The crowd is a loose blob around the squad centre. Spearmen lead the charge: the front of the
+   * blob holds the armed (worst spears at the very front, they fall first), the unarmed reserve
+   * behind. Units further out trail the centre on turns; everyone slides up as the front falls.
    */
   #layoutUnits(dt: number, squadZ: number, radius: number): void {
     const sim = this.#sim;
@@ -921,18 +924,25 @@ export class RunnerView implements ScreenView {
     const pushing = sim.phase === 'clash' || sim.phase === 'wall';
     const lag = sim.feel.edgeLag;
     const matrix = new THREE.Matrix4();
-    // Inner slots hold the best spears: tiers from best to worst, then the unarmed outside.
+    // Fighting order: spears worst to best, then the unarmed.
     const tiers: THREE.Color[] = [];
-    for (const quality of [...squad.qualities].reverse()) {
+    for (const quality of squad.qualities) {
       const color = new THREE.Color(this.#tipColor(quality));
       for (let n = squad.armed(quality); n > 0 && tiers.length < armedShown; n--) tiers.push(color);
     }
     const armed = new THREE.Color(COLORS.armed);
     const unarmed = new THREE.Color(COLORS.unarmed);
+    // Blob slots, front-most first, so fighting order fills the front.
+    const slots = Array.from({ length: shown }, (_, n) => {
+      const r = radius * Math.sqrt((n + 0.5) / shown);
+      const a = n * GOLDEN_ANGLE;
+      return { r, dx: Math.cos(a) * r, dz: Math.sin(a) * r * 0.8 };
+    }).sort((p, q) => p.dz - q.dz);
+    const settle = 1 - Math.exp(-dt / 0.12);
     for (let i = 0; i < shown; i++) {
-      const r = radius * Math.sqrt((i + 0.5) / shown);
-      const a = i * GOLDEN_ANGLE;
-      const targetX = sim.x + Math.cos(a) * r;
+      const slot = slots[i] ?? { r: 0, dx: 0, dz: 0 };
+      const r = slot.r;
+      const targetX = sim.x + slot.dx;
       const tau = lag * 0.12 * r;
       const current = this.#unitX[i] ?? 0;
       const x =
@@ -943,7 +953,9 @@ export class RunnerView implements ScreenView {
       // A big crowd squeezes in at the track's edges rather than spilling off it.
       const edge = sim.halfWidth - UNIT.radius;
       const shownX = Math.max(-edge, Math.min(edge, x));
-      let z = squadZ + Math.sin(a) * r * 0.8;
+      const dz = this.#unitZ[i] ?? slot.dz;
+      this.#unitZ[i] = dz + (slot.dz - dz) * settle;
+      let z = squadZ + (this.#unitZ[i] ?? slot.dz);
       if (pushing) z += Math.sin(this.#clock * 14 + i) * 0.08 - 0.1;
       const bob = running ? Math.abs(Math.sin(this.#clock * 12 + i * 0.7)) * 0.12 : 0;
       matrix.makeTranslation(shownX, bob, z);

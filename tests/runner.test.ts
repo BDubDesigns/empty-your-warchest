@@ -76,11 +76,18 @@ describe('arming', () => {
     expect(squad.spearsUsed).toBe(6);
   });
 
-  it('loses the unarmed first, then the worst spears', () => {
+  it('fights and falls spearmen first, worst spear first; the unarmed are the reserve', () => {
     const squad = new Squad(QUALITIES, { poor: 1, good: 1, perfect: 1 });
     squad.recruit(5);
-    expect(squad.lose(4)).toEqual([UNARMED, UNARMED, 'poor', 'good']);
-    expect(squad.front()).toBe('perfect');
+    expect(squad.front()).toBe('poor');
+    expect(squad.fall(4)).toEqual(['poor', 'good', 'perfect', UNARMED]);
+    expect(squad.front()).toBe(UNARMED);
+  });
+
+  it('sheds the unarmed extras first at a bad gate', () => {
+    const squad = new Squad(QUALITIES, { poor: 1, good: 1, perfect: 1 });
+    squad.recruit(5);
+    expect(squad.shed(3)).toEqual([UNARMED, UNARMED, 'poor']);
   });
 
   it('starts a run with the slider spears', () => {
@@ -137,16 +144,27 @@ describe('runner', () => {
     expect(clashes).toHaveLength(3);
   });
 
-  it('duels on the front line: a Good spear beats an unarmed bandit and fights on wounded', () => {
-    const runner = sim({ spearsPoor: 0, spearsGood: 100, spearsPerfect: 0 });
-    const events = play(runner, route('left', 'left', 'left'));
-    const start = events.findIndex((event) => event.type === 'clashStart');
-    const blows = events.slice(start).filter((event) => event.type === 'blow');
-    // 4 damage a blow drops a 10-HP bandit on the third; an unarmed bandit's 1 damage a blow
-    // leaves the spearman standing.
-    expect(blows.slice(0, 3).map((blow) => blow.enemyFell)).toEqual([false, false, true]);
-    expect(blows.slice(0, 3).some((blow) => blow.unitFell)).toBe(false);
+  it('lets a spear beat an unarmed bandit in one blow, and fists never beat a spear', () => {
+    const gameData = (armed: number) =>
+      dataWith((raw) => {
+        const level = raw.levels[0];
+        if (!level) return;
+        level.events = [
+          { type: 'enemies', at: 0.1, enemy: 'bandit', count: 3, armed },
+          { type: 'wall', at: 1, hp: 1, archers: { volleySeconds: 99, perVolley: 1 } },
+        ];
+        level.startingRecruits = 1;
+      });
+    const spear = sim({ spearsPoor: 0, spearsGood: 1, spearsPerfect: 0 }, 1, gameData(0));
+    const blows = play(spear, () => 0).filter((event) => event.type === 'blow');
+    expect(blows.map((blow) => blow.enemyFell)).toEqual([true, true, true]);
+    expect(blows.every((blow) => !blow.unitFell)).toBe(true);
     expect(blows[0]).toMatchObject({ fighter: 'good', enemy: UNARMED });
+
+    const fists = sim({ spearsPoor: 0, spearsGood: 0, spearsPerfect: 0 }, 1, gameData(3));
+    const lost = play(fists, () => 0).filter((event) => event.type === 'blow');
+    expect(lost).toEqual([expect.objectContaining({ unitFell: true, enemyFell: false })]);
+    expect(fists.result?.won).toBe(false);
   });
 
   it('trades Good spears for armed bandits one for one, and Perfect spears win', () => {

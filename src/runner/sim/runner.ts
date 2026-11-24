@@ -40,7 +40,7 @@ export interface TrackEnemies {
   readonly lane: Lane;
   readonly total: number;
   readonly totalArmed: number;
-  /** Still standing: unarmed ones stand in front and fall first. */
+  /** Still standing: the armed lead, like the squad's spearmen, and fall first. */
   unarmed: number;
   armed: number;
   /** Hit points left on the enemy fighting at the front. */
@@ -323,7 +323,7 @@ export class RunnerSim {
 
   /** What the front enemy of a group fights with. */
   enemyFront(group: TrackEnemies): Fighter {
-    return group.unarmed > 0 ? UNARMED : this.#enemy(group.enemy).weaponQuality;
+    return group.armed > 0 ? this.#enemy(group.enemy).weaponQuality : UNARMED;
   }
 
   /** Advances one fixed step, steering toward `targetX` (m). Returns what happened. */
@@ -447,8 +447,9 @@ export class RunnerSim {
   }
 
   /**
-   * The front-line duel: the squad's front soldier and the group's front enemy swap blows until
-   * one falls (both can), then the next steps up. Blows speed up so big fights don't drag.
+   * The front line: the squad's front soldier and the group's front enemy meet, one pair at a time.
+   * A spear beats no spear outright; two spears (or two unarmed) swap blows until one falls (both
+   * can), then the next steps up. Blows speed up so big fights don't drag.
    */
   #clash(dt: number, events: RunnerEvent[]): void {
     const group = this.nextEvent;
@@ -459,18 +460,27 @@ export class RunnerSim {
       const fighter = this.squad.front();
       if (fighter === undefined) break;
       const enemy = this.enemyFront(group);
-      group.frontHp -= this.damageOf(fighter);
-      this.#frontHp -= this.damageOf(enemy, enemyUnit);
+      // Spear vs no spear: the spear wins in one blow. Spear vs spear: a duel, quality decides.
+      // No spear vs no spear: an even brawl. (Decided Nov 24: fists can't beat spears, so a gate is
+      // only worth what you can arm.)
+      const armed = fighter !== UNARMED;
+      const enemyArmed = enemy !== UNARMED;
+      if (armed && !enemyArmed) group.frontHp = 0;
+      else if (!armed && enemyArmed) this.#frontHp = 0;
+      else {
+        group.frontHp -= this.damageOf(fighter);
+        this.#frontHp -= this.damageOf(enemy, enemyUnit);
+      }
       const enemyFell = group.frontHp <= 0;
       const unitFell = this.#frontHp <= 0;
       if (enemyFell) {
-        if (group.unarmed > 0) group.unarmed--;
-        else group.armed--;
+        if (group.armed > 0) group.armed--;
+        else group.unarmed--;
         group.frontHp = enemyUnit.hp;
         this.#enemiesBeaten++;
       }
       if (unitFell) {
-        this.squad.lose(1);
+        this.squad.fall(1);
         this.#losses.enemies++;
         this.#frontHp = this.#config.unit.hp;
       }
@@ -534,7 +544,7 @@ export class RunnerSim {
     this.#timer -= dt;
     if (this.#timer <= 0) {
       this.#timer += wall.volleySeconds;
-      const lost = this.squad.lose(wall.perVolley);
+      const lost = this.squad.fall(wall.perVolley);
       this.#losses.wall += lost.length;
       events.push({ type: 'volley', index: this.#next, lost, squad: this.squad.count });
       if (this.squad.count === 0) this.#finish(false, events, 'wall');

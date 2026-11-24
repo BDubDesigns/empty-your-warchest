@@ -23,7 +23,7 @@ export const levels = [
       { type: 'enemies', at: 0.26, enemy: 'bandit', count: 8, armed: 2 },
       // Safe vs greedy: a clear +10, or fight through a few bandits for ×3. ×3 mostly adds unarmed men
       // unless you brought spare spears: a gate is only worth what you can arm.
-      { type: 'enemies', at: 0.45, enemy: 'bandit', count: 4, armed: 1, lane: 'right' },
+      { type: 'enemies', at: 0.45, enemy: 'bandit', count: 5, armed: 4, lane: 'right' },
       {
         type: 'gates',
         at: 0.49,
@@ -39,11 +39,11 @@ export const levels = [
         right: {
           op: 'subtract',
           value: 10,
-          flip: { op: 'multiply', value: 3, enemy: 'bandit', guards: 5, armedGuards: 2 },
+          flip: { op: 'multiply', value: 3, enemy: 'bandit', guards: 6, armedGuards: 5 },
         },
       },
       // The real test: mostly armed.
-      { type: 'enemies', at: 0.82, enemy: 'bandit', count: 18, armed: 10 },
+      { type: 'enemies', at: 0.82, enemy: 'bandit', count: 22, armed: 13 },
       { type: 'wall', at: 1, hp: 120, archers: { volleySeconds: 1.2, perVolley: 2 } },
     ],
     rewards: { xpPerEnemy: 10, xpPerSurvivor: 5 },
