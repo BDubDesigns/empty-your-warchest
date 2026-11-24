@@ -140,6 +140,29 @@ const clearingSchema = z.object({
       }),
     )
     .min(1),
+  /**
+   * Boulders: a falling tree that touches one (its trunk or canopy, lying down) knocks it rolling
+   * by the pool cut rule: dead on straight along the fall, a half hit 30° off to its side, an edge
+   * clipped nearly sideways. It rolls `boulderRoll` (feel) units, knocking over every tree it runs
+   * into the same way, bounces off the fence around the clearing (keeping `boulderBounce` of the
+   * roll left each time), and stops early against the cabin (a crash) or another boulder (which it
+   * sets rolling). It stays where it stops.
+   */
+  boulders: z.array(z.object({ id, x: nonNegative, y: nonNegative, radius: positive })).default([]),
+  /**
+   * The cabin: a falling tree that touches it crashes into it and stops there. The chain's logs
+   * are lost and the round ends. A box centred on (x, y), `width` across and `depth` down the
+   * clearing, `height` tall.
+   */
+  cabin: z
+    .object({
+      x: nonNegative,
+      y: nonNegative,
+      width: positive,
+      depth: positive,
+      height: positive,
+    })
+    .optional(),
 });
 
 /** Feel numbers for the woodcutting mini game. The debug menu can override them live. */
@@ -174,6 +197,14 @@ export const woodcuttingFeelSchema = z.object({
   fallEase: z.number().min(1),
   /** Extra pause before a hit tree starts to fall, so the cascade ripples. */
   chainDelay: nonNegative,
+  /**
+   * Boulders: how far one rolls when knocked (clearing units), how fast it sets off (units per
+   * second; it slows evenly to a stop), and how much of the roll left it keeps after each bounce
+   * off the fence.
+   */
+  boulderRoll: positive,
+  boulderSpeed: positive,
+  boulderBounce: fraction,
   /** Multiplier for every screen shake. 0 turns shake off. */
   shakeStrength: nonNegative,
   /** How long the game freezes on a perfect chop (hit-stop), in milliseconds. */
@@ -220,12 +251,32 @@ export const woodcuttingSchema = z.object({
     attempts: positiveInt,
     /** Fall directions tried per tree when looking for chains (for the check and for par). */
     aimSamples: positiveInt,
+    /**
+     * Every random clearing has a cabin among the trees: at least `fenceGap` from the fence, `gap`
+     * clear of every trunk, turned either way, and within falling reach of at least `reachTrees`
+     * trees (a layout without that is rerolled), so it's always in play.
+     */
+    cabin: z.object({
+      width: positive,
+      depth: positive,
+      height: positive,
+      gap: nonNegative,
+      fenceGap: nonNegative,
+      reachTrees: z.number().int().min(0),
+    }),
+    /** Boulders among the trees, at least `gap` from any trunk, the cabin and each other. */
+    boulders: z.object({
+      count: z.object({ min: z.number().int().min(0), max: z.number().int().min(0) }),
+      radius: positive,
+      gap: nonNegative,
+    }),
   }),
   /**
    * Stars for a finished round, from its logs against the clearing's par (what a solid player
    * would bank, taking the biggest chain they can find each time). 1 star for any banked chain.
+   * Hitting the cabin caps the round at `cabinCap` stars, whatever was earned before.
    */
-  stars: z.object({ two: fraction, three: fraction }),
+  stars: z.object({ two: fraction, three: fraction, cabinCap: z.number().int().min(0).max(3) }),
   /**
    * Bonus logs when the round ends, as a share of its logs: none for 1 star, then these for 2 and
    * 3 stars. Small, because logs already reward long chains (N × N).

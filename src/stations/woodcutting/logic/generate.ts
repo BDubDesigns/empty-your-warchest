@@ -1,6 +1,6 @@
 import { Rng } from '../../../core';
 import type { Clearing, ClearingTree, GameData } from '../../../data';
-import { resolveChain } from './chain';
+import { afterChain, hitsCabin, resolveFall, type BoulderRules } from './chain';
 import { chainLogs } from './score';
 import { forestAt } from './unlocks';
 
@@ -25,18 +25,22 @@ export interface BestChain {
 /**
  * The longest chain any standing tree can start, trying `samples` fall directions each. A chain
  * only counts at the length it keeps with the aim one step off either way, as a solid (not
- * pixel-perfect) player would find it.
+ * pixel-perfect) player would find it. A chain into the cabin counts for nothing.
  */
 export function bestChain(
   clearing: Clearing,
   standing: ReadonlySet<string>,
   samples: number,
+  rules: BoulderRules,
 ): BestChain | undefined {
   let best: BestChain | undefined;
   for (const tree of clearing.trees) {
     if (!standing.has(tree.id)) continue;
     const angles = Array.from({ length: samples }, (_, index) => (index / samples) * Math.PI * 2);
-    const lengths = angles.map((angle) => resolveChain(clearing, standing, tree.id, angle).length);
+    const lengths = angles.map((angle) => {
+      const chain = resolveFall(clearing, standing, tree.id, angle, rules);
+      return hitsCabin(chain) ? 0 : chain.steps.length;
+    });
     lengths.forEach((length, index) => {
       const before = lengths[(index + samples - 1) % samples] ?? length;
       const after = lengths[(index + 1) % samples] ?? length;
@@ -53,17 +57,33 @@ export function bestChain(
  * Par: the logs a solid player banks by always taking the biggest chain they can find. Not the
  * true best (that would need every felling order), so it's reachable and can be beaten.
  */
-export function clearingPar(clearing: Clearing, exponent: number, samples: number): number {
+export function clearingPar(
+  clearing: Clearing,
+  exponent: number,
+  samples: number,
+  rules: BoulderRules,
+): number {
   const standing = new Set(clearing.trees.map((tree) => tree.id));
+  // Boulders stay where they roll, so each chain plays on the clearing the last one left.
+  let field = clearing;
   let logs = 0;
   while (standing.size > 0) {
-    const best = bestChain(clearing, standing, samples);
-    if (!best) break;
-    const steps = resolveChain(clearing, standing, best.tree, best.angle);
-    for (const step of steps) standing.delete(step.tree);
-    logs += chainLogs(steps.length, exponent);
+    const best = bestChain(field, standing, samples, rules);
+    // Whatever's left can only reach the cabin: a solid player leaves it standing.
+    if (!best || best.length === 0) break;
+    const chain = resolveFall(field, standing, best.tree, best.angle, rules);
+    for (const step of chain.steps) standing.delete(step.tree);
+    field = afterChain(field, chain);
+    logs += chainLogs(chain.steps.length, exponent);
   }
   return logs;
+}
+
+/** How boulders roll, from the feel numbers in data (live tuning doesn't change par). */
+export function boulderRules(woodcutting: {
+  feel: Pick<WoodcuttingData['feel'], 'boulderRoll' | 'boulderBounce'>;
+}): BoulderRules {
+  return { roll: woodcutting.feel.boulderRoll, bounce: woodcutting.feel.boulderBounce };
 }
 
 /** The hand-made first clearing, with its par. */
@@ -72,7 +92,7 @@ export function tutorialPlan(woodcutting: WoodcuttingData): ClearingPlan {
   const { chainExponent, generator } = woodcutting;
   return {
     clearing,
-    par: clearingPar(clearing, chainExponent, generator.aimSamples),
+    par: clearingPar(clearing, chainExponent, generator.aimSamples, boulderRules(woodcutting)),
     tutorial: true,
   };
 }
@@ -80,8 +100,8 @@ export function tutorialPlan(woodcutting: WoodcuttingData): ClearingPlan {
 /**
  * A random clearing from `seed` for a woodcutting `level` (higher levels unlock bigger, more
  * forked clearings): the same seed and level always give the same clearing. Layouts are rerolled
- * until one has a chain of at least `minBestChain` trees (or the attempts run out, and the best
- * one found is used).
+ * until one has a chain of at least `minBestChain` trees and the cabin in reach of enough trees
+ * (or the attempts run out, and the best one found is used).
  */
 export function generateClearing(
   woodcutting: WoodcuttingData,
@@ -91,18 +111,23 @@ export function generateClearing(
   const { generator, chainExponent } = woodcutting;
   const rng = new Rng(seed);
   const forest = forestAt(woodcutting, level);
-  let chosen: { clearing: Clearing; chain: number } | undefined;
+  const rules = boulderRules(woodcutting);
+  let chosen: { clearing: Clearing; score: number } | undefined;
   for (let attempt = 0; attempt < generator.attempts; attempt++) {
     const clearing = layout(woodcutting, forest, rng, `random-${String(seed)}`);
     const all = new Set(clearing.trees.map((tree) => tree.id));
-    const chain = bestChain(clearing, all, generator.aimSamples)?.length ?? 0;
-    if (!chosen || chain > chosen.chain) chosen = { clearing, chain };
-    if (chain >= generator.minBestChain) break;
+    const chain = bestChain(clearing, all, generator.aimSamples, rules)?.length ?? 0;
+    const reach = treesReachingCabin(clearing);
+    const good = chain >= generator.minBestChain && reach >= generator.cabin.reachTrees;
+    // Settling for the best found: a cabin in play first, then the longest chain.
+    const score = (reach >= generator.cabin.reachTrees ? 1000 : 0) + chain;
+    if (!chosen || score > chosen.score) chosen = { clearing, score };
+    if (good) break;
   }
   if (!chosen) throw new Error('The clearing generator made no attempts');
   return {
     clearing: chosen.clearing,
-    par: clearingPar(chosen.clearing, chainExponent, generator.aimSamples),
+    par: clearingPar(chosen.clearing, chainExponent, generator.aimSamples, rules),
     seed,
     tutorial: false,
   };
@@ -114,7 +139,10 @@ function tutorialClearing(woodcutting: WoodcuttingData): Clearing {
   return clearing;
 }
 
-/** Scatters trees over the tutorial clearing's ground, kept apart and away from the edges. */
+/**
+ * Lays out a clearing on the tutorial clearing's ground: the cabin among the trees, then boulders,
+ * then trees, all kept apart and away from the edges.
+ */
 function layout(
   woodcutting: WoodcuttingData,
   forest: ReturnType<typeof forestAt>,
@@ -123,13 +151,39 @@ function layout(
 ): Clearing {
   const shape = tutorialClearing(woodcutting);
   const { generator } = woodcutting;
+  const cabin = placeCabin(shape, generator.cabin, rng);
+  const toCabin = (x: number, y: number) =>
+    Math.hypot(
+      Math.max(Math.abs(x - cabin.x) - cabin.width / 2, 0),
+      Math.max(Math.abs(y - cabin.y) - cabin.depth / 2, 0),
+    );
+  const spot = () => ({
+    x: Math.round(rng.range(generator.margin, shape.width - generator.margin)),
+    y: Math.round(rng.range(generator.margin, shape.height - generator.margin)),
+  });
+  const boulders: Clearing['boulders'] = [];
+  const { radius, gap } = generator.boulders;
+  const boulderCount = rng.int(generator.boulders.count.min, generator.boulders.count.max);
+  for (let index = 0; index < boulderCount; index++) {
+    for (let tries = 0; tries < 100; tries++) {
+      const { x, y } = spot();
+      if (toCabin(x, y) < radius + generator.cabin.gap) continue;
+      if (boulders.some((other) => Math.hypot(other.x - x, other.y - y) < radius * 2 + gap))
+        continue;
+      boulders.push({ id: `b${String(index + 1)}`, x, y, radius });
+      break;
+    }
+  }
   const count = rng.int(forest.trees.min, forest.trees.max);
   const trees: ClearingTree[] = [];
   for (let index = 0; index < count; index++) {
     for (let tries = 0; tries < 100; tries++) {
-      const x = Math.round(rng.range(generator.margin, shape.width - generator.margin));
-      const y = Math.round(rng.range(generator.margin, shape.height - generator.margin));
+      const { x, y } = spot();
       if (trees.some((tree) => Math.hypot(tree.x - x, tree.y - y) < generator.spacing)) continue;
+      if (toCabin(x, y) < shape.trunkRadius + generator.cabin.gap) continue;
+      const clear = shape.trunkRadius + gap;
+      if (boulders.some((other) => Math.hypot(other.x - x, other.y - y) < other.radius + clear))
+        continue;
       const step = generator.heightStep;
       const height =
         Math.round(rng.range(generator.height.min, generator.height.max) / step) * step;
@@ -142,5 +196,37 @@ function layout(
       break;
     }
   }
-  return { ...shape, id, trees };
+  return { ...shape, id, trees, boulders, cabin };
+}
+
+/** The cabin, somewhere among the trees, turned either way, kept `fenceGap` from the fence. */
+function placeCabin(
+  shape: Clearing,
+  cabin: WoodcuttingData['generator']['cabin'],
+  rng: Rng,
+): NonNullable<Clearing['cabin']> {
+  const turned = rng.chance(0.5);
+  const width = turned ? cabin.depth : cabin.width;
+  const depth = turned ? cabin.width : cabin.depth;
+  const inset = cabin.fenceGap;
+  return {
+    x: Math.round(rng.range(width / 2 + inset, shape.width - width / 2 - inset)),
+    y: Math.round(rng.range(depth / 2 + inset, shape.height - depth / 2 - inset)),
+    width,
+    depth,
+    height: cabin.height,
+  };
+}
+
+/** How many trees could fall onto the cabin: it's within their reach from the stump. */
+function treesReachingCabin(clearing: Clearing): number {
+  const cabin = clearing.cabin;
+  if (!cabin) return 0;
+  return clearing.trees.filter((tree) => {
+    const gap = Math.hypot(
+      Math.max(Math.abs(tree.x - cabin.x) - cabin.width / 2, 0),
+      Math.max(Math.abs(tree.y - cabin.y) - cabin.depth / 2, 0),
+    );
+    return gap <= tree.height + clearing.canopyRadius;
+  }).length;
 }

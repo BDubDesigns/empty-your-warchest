@@ -1,6 +1,6 @@
 # Model credits
 
-Placeholder 3D models (woodcutting and the warchest HUD). All CC0 (public domain): https://creativecommons.org/publicdomain/zero/1.0/
+Placeholder 3D models (woodcutting and the warchest HUD). The woodcutting cabin, fence and boulders are built in code. All CC0 (public domain): https://creativecommons.org/publicdomain/zero/1.0/
 
 | Files                                                                           | Source                                                      |
 | ------------------------------------------------------------------------------- | ----------------------------------------------------------- |

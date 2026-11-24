@@ -472,6 +472,10 @@ body:not([data-view='camp']) #build-label {
   color: var(--muted);
 }
 
+.w3d-danger {
+  color: #f0705c;
+}
+
 @keyframes w3d-rise {
   from {
     transform: translateY(0);
@@ -1127,17 +1131,20 @@ body:not([data-view='camp']) #build-label {
   transition: none;
 }
 
-/* The XP drop: rises from under the bar into it and fades. */
+/* The XP drop: pops up over the label for a moment, then the label shows again. */
 .skill-bar-drop {
   position: absolute;
-  top: 100%;
-  left: 0;
-  right: 0;
+  top: 3px;
+  left: 4px;
+  right: 4px;
+  border-radius: 7px;
+  background: #1f2a1c;
   text-align: center;
   font-weight: 900;
-  font-size: 14px;
+  font-size: 13px;
+  line-height: 18px;
   color: #8fd16f;
-  text-shadow: 0 2px 4px rgb(0 0 0 / 0.8);
+  text-shadow: 0 1px 3px rgb(0 0 0 / 0.8);
   opacity: 0;
 }
 
@@ -1148,19 +1155,19 @@ body:not([data-view='camp']) #build-label {
 @keyframes skill-bar-drop {
   0% {
     opacity: 0;
-    transform: translateY(22px);
+    transform: scale(1.4);
   }
-  20% {
+  15% {
     opacity: 1;
-    transform: translateY(8px);
+    transform: scale(1);
   }
   75% {
     opacity: 1;
-    transform: translateY(2px);
+    transform: scale(1);
   }
   100% {
     opacity: 0;
-    transform: translateY(-6px);
+    transform: scale(1);
   }
 }
 
@@ -1204,5 +1211,111 @@ body:not([data-view='camp']) #build-label {
 @media (prefers-reduced-motion: reduce) {
   .skill-bar-fill {
     transition: none;
+  }
+}
+
+/* The one-time cabin and rocks hint, the first clearing with them. */
+.w3d-hint.w3d-hint-warn {
+  color: #ffd2c8;
+  font-weight: 700;
+}
+
+/* Woodcutting's live stars: under the level bar, lighting up as the round's logs land. */
+.w3d-live-stars {
+  position: absolute;
+  top: calc(var(--safe-top) + 62px);
+  left: 50%;
+  box-sizing: border-box;
+  width: 104px;
+  transform: translateX(-50%);
+  display: grid;
+  gap: 2px;
+  justify-items: center;
+  padding: 3px 8px 5px;
+  border-radius: 10px;
+  background: rgb(0 0 0 / 0.4);
+  pointer-events: none;
+  z-index: 4;
+}
+
+.w3d-live-stars[hidden] {
+  display: none;
+}
+
+.w3d-live-star-row {
+  display: flex;
+  gap: 6px;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.w3d-live-star {
+  color: rgb(255 255 255 / 0.25);
+  display: inline-block;
+}
+
+.w3d-live-star-on {
+  color: #f0cd5c;
+  text-shadow: 0 0 8px rgb(240 205 92 / 0.6);
+}
+
+.w3d-live-star-pop {
+  animation: w3d-live-star-pop 0.6s ease-out;
+}
+
+@keyframes w3d-live-star-pop {
+  0% {
+    transform: scale(2.2);
+  }
+  60% {
+    transform: scale(0.9);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+.w3d-live-star-text {
+  font:
+    700 11px system-ui,
+    sans-serif;
+  color: var(--fg);
+  text-shadow: 0 1px 2px rgb(0 0 0 / 0.7);
+  font-variant-numeric: tabular-nums;
+}
+
+.w3d-live-star-bar {
+  width: 100%;
+  height: 4px;
+  border-radius: 2px;
+  background: #2f352c;
+  overflow: hidden;
+}
+
+.w3d-live-star-fill {
+  width: 0%;
+  height: 100%;
+  background: #f0cd5c;
+  transition: width 0.25s ease-out;
+}
+
+/* After a cabin hit the stars drop to the cap, in red. */
+.w3d-live-crashed .w3d-live-star-on {
+  color: #f0705c;
+  text-shadow: 0 0 8px rgb(240 112 92 / 0.6);
+}
+
+.w3d-live-crashed .w3d-live-star-fill {
+  background: #f0705c;
+}
+
+@media (max-width: 400px) {
+  .w3d-live-stars {
+    top: calc(var(--safe-top) + 116px);
+  }
+
+  /* The level bar and stars take the second row there: the fast-fall switch goes under them. */
+  .w3d-fast {
+    top: calc(var(--safe-top) + 180px);
   }
 }

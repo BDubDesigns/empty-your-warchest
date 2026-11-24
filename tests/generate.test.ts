@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   bestChain,
+  boulderRules,
   clearingPar,
   generateClearing,
   resolveChain,
@@ -38,9 +39,9 @@ describe('generateClearing', () => {
         }
       }
       const all = new Set(trees.map((tree) => tree.id));
-      expect(bestChain(clearing, all, generator.aimSamples)?.length).toBeGreaterThanOrEqual(
-        generator.minBestChain,
-      );
+      expect(
+        bestChain(clearing, all, generator.aimSamples, boulderRules(woodcutting))?.length,
+      ).toBeGreaterThanOrEqual(generator.minBestChain);
       // Par is at least a log per tree.
       expect(par).toBeGreaterThanOrEqual(trees.length);
     }
@@ -52,20 +53,25 @@ describe('bestChain and par', () => {
   const all = new Set(clearing.trees.map((tree) => tree.id));
 
   it('finds a real chain that holds with the aim a little off', () => {
-    const best = bestChain(clearing, all, generator.aimSamples);
+    const best = bestChain(clearing, all, generator.aimSamples, boulderRules(woodcutting));
     if (!best) throw new Error('No chain found');
     // The tutorial's diagonal run is 4 trees.
     expect(best.length).toBeGreaterThanOrEqual(4);
     const step = (Math.PI * 2) / generator.aimSamples;
     for (const angle of [best.angle - step, best.angle, best.angle + step]) {
-      expect(resolveChain(clearing, all, best.tree, angle).length).toBeGreaterThanOrEqual(
-        best.length,
-      );
+      expect(
+        resolveChain(clearing, all, best.tree, angle, boulderRules(woodcutting)).length,
+      ).toBeGreaterThanOrEqual(best.length);
     }
   });
 
   it('par fells every tree, biggest chains first', () => {
-    const par = clearingPar(clearing, woodcutting.chainExponent, generator.aimSamples);
+    const par = clearingPar(
+      clearing,
+      woodcutting.chainExponent,
+      generator.aimSamples,
+      boulderRules(woodcutting),
+    );
     expect(par).toBeGreaterThanOrEqual(16 + clearing.trees.length - 4);
     expect(tutorialPlan(woodcutting).par).toBe(par);
   });

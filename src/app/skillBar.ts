@@ -18,7 +18,7 @@ export interface XpDeposit {
 /**
  * A station's level bar, top centre: the skill, its level and the bar to the next one, always in
  * view so the player watches it climb. XP held back by a deposit ticks in as what earned it
- * arrives (each log landing in the chest), with an XP drop floating up into the bar; filling it
+ * arrives (each log landing in the chest), with an XP drop popping up over its label; filling it
  * flashes the bar and bumps the level. Shared by every station.
  */
 export class SkillBar {

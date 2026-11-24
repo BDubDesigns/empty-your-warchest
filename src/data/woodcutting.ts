@@ -39,6 +39,7 @@ export const woodcutting = {
         { id: 'd2', x: 170, y: 300, height: 90 },
         { id: 'd3', x: 300, y: 610, height: 90 },
       ],
+      // The tutorial has no hazards; random clearings bring the cabin and boulders.
     },
   ],
   tutorialClearing: 'first_clearing',
@@ -53,10 +54,15 @@ export const woodcutting = {
     minBestChain: 3,
     attempts: 40,
     aimSamples: 120,
+    // About two trees wide, among the trees, where at least 4 can fall on it.
+    cabin: { width: 96, depth: 64, height: 60, gap: 24, fenceGap: 50, reachTrees: 4 },
+    // Big enough to read beside a tree: a little smaller than a canopy.
+    boulders: { count: { min: 1, max: 3 }, radius: 20, gap: 26 },
   },
   // Par comes from trying every fall direction, so it finds chains people often miss: stars are
   // given well short of it.
-  stars: { two: 0.4, three: 0.7 },
+  // A cabin hit makes it a 1-star round (no star bonus), however well it was going.
+  stars: { two: 0.4, three: 0.7, cabinCap: 1 },
   starBonus: { two: 0.1, three: 0.25 },
   unlocks: [
     { level: 10, text: 'Bigger clearings: up to 20 trees', trees: { min: 16, max: 20 } },
@@ -80,6 +86,10 @@ export const woodcutting = {
     fallSeconds: 1.5,
     fallEase: 2.5,
     chainDelay: 0.22,
+    // About 2.4 tree heights, most of the clearing's width, over about 3 s; 80% kept per bounce.
+    boulderRoll: 260,
+    boulderSpeed: 180,
+    boulderBounce: 0.8,
     shakeStrength: 1,
     hitStopMs: 70,
     buzzChopMs: 10,

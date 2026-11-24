@@ -13,6 +13,9 @@ Placeholder sounds, converted to mono mp3. Both packs are CC0 (public domain): h
 | woodcutting/land-2.mp3                | Kenney, Impact Sounds: `impactWood_heavy_001.ogg`         |
 | woodcutting/land-3.mp3                | Kenney, Impact Sounds: `impactWood_heavy_003.ogg`         |
 | woodcutting/star.mp3                  | Kenney, Impact Sounds: `impactBell_heavy_003.ogg`         |
+| woodcutting/rock-1.mp3, rock-2.mp3    | Kenney, Impact Sounds: `impactMining_001/003.ogg`         |
+| woodcutting/crash-wood.mp3            | Kenney, Impact Sounds: `impactPlank_medium_002.ogg`       |
+| woodcutting/crash-glass.mp3           | Kenney, Impact Sounds: `impactGlass_heavy_002.ogg`        |
 | warchest/chest-open.mp3               | Kenney, RPG Audio: `doorOpen_1.ogg`                       |
 | warchest/chest-close.mp3              | Kenney, RPG Audio: `doorClose_4.ogg`                      |
 | warchest/log-in-1.mp3 … log-in-3.mp3  | Kenney, Impact Sounds: `impactWood_light_001/003/004.ogg` |
