@@ -11,7 +11,7 @@ export interface LeverSetup {
   /** The piece's width (degrees): narrow pieces wobble. */
   width: number;
   onCheck: boolean;
-  throughRot: boolean;
+  throughKnot: boolean;
   /** Seeds the wobble, so a round replays. */
   seed: number;
   /** Where the crack had got to, if this lever carries on an earlier one. */
@@ -21,7 +21,7 @@ export interface LeverSetup {
 /**
  * Levering a split open after the strike: dragging down runs the crack down the log, and the crack
  * drifts toward the thin side (harder the more uneven the split and the faster you go; narrow
- * pieces and rot wobble it either way). A bubble shows the drift, from −1 (thick side) to +1 (thin
+ * pieces and knots wobble it either way). A bubble shows the drift, from −1 (thick side) to +1 (thin
  * side): lean against it with a sideways drag. At either edge it runs out.
  */
 export class Lever {
@@ -76,23 +76,23 @@ export class Lever {
   /** How hard the crack pulls toward the thin side right now (bubble widths per second). */
   get pull(): number {
     const feel = this.#feel();
-    const { unevenness, onCheck, throughRot } = this.#setup;
+    const { unevenness, onCheck, throughKnot } = this.#setup;
     return (
       unevenness *
       feel.pullPerUnevenness *
       (1 + this.speed * feel.speedPull) *
       (onCheck ? feel.checkEase : 1) *
-      (throughRot ? feel.rotPull : 1)
+      (throughKnot ? feel.knotPull : 1)
     );
   }
 
   /** How much the crack wanders either way (bubble widths per second, at most). */
   get wobble(): number {
     const feel = this.#feel();
-    const { width, onCheck, throughRot } = this.#setup;
+    const { width, onCheck, throughKnot } = this.#setup;
     const thinness = Math.max(feel.wobbleFrom / Math.max(width, 1) - 1, 0);
     return (
-      (thinness * feel.wobblePerThinness + (throughRot ? feel.rotJitter : 0)) *
+      (thinness * feel.wobblePerThinness + (throughKnot ? feel.knotJitter : 0)) *
       (onCheck ? feel.checkEase : 1)
     );
   }

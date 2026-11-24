@@ -11,6 +11,8 @@ import {
   middle,
   sizeOf,
   splitPiece,
+  throughKnot,
+  touchesKnot,
   splittable,
   thinSide,
   unevenness,
@@ -27,9 +29,13 @@ const STEP = 1 / 60;
 /** A steady lever: about one log length a second. */
 const steady = 1;
 
-/** A plain test log, with these grains. */
-function logWith(grains: RivingLog['grains'], checks: number[] = []): RivingLog {
-  return { id: 'test_log', radius: 1, height: 1.6, rings: 12, checks, grains };
+/** A plain test log, with these grains and knots. */
+function logWith(
+  grains: RivingLog['grains'],
+  checks: number[] = [],
+  knots: RivingLog['knots'] = [],
+): RivingLog {
+  return { id: 'test_log', radius: 1, height: 1.6, rings: 12, checks, grains, knots };
 }
 
 /** A lever for a split like this one. */
@@ -38,7 +44,7 @@ function lever(setup: Partial<LeverSetup> = {}) {
     unevenness: 0,
     width: 180,
     onCheck: false,
-    throughRot: false,
+    throughKnot: false,
     seed: 1,
     ...setup,
   });
@@ -88,7 +94,7 @@ describe('pieces', () => {
   it('a line through a grain cuts it; grains whole in kept staves multiply the log together', () => {
     const log = logWith([
       { kind: 'gold', angle: 22.5, width: 10 },
-      { kind: 'rot', angle: 200, width: 12 },
+      { kind: 'silver', angle: 200, width: 12 },
       { kind: 'silver', angle: 300, width: 10 },
     ]);
     const live = new Set([0, 1, 2]);
@@ -101,12 +107,21 @@ describe('pieces', () => {
     ];
     const kept = grainsKept(log, staves, live);
     expect(kept).toEqual([0, 1, 2]);
-    // ×3 × ½ × 2 = ×3.
-    expect(logMultiplier(rules, log, kept)).toBe(3);
+    // ×3 × 2 × 2 = ×12, capped.
+    expect(logMultiplier(rules, log, kept)).toBe(Math.min(12, rules.multiplierCap));
     // A grain in a piece that wasn't kept doesn't count.
     expect(grainsKept(log, staves.slice(0, 1), live)).toEqual([0]);
-    // Gold and silver: ×6, the cap.
-    expect(logMultiplier(rules, log, [0, 2])).toBe(Math.min(6, rules.multiplierCap));
+    expect(logMultiplier(rules, log, [0])).toBe(3);
+  });
+
+  it('a knot spoils any piece it touches; a line through it knows it', () => {
+    const log = logWith([], [], [{ angle: 30, width: 10 }]);
+    expect(touchesKnot(log, { id: 'a', start: 0, width: 45 * DEG, depth: 3 })).toBe(true);
+    // Just touching its edge counts.
+    expect(touchesKnot(log, { id: 'b', start: 34 * DEG, width: 45 * DEG, depth: 3 })).toBe(true);
+    expect(touchesKnot(log, { id: 'c', start: 40 * DEG, width: 45 * DEG, depth: 3 })).toBe(false);
+    expect(throughKnot(log, wholeLog(), 30 * DEG)).toBe(true);
+    expect(throughKnot(log, wholeLog(), 60 * DEG)).toBe(false);
   });
 
   it('a split along a check knows it', () => {
@@ -117,20 +132,33 @@ describe('pieces', () => {
 });
 
 describe('random logs', () => {
-  it('the same seed gives the same log, with grains kept apart', () => {
+  it('the same seed gives the same log, with grains and knots kept apart', () => {
     const one = generateLog(rules, 1234);
     expect(generateLog(rules, 1234)).toEqual(one);
-    for (let seed = 1; seed <= 30; seed++) {
+    const apart = (a: { angle: number; width: number }, b: { angle: number; width: number }) =>
+      Math.abs(((a.angle - b.angle + 540) % 360) - 180) - (a.width + b.width) / 2;
+    let hard = 0;
+    for (let seed = 1; seed <= 60; seed++) {
       const log = generateLog(rules, seed);
       expect(log.grains.length).toBeLessThanOrEqual(rules.generator.grains.max);
-      log.grains.forEach((grain, index) => {
-        expect(rules.grainKinds.map((kind) => kind.id)).toContain(grain.kind);
-        for (const other of log.grains.slice(index + 1)) {
-          const gap = Math.abs(((grain.angle - other.angle + 540) % 360) - 180);
-          expect(gap).toBeGreaterThanOrEqual((grain.width + other.width) / 2);
-        }
+      expect(log.knots.length).toBeGreaterThanOrEqual(rules.generator.knots.min);
+      expect(log.knots.length).toBeLessThanOrEqual(rules.generator.knots.max);
+      const marks = [...log.grains, ...log.knots];
+      marks.forEach((mark, index) => {
+        for (const other of marks.slice(index + 1)) expect(apart(mark, other)).toBeGreaterThan(0);
       });
+      log.grains.forEach((grain) => {
+        expect(rules.grainKinds.map((kind) => kind.id)).toContain(grain.kind);
+      });
+      // Hard: a grain too close to a knot to fit a stave between them.
+      const close = log.grains.some((grain) =>
+        log.knots.some((knot) => apart(grain, knot) < rules.stave.min),
+      );
+      if (close) hard++;
     }
+    // Most logs make you choose; some are easy.
+    expect(hard).toBeGreaterThan(20);
+    expect(hard).toBeLessThan(55);
   });
 });
 
@@ -157,7 +185,7 @@ describe('levering', () => {
     expect(target.result).toBe('thick');
   });
 
-  it('faster pulls harder; a check pulls less; narrow pieces and rot wobble', () => {
+  it('faster pulls harder; a check pulls less; a knot pulls more; narrow pieces and knots wobble', () => {
     const slow = lever({ unevenness: 0.3 });
     const fast = lever({ unevenness: 0.3 });
     leverAt(slow, 0.5, 0, 0.3);
@@ -168,7 +196,10 @@ describe('levering', () => {
     );
     expect(lever({ width: 180 }).wobble).toBe(0);
     expect(lever({ width: 45 }).wobble).toBeGreaterThan(0);
-    expect(lever({ throughRot: true }).wobble).toBeGreaterThan(0);
+    expect(lever({ unevenness: 0.3, throughKnot: true }).pull).toBeGreaterThan(
+      lever({ unevenness: 0.3 }).pull,
+    );
+    expect(lever({ throughKnot: true }).wobble).toBeGreaterThan(0);
   });
 
   it('the same seed wobbles the same way', () => {
@@ -260,35 +291,42 @@ describe('RivingRound', () => {
     expect(round.finished.map((entry) => entry.fate)).toContain('kindling');
   });
 
-  it('a gold grain kept whole triples the whole log; rot left in halves it; XP is on the staves', () => {
+  it('a gold grain kept whole triples the whole log; XP is on the staves', () => {
     const gold = setup(logWith([{ kind: 'gold', angle: 22.5, width: 10 }]));
     rive(gold.round, steady, 0);
     halveToStaves(gold.round);
     gold.round.finish();
     expect(gold.banked()).toEqual({ worth: 24, staves: 8 });
-    const rot = setup(logWith([{ kind: 'rot', angle: 22.5, width: 10 }]));
-    rive(rot.round, steady, 0);
-    halveToStaves(rot.round);
-    rot.round.finish();
-    expect(rot.banked()).toEqual({ worth: 4, staves: 8 });
   });
 
-  it('the aim preview shows what a cut does to the log: cutting rot doubles it', () => {
+  it('a stave touching a knot is knotted and does not count', async () => {
+    const { round, banked, logger } = setup(logWith([], [], [{ angle: 22.5, width: 10 }]));
+    rive(round, steady, 0);
+    halveToStaves(round);
+    expect(round.stavesReady).toBe(7);
+    round.finish();
+    expect(round.finished.filter((entry) => entry.fate === 'knotted')).toHaveLength(1);
+    expect(banked()).toEqual({ worth: 7, staves: 7 });
+    const end = (await logger.readAll()).find((event) => event.type === 'riving.logEnd');
+    expect(end?.data).toMatchObject({ knotted: 1 });
+  });
+
+  it('the aim preview shows what a cut does: grains it cancels, knots it runs through, knotted sides', () => {
     const { round } = setup(
-      logWith([
-        { kind: 'gold', angle: 120, width: 10 },
-        { kind: 'rot', angle: 22.5, width: 10 },
-      ]),
+      logWith([{ kind: 'gold', angle: 120, width: 10 }], [], [{ angle: 22.5, width: 10 }]),
     );
     round.aimTo(22.5 * DEG);
-    expect(round.aimPreview?.multiplierNow).toBe(1.5);
+    expect(round.aimPreview?.throughKnot).toBe(true);
+    expect(round.aimPreview?.knotted).toEqual([true, true]);
+    expect(round.aimPreview?.multiplierNow).toBe(3);
     expect(round.aimPreview?.multiplierAfter).toBe(3);
     round.aimTo(120 * DEG);
-    expect(round.aimPreview?.multiplierAfter).toBe(0.5);
+    expect(round.aimPreview?.throughKnot).toBe(false);
+    expect(round.aimPreview?.multiplierAfter).toBe(1);
   });
 
-  it('cutting through a grain cancels it, good or bad', () => {
-    const { round, banked, events } = setup(logWith([{ kind: 'rot', angle: 22.5, width: 10 }]));
+  it('cutting through a grain cancels it', () => {
+    const { round, banked, events } = setup(logWith([{ kind: 'gold', angle: 22.5, width: 10 }]));
     rive(round, steady, 22.5 * DEG);
     const split = events.find((event) => event.type === 'split');
     expect(split?.type === 'split' && split.cut).toEqual([0]);

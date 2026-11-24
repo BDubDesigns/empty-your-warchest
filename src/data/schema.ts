@@ -351,9 +351,9 @@ export const rivingFeelSchema = z.object({
   /** Leaning: a sideways drag of `leanTravel` pixels pushes the bubble back at `leanRate`. */
   leanRate: positive,
   leanTravel: positive,
-  /** A crack through rot pulls harder (×) and wanders more (bubble widths per second). */
-  rotPull: positive,
-  rotJitter: nonNegative,
+  /** A crack through a knot pulls harder (×) and wanders more (bubble widths per second). */
+  knotPull: positive,
+  knotJitter: nonNegative,
   /** A split along a check pulls and wanders less (×). */
   checkEase: fraction,
   /** Seconds the halves take to come apart after a split. */
@@ -376,6 +376,8 @@ const rivingLogSchema = z.object({
   checks: z.array(z.number()),
   /** Grains: patches of the end face, each `width` degrees wide centred on `angle`. */
   grains: z.array(z.object({ kind: id, angle: z.number(), width: positive })),
+  /** Knots: arcs of the end face (as grains are) that spoil any stave they touch. */
+  knots: z.array(z.object({ angle: z.number(), width: positive })),
 });
 
 /**
@@ -384,7 +386,8 @@ const rivingLogSchema = z.object({
  * wide is a stave; narrower is kindling; wider has to be split again. A split pulls toward its
  * thin side, the harder the more uneven it is (and narrow pieces wobble): lean against it, or it
  * runs out and a side is lost. Grains multiply the whole log's staves if they end up in a stave
- * you keep, and a split line through a grain cancels it, good or bad.
+ * you keep, and a split line through a grain cancels it. Knots spoil any stave they touch (only
+ * trimming them off into kindling gets rid of them), and a crack through a knot wobbles hard.
  */
 const rivingSchema = z.object({
   /** The recipe a riven log runs: its yield is the staves it's worth. */
@@ -407,7 +410,7 @@ const rivingSchema = z.object({
       }),
     )
     .min(1),
-  /** The first log ever: to learn the controls on, with one rot to learn to cut out. */
+  /** The first log ever: to learn the controls on, with one knot to trim off and one grain. */
   tutorialLog: rivingLogSchema,
   /** Random logs: sizes, rings, checks and grains, from a seed. */
   generator: z.object({
@@ -417,8 +420,16 @@ const rivingSchema = z.object({
     checks: z.object({ min: z.number().int().min(0), max: z.number().int().min(0) }),
     grains: z.object({ min: z.number().int().min(0), max: z.number().int().min(0) }),
     grainWidth: z.object({ min: positive, max: positive }),
-    /** Least gap (degrees) between two grains, so each reads on its own. */
+    knots: z.object({ min: z.number().int().min(0), max: z.number().int().min(0) }),
+    knotWidth: z.object({ min: positive, max: positive }),
+    /** Least gap (degrees) between two grains or knots, so each reads on its own. */
     grainGap: nonNegative,
+    /**
+     * How often a log puts a grain close to a knot (`conflictGap` degrees from its edge): the hard
+     * case, where trimming the knot tight risks the grain. Other logs place everything freely.
+     */
+    conflictChance: fraction,
+    conflictGap: z.object({ min: nonNegative, max: positive }),
   }),
   feel: rivingFeelSchema,
 });

@@ -73,8 +73,10 @@ const COLORS = {
   ringLight: '#e2c08c',
   pith: '#8a5d32',
   check: '#3b2415',
-  grain: { rot: '#4b3a1f', silver: '#cfd8dc', gold: '#f2c037' } as Record<string, string>,
-  grainEdge: { rot: '#2c2112', silver: '#8fa0a8', gold: '#a87a12' } as Record<string, string>,
+  grain: { silver: '#cfd8dc', gold: '#f2c037' } as Record<string, string>,
+  grainEdge: { silver: '#8fa0a8', gold: '#a87a12' } as Record<string, string>,
+  knot: '#3b2413',
+  knotRing: '#5a3720',
   cancelled: '#9b9284',
   glowGood: '#7fd65a',
   glowBad: '#ff4a3a',
@@ -404,6 +406,29 @@ export class Rive3DView implements ScreenView {
     context.fillStyle = COLORS.pith;
     context.fill();
     const kinds = this.#deps.game.data.riving.grainKinds;
+    // Knots: dark wedges of the end face with their own rings, spoiling any stave they touch.
+    for (const knot of log.knots) {
+      const from = -(knot.angle + knot.width / 2) * DEG;
+      const to = -(knot.angle - knot.width / 2) * DEG;
+      context.beginPath();
+      context.arc(middle, middle, radius * 0.93, from, to);
+      context.arc(middle, middle, radius * 0.16, to, from, true);
+      context.closePath();
+      context.fillStyle = COLORS.knot;
+      context.fill();
+      const centre = at(knot.angle * DEG, 0.6);
+      const across = Math.tan((knot.width * DEG) / 2) * radius * 0.6;
+      context.save();
+      context.translate(centre.x, centre.y);
+      context.rotate(-knot.angle * DEG);
+      for (let ring = 3; ring >= 1; ring--) {
+        context.beginPath();
+        context.ellipse(0, 0, radius * 0.22 * (ring / 3), across * (ring / 3), 0, 0, Math.PI * 2);
+        context.fillStyle = ring % 2 === 0 ? COLORS.knotRing : COLORS.knot;
+        context.fill();
+      }
+      context.restore();
+    }
     log.grains.forEach((grain, index) => {
       const alive = live.has(index);
       // Canvas angles run clockwise, so the face's angles are negated.
@@ -465,13 +490,15 @@ export class Rive3DView implements ScreenView {
     return texture;
   }
 
-  /** The log's grains, for its name: "Gold ×3 · Rot ×½". */
+  /** The log's grains and knots, for its name: "Gold ×3 · Silver ×2 · 2 knots". */
   #grainNames(log: RivingLog): string {
     const kinds = this.#deps.game.data.riving.grainKinds;
     const names = log.grains.map((grain) => {
       const kind = kinds.find((entry) => entry.id === grain.kind);
       return kind ? `${kind.name} ×${times(kind.multiplier)}` : grain.kind;
     });
+    const knots = log.knots.length;
+    if (knots > 0) names.push(`${String(knots)} knot${knots === 1 ? '' : 's'}`);
     return names.length > 0 ? names.join(' · ') : 'Plain log';
   }
 
@@ -778,16 +805,13 @@ export class Rive3DView implements ScreenView {
     // The guide: each line along the end face, warming from white to red the harder it'll pull.
     if (phase.kind === 'aim') {
       const preview = round.aimPreview;
-      // Green when it cuts out only rot, red through gold or silver; else by how hard it'll pull.
-      const kinds = this.#deps.game.data.riving.grainKinds;
-      const multipliers = (preview?.cut ?? []).map(
-        (index) => kinds.find((entry) => entry.id === log.grains[index]?.kind)?.multiplier ?? 1,
-      );
-      const color = multipliers.some((value) => value > 1)
-        ? COLORS.danger
-        : multipliers.length > 0
-          ? COLORS.good
-          : (COLORS.pull[pullLevel(preview?.unevenness ?? 0)] ?? COLORS.guide);
+      // Red through gold or silver, orange through a knot; else by how hard it'll pull.
+      const color =
+        (preview?.cut.length ?? 0) > 0
+          ? COLORS.danger
+          : preview?.throughKnot
+            ? (COLORS.pull[2] ?? COLORS.danger)
+            : (COLORS.pull[pullLevel(preview?.unevenness ?? 0)] ?? COLORS.guide);
       lines.forEach((angle, index) => {
         const mesh = this.#guide.lines[index];
         if (!mesh) return;
@@ -1102,17 +1126,16 @@ export class Rive3DView implements ScreenView {
     this.#showSides(preview);
     this.#showCuts(preview);
     const pull = pullLevel(preview?.unevenness ?? 0);
-    const practiceRot = this.#log?.id === this.#deps.game.data.riving.tutorialLog.id;
+    const practice = this.#log?.id === this.#deps.game.data.riving.tutorialLog.id;
     const hints: Record<string, string> = {
-      aim:
-        (preview?.cut.length ?? 0) > 0
-          ? preview?.throughRot
-            ? 'Rot wobbles the crack: hold it steady'
-            : ''
+      aim: preview?.throughKnot
+        ? 'Through a knot: the crack wobbles hard'
+        : (preview?.cut.length ?? 0) > 0
+          ? ''
           : pull > 0
             ? "Uneven: it'll pull to the thin side · lean against it"
-            : practiceRot && round.multiplierLeft < 1
-              ? 'Rot halves the whole log: aim a line through it to cut it out'
+            : practice
+              ? 'A knot spoils any stave it touches: trim it off in a thin sliver'
               : preview?.check
                 ? 'Along a check: it splits easier'
                 : 'Drag to aim anywhere · thinner staves = more staves, harder to hold',
@@ -1142,15 +1165,17 @@ export class Rive3DView implements ScreenView {
   }
 
   /**
-   * While aiming, the grains the line would cut: they glow on the log, and each gets a chip on its
-   * own line (green for cutting out something bad, red for cutting something good), with the
-   * log's multiplier before and after under them.
+   * While aiming, the grains the line would cut: they glow on the log, and each gets a red chip on
+   * its own line, with the log's multiplier before and after under them. A line through a knot
+   * gets its own chip: the crack will wobble hard.
    */
   #showCuts(preview: AimPreview | undefined): void {
     const log = this.#log;
     const round = this.#round;
     const cut = preview?.cut ?? [];
-    const key = preview ? `${cut.join(',')}|${String(preview.multiplierAfter)}` : '';
+    const key = preview
+      ? `${cut.join(',')}|${String(preview.multiplierAfter)}|${String(preview.throughKnot)}`
+      : '';
     if (key === this.#aimedKey || !log || !round) return;
     this.#aimedKey = key;
     this.#drawFace(log, round.live, cut);
@@ -1159,18 +1184,21 @@ export class Rive3DView implements ScreenView {
       const kind = kinds.find((entry) => entry.id === log.grains[index]?.kind);
       if (!kind) return [];
       const chip = document.createElement('div');
-      const bad = kind.multiplier < 1;
-      chip.className = `rv-chip ${bad ? 'rv-chip-good' : 'rv-chip-bad'}`;
-      chip.textContent = `${bad ? 'Cuts out' : 'Cuts'} the ${kind.name.toLowerCase()} ×${times(
-        kind.multiplier,
-      )}`;
+      chip.className = 'rv-chip rv-chip-bad';
+      chip.textContent = `Cuts the ${kind.name.toLowerCase()} ×${times(kind.multiplier)}`;
       return [chip];
     });
-    if (preview && chips.length > 0) {
+    if (preview && cut.length > 0) {
       const total = document.createElement('div');
       total.className = 'rv-chip rv-chip-total';
       total.textContent = `Log ×${times(preview.multiplierNow)} → ×${times(preview.multiplierAfter)}`;
       chips.push(total);
+    }
+    if (preview?.throughKnot) {
+      const chip = document.createElement('div');
+      chip.className = 'rv-chip rv-chip-knot';
+      chip.textContent = 'Through a knot: wobbles hard';
+      chips.unshift(chip);
     }
     this.#ui.chips.replaceChildren(...chips);
   }
@@ -1201,10 +1229,18 @@ export class Rive3DView implements ScreenView {
       }
       const size = preview.sizes[index] ?? 'slab';
       const pull = index === preview.thin ? pullLevel(preview.unevenness) : 0;
-      label.textContent = `${String(Math.round(part.width / DEG))}° ${names[size]}${
+      const knotted = preview.knotted[index] ?? false;
+      // A stave-sized piece touching a knot won't count; a slab with one needs the knot trimmed.
+      const name =
+        size === 'stave' && knotted
+          ? 'knotted'
+          : size === 'slab' && knotted
+            ? 'split again · knot'
+            : names[size];
+      label.textContent = `${String(Math.round(part.width / DEG))}° ${name}${
         pull > 0 ? ` ${'›'.repeat(pull)}` : ''
       }`;
-      label.dataset.size = size;
+      label.dataset.size = size === 'stave' && knotted ? 'knotted' : size;
       const at = this.#facePoint(piece, part.start + part.width / 2, log.radius * 0.55).project(
         this.#camera,
       );
@@ -1236,6 +1272,8 @@ export class Rive3DView implements ScreenView {
     const kindling = round.finished.filter((entry) => entry.fate === 'kindling').length;
     const notes: string[] = [];
     if (runouts > 0) notes.push(`${String(runouts)} runout${runouts === 1 ? '' : 's'}`);
+    const knotted = round.finished.filter((entry) => entry.fate === 'knotted').length;
+    if (knotted > 0) notes.push(`${String(knotted)} knotted`);
     if (kindling > 0) notes.push(`${String(kindling)} kindling`);
     log.grains.forEach((_, index) => {
       if (kept.includes(index)) return;

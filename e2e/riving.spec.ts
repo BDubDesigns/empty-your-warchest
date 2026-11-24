@@ -17,7 +17,7 @@ async function openWorkbench(page: Page, logs: number) {
     // tested).
     localStorage.setItem(
       'warchest.tuning.riving',
-      JSON.stringify({ pullPerUnevenness: 0, wobblePerThinness: 0, rotJitter: 0 }),
+      JSON.stringify({ pullPerUnevenness: 0, wobblePerThinness: 0, knotJitter: 0 }),
     );
     localStorage.setItem(
       'warchest.save',

@@ -1595,6 +1595,10 @@ body:not([data-view='camp']) #build-label {
   color: #f0e0b0;
 }
 
+.rv-side[data-size='knotted'] {
+  color: #ff8a7a;
+}
+
 .rv-finish {
   min-width: 96px;
   background: #6fae4f;
@@ -1622,8 +1626,8 @@ body:not([data-view='camp']) #build-label {
   box-shadow: 0 2px 6px rgb(0 0 0 / 0.35);
 }
 
-.rv-chip-good {
-  background: #3f8f2c;
+.rv-chip-knot {
+  background: #b5651d;
 }
 
 .rv-chip-bad {

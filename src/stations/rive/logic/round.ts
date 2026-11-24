@@ -14,6 +14,8 @@ import {
   splitPiece,
   splittable,
   thinSide,
+  throughKnot,
+  touchesKnot,
   unevenness,
   wholeLog,
   type Fate,
@@ -41,9 +43,11 @@ export interface AimPreview {
   /** 0 (even) to 1: how hard it will pull to the thin side. */
   unevenness: number;
   thin: 0 | 1;
-  /** Grains (by index) the line would cut through, and whether it runs through rot or a check. */
+  /** Grains (by index) the line would cut through, and whether it runs through a knot or a check. */
   cut: number[];
-  throughRot: boolean;
+  throughKnot: boolean;
+  /** Which sides would touch a knot (a stave-sized one won't count). */
+  knotted: [boolean, boolean];
   check: boolean;
   /** What the grains left could multiply the log by now, and after this cut (capped). */
   multiplierNow: number;
@@ -121,6 +125,7 @@ export class RivingRound {
       log: log.id,
       seed,
       grains: log.grains.map((grain) => grain.kind),
+      knots: log.knots.length,
       checks: log.checks.length,
       feel: hooks.feel(),
     });
@@ -142,13 +147,16 @@ export class RivingRound {
       : this.pieces.find((piece) => piece.id === phase.piece);
   }
 
-  /** Staves banked so far, and staves still on the block that would count if you finished now. */
+  /**
+   * Staves banked so far, and staves still on the block that would count if you finished now (a
+   * stave-sized piece touching a knot doesn't).
+   */
   get staves(): number {
     return this.finished.filter((entry) => entry.fate === 'stave').length;
   }
 
   get stavesReady(): number {
-    return this.pieces.filter((piece) => sizeOf(this.rules, piece) === 'stave').length;
+    return this.pieces.filter((piece) => this.#counts(piece)).length;
   }
 
   /** The most staves a log can give: every piece as thin as a stave can be. */
@@ -227,7 +235,8 @@ export class RivingRound {
       unevenness: unevenness(piece, phase.angle),
       thin: thinSide(pieces),
       cut,
-      throughRot: cut.some((index) => this.log.grains[index]?.kind === 'rot'),
+      throughKnot: throughKnot(this.log, piece, phase.angle),
+      knotted: [touchesKnot(this.log, pieces[0]), touchesKnot(this.log, pieces[1])],
       check: alongCheck(this.rules, this.log, piece, phase.angle),
     };
   }
@@ -256,7 +265,7 @@ export class RivingRound {
   /** Keeps the staves on the block and ends the log (once no slab is left). */
   finish(): void {
     if (!this.canFinish) return;
-    for (const piece of this.pieces) this.#finishPiece(piece, 'stave');
+    for (const piece of this.pieces) this.#finishPiece(piece, this.#staveFate(piece));
     this.pieces = [];
     this.phase = { kind: 'done' };
     this.#done();
@@ -270,12 +279,11 @@ export class RivingRound {
     if (phase.kind === 'swing' && this.now - phase.at >= this.feel.strikeSeconds) {
       const piece = this.current;
       if (!piece) return;
-      const cut = grainsCut(this.log, piece, phase.angle, this.live);
       const lever = new Lever(() => this.feel, {
         unevenness: unevenness(piece, phase.angle),
         width: piece.width / DEG,
         onCheck: alongCheck(this.rules, this.log, piece, phase.angle),
-        throughRot: cut.some((index) => this.log.grains[index]?.kind === 'rot'),
+        throughKnot: throughKnot(this.log, piece, phase.angle),
         seed: Math.floor(this.#rng.range(0, 2 ** 31)),
       });
       this.phase = { kind: 'lever', piece: phase.piece, angle: phase.angle, lever };
@@ -291,6 +299,7 @@ export class RivingRound {
     this.#log('riving.leave', {
       log: this.log.id,
       staves: this.staves + this.stavesReady,
+      knots: this.log.knots.length,
       piecesLeft: this.pieces.length,
       seconds: Math.round(this.now * 10) / 10,
     });
@@ -336,7 +345,7 @@ export class RivingRound {
     for (const child of children) {
       if (child === lost) this.#finishPiece(child, 'runout');
       else if (sizeOf(rules, child) === 'kindling') this.#finishPiece(child, 'kindling');
-      else if (!splittable(rules, child)) this.#finishPiece(child, 'stave');
+      else if (!splittable(rules, child)) this.#finishPiece(child, this.#staveFate(child));
       else this.pieces.push(child);
     }
     // Next: the widest piece still to split; if only staves are left you can finish or go on.
@@ -353,8 +362,17 @@ export class RivingRound {
   #keepers(): Piece[] {
     return [
       ...this.finished.filter((entry) => entry.fate === 'stave').map((entry) => entry.piece),
-      ...this.pieces.filter((piece) => sizeOf(this.rules, piece) === 'stave'),
+      ...this.pieces.filter((piece) => this.#counts(piece)),
     ];
+  }
+
+  /** A stave-sized piece counts unless it touches a knot. */
+  #counts(piece: Piece): boolean {
+    return sizeOf(this.rules, piece) === 'stave' && !touchesKnot(this.log, piece);
+  }
+
+  #staveFate(piece: Piece): Fate {
+    return touchesKnot(this.log, piece) ? 'knotted' : 'stave';
   }
 
   #finishPiece(piece: Piece, fate: Fate): void {
@@ -377,6 +395,7 @@ export class RivingRound {
       multiplier,
       worth,
       runouts: count('runout'),
+      knotted: count('knotted'),
       kindling: count('kindling'),
       grainsKept: kept.map((index) => this.log.grains[index]?.kind),
       grainsCut: this.log.grains.filter((_, index) => !this.live.has(index)).map((g) => g.kind),

@@ -15,8 +15,11 @@ export interface Piece {
   depth: number;
 }
 
-/** What became of a piece that's done: a stave, kindling (too thin), or lost to a runout. */
-export type Fate = 'stave' | 'kindling' | 'runout';
+/**
+ * What became of a piece that's done: a stave, knotted (stave-sized but touching a knot, so it
+ * doesn't count), kindling (too thin), or lost to a runout.
+ */
+export type Fate = 'stave' | 'knotted' | 'kindling' | 'runout';
 
 /** What a piece is, by its width: kindling (too thin), a stave, or a slab to split again. */
 export type Size = 'kindling' | 'stave' | 'slab';
@@ -94,9 +97,26 @@ export function splitPiece(piece: Piece, angle: number): [Piece, Piece] {
   ];
 }
 
-/** A grain's arc of the end face. */
-export function grainArc(grain: RivingLog['grains'][number]): { start: number; width: number } {
+/** A grain's (or knot's) arc of the end face. */
+export function grainArc(grain: { angle: number; width: number }): {
+  start: number;
+  width: number;
+} {
   return { start: normalize((grain.angle - grain.width / 2) * DEG), width: grain.width * DEG };
+}
+
+/** Whether a piece touches a knot (a stave that does is spoiled). */
+export function touchesKnot(log: RivingLog, piece: Piece): boolean {
+  return log.knots.some((knot) => arcsOverlap(piece, grainArc(knot)));
+}
+
+/** Whether a split at `angle` runs through a knot (its crack wobbles hard). */
+export function throughKnot(log: RivingLog, piece: Piece, angle: number): boolean {
+  const lines = splitLines(piece, angle);
+  return log.knots.some((knot) => {
+    const arc = grainArc(knot);
+    return lines.some((line) => inArc(line, arc.start, arc.width));
+  });
 }
 
 /** The grains (by index, of those still `live`) a split at `angle` would cut through. */

@@ -127,7 +127,17 @@ function checkReferences(data: GameData, ctx: z.RefinementCtx): void {
     }
   });
   const rivingGenerator = riving.generator;
-  for (const key of ['radius', 'height', 'rings', 'checks', 'grains', 'grainWidth'] as const) {
+  for (const key of [
+    'radius',
+    'height',
+    'rings',
+    'checks',
+    'grains',
+    'grainWidth',
+    'knots',
+    'knotWidth',
+    'conflictGap',
+  ] as const) {
     if (rivingGenerator[key].min > rivingGenerator[key].max) {
       issue(['riving', 'generator', key], 'min must not be more than max');
     }

@@ -9,9 +9,8 @@ export const riving = {
   multiplierCap: 6,
   checkTolerance: 8,
   grainKinds: [
-    { id: 'rot', name: 'Rot', multiplier: 0.5, weight: 45 },
-    { id: 'silver', name: 'Silver', multiplier: 2, weight: 35 },
-    { id: 'gold', name: 'Gold', multiplier: 3, weight: 20 },
+    { id: 'silver', name: 'Silver', multiplier: 2, weight: 60 },
+    { id: 'gold', name: 'Gold', multiplier: 3, weight: 40 },
   ],
   tutorialLog: {
     id: 'tutorial_log',
@@ -19,8 +18,9 @@ export const riving = {
     height: 1.7,
     rings: 14,
     checks: [100, 280],
-    // One rot, to learn that cutting through it cancels it.
-    grains: [{ kind: 'rot', angle: 60, width: 16 }],
+    // One knot to trim off, one grain to keep.
+    knots: [{ angle: 60, width: 14 }],
+    grains: [{ kind: 'silver', angle: 200, width: 14 }],
   },
   generator: {
     radius: { min: 0.92, max: 1.08 },
@@ -29,7 +29,12 @@ export const riving = {
     checks: { min: 0, max: 2 },
     grains: { min: 1, max: 3 },
     grainWidth: { min: 10, max: 20 },
+    knots: { min: 1, max: 2 },
+    knotWidth: { min: 10, max: 18 },
     grainGap: 12,
+    // About two logs in three are the hard case; the rest can come out easy.
+    conflictChance: 0.65,
+    conflictGap: { min: 4, max: 25 },
   },
   feel: {
     fineAimStep: 0.5,
@@ -45,8 +50,8 @@ export const riving = {
     wobbleSeconds: 0.25,
     leanRate: 2.2,
     leanTravel: 70,
-    rotPull: 1.5,
-    rotJitter: 1.2,
+    knotPull: 1.5,
+    knotJitter: 1.2,
     checkEase: 0.4,
     pieceSeconds: 0.35,
     buzzStrikeMs: 18,

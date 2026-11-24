@@ -2,8 +2,9 @@ import { Rng } from '../../../core';
 import type { Riving, RivingLog } from '../../../data';
 
 /**
- * A random log from `seed`: its size, rings, checks and grains (kinds picked by their weights,
- * kept `grainGap` apart). The same seed always gives the same log.
+ * A random log from `seed`: its size, rings, checks, knots and grains (kinds picked by their
+ * weights, kept `grainGap` apart). Most logs put a grain right beside a knot (the hard case);
+ * the rest place everything freely. The same seed always gives the same log.
  */
 export function generateLog(rules: Riving, seed: number): RivingLog {
   const rng = new Rng(seed);
@@ -20,20 +21,42 @@ export function generateLog(rules: Riving, seed: number): RivingLog {
     }
     return rules.grainKinds[rules.grainKinds.length - 1]?.id ?? '';
   };
-  const grains: RivingLog['grains'] = [];
-  const count = rng.int(generator.grains.min, generator.grains.max);
-  for (let index = 0; index < count; index++) {
-    const width = Math.round(rng.range(generator.grainWidth.min, generator.grainWidth.max));
+  // Grains and knots share the face, each kept `grainGap` from the others.
+  const taken: { angle: number; width: number }[] = [];
+  const clear = (angle: number, width: number, gap = generator.grainGap) =>
+    taken.every((other) => {
+      const apart = Math.abs(((angle - other.angle + 540) % 360) - 180);
+      return apart >= (width + other.width) / 2 + gap;
+    });
+  const place = (width: number, near?: { angle: number; width: number }) => {
     for (let tries = 0; tries < 40; tries++) {
-      const angle = Math.round(rng.range(0, 360));
-      const clear = grains.every((other) => {
-        const gap = Math.abs(((angle - other.angle + 540) % 360) - 180);
-        return gap >= (width + other.width) / 2 + generator.grainGap;
-      });
-      if (!clear) continue;
-      grains.push({ kind: pickKind(), angle, width });
-      break;
+      // Near a knot: just past its edge, on either side.
+      const angle = near
+        ? near.angle +
+          (rng.chance(0.5) ? 1 : -1) *
+            ((near.width + width) / 2 +
+              rng.range(generator.conflictGap.min, generator.conflictGap.max))
+        : rng.range(0, 360);
+      const at = Math.round(((angle % 360) + 360) % 360);
+      if (!clear(at, width, near ? 0 : generator.grainGap)) continue;
+      taken.push({ angle: at, width });
+      return at;
     }
+    return undefined;
+  };
+  const knots: RivingLog['knots'] = [];
+  for (let index = rng.int(generator.knots.min, generator.knots.max); index > 0; index--) {
+    const width = Math.round(rng.range(generator.knotWidth.min, generator.knotWidth.max));
+    const angle = place(width);
+    if (angle !== undefined) knots.push({ angle, width });
+  }
+  const grains: RivingLog['grains'] = [];
+  const conflict = knots[0] && rng.chance(generator.conflictChance) ? knots[0] : undefined;
+  for (let index = rng.int(generator.grains.min, generator.grains.max); index > 0; index--) {
+    const width = Math.round(rng.range(generator.grainWidth.min, generator.grainWidth.max));
+    // The hard case: the first grain right beside a knot.
+    const angle = place(width, grains.length === 0 ? conflict : undefined) ?? place(width);
+    if (angle !== undefined) grains.push({ kind: pickKind(), angle, width });
   }
   return {
     id: `log_${String(seed)}`,
@@ -42,5 +65,6 @@ export function generateLog(rules: Riving, seed: number): RivingLog {
     rings: rng.int(generator.rings.min, generator.rings.max),
     checks,
     grains,
+    knots,
   };
 }
