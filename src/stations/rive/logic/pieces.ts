@@ -11,13 +11,15 @@ export interface Piece {
   id: string;
   start: number;
   width: number;
-  /** Splits it took to make: 0 for the whole log. At the rules' `halvings`, it's a stave. */
+  /** Splits it took to make: 0 for the whole log. */
   depth: number;
 }
 
-/** What became of a piece that's done: a stave, or lost (a runout, or the small side of an
- * off-centre split). */
-export type Fate = 'stave' | 'runout' | 'offcentre';
+/** What became of a piece that's done: a stave, kindling (too thin), or lost to a runout. */
+export type Fate = 'stave' | 'kindling' | 'runout';
+
+/** What a piece is, by its width: kindling (too thin), a stave, or a slab to split again. */
+export type Size = 'kindling' | 'stave' | 'slab';
 
 /** An angle brought into 0 to 2π. */
 export function normalize(angle: number): number {
@@ -112,14 +114,28 @@ export function grainsCut(
   });
 }
 
-/**
- * Whether a split at `angle` is too far off the piece's middle (more than the rules' tolerance,
- * as a share of the piece): its smaller side is lost. Any line across the whole log is even.
- */
-export function offCentre(rules: Riving, piece: Piece, angle: number): boolean {
-  if (isWhole(piece)) return false;
+export function sizeOf(rules: Riving, piece: Piece): Size {
+  const degrees = piece.width / DEG;
+  if (degrees < rules.stave.min - 1e-9) return 'kindling';
+  if (degrees <= rules.stave.max + 1e-9) return 'stave';
+  return 'slab';
+}
+
+/** Whether a piece could still be split into two staves (or it's a slab, which has to be). */
+export function splittable(rules: Riving, piece: Piece): boolean {
+  return isWhole(piece) || piece.width / DEG >= rules.stave.min * 2 - 1e-9;
+}
+
+/** How uneven a split at `angle` is: 0 for two equal sides, towards 1 for a sliver. */
+export function unevenness(piece: Piece, angle: number): number {
+  if (isWhole(piece)) return 0;
   const offset = normalize(angle - piece.start);
-  return Math.abs(offset - piece.width / 2) > rules.centreTolerance * piece.width;
+  return Math.abs(piece.width - 2 * offset) / piece.width;
+}
+
+/** A split's thin side (the second if they're even): the one a crack pulls toward. */
+export function thinSide(pieces: [Piece, Piece]): 0 | 1 {
+  return pieces[0].width < pieces[1].width - 1e-9 ? 0 : 1;
 }
 
 /**
@@ -157,17 +173,4 @@ export function alongCheck(rules: Riving, log: RivingLog, piece: Piece, angle: n
       return Math.min(gap, TAU - gap) <= tolerance;
     }),
   );
-}
-
-/** Whether a piece is split as far as it goes: it's a stave. */
-export function isStave(rules: Riving, piece: Piece): boolean {
-  return piece.depth >= rules.halvings;
-}
-
-/**
- * A split's smaller side: what a runout wastes (the crack runs off into it) and what an off-centre
- * split loses. The second piece if they're even.
- */
-export function smallerSide(pieces: [Piece, Piece]): 0 | 1 {
-  return pieces[0].width < pieces[1].width - 1e-9 ? 0 : 1;
 }

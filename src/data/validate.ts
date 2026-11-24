@@ -109,8 +109,11 @@ function checkReferences(data: GameData, ctx: z.RefinementCtx): void {
   if (!data.recipes.some((recipe) => recipe.id === riving.recipe)) {
     issue(['riving', 'recipe'], `Unknown recipe "${riving.recipe}"`);
   }
-  if (riving.feel.bandLow >= riving.feel.bandHigh) {
-    issue(['riving', 'feel', 'bandLow'], 'The steady band must be lower than it is high');
+  if (riving.stave.min > riving.stave.max) {
+    issue(['riving', 'stave'], 'min must not be more than max');
+  }
+  if (riving.stave.max < 45) {
+    issue(['riving', 'stave', 'max'], 'An even eighth (45°) has to be a stave');
   }
   const kinds = new Set<string>();
   riving.grainKinds.forEach((kind, index) => {

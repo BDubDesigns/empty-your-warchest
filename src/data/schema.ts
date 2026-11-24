@@ -332,23 +332,33 @@ export const rivingFeelSchema = z.object({
   shakeStrength: nonNegative,
   /** Screen pixels of handle drag that run the crack all the way down the log. */
   leverTravel: positive,
-  /**
-   * The steady speed band, in log lengths per second the crack runs: faster than `bandHigh`
-   * builds strain, slower than `bandLow` for `bindSeconds` and the crack binds (strike again).
-   * Speed is averaged over `speedWindow` seconds so a jittery finger isn't punished.
-   */
-  bandLow: positive,
-  bandHigh: positive,
-  bindSeconds: positive,
+  /** Seconds the crack's speed is averaged over, so a jittery finger isn't punished. */
   speedWindow: positive,
-  /** Strain gained per second per log length a second over the band, lost per second within it;
-   * at 1 the split runs out. A check on the line multiplies the gain by `checkEase`. */
-  strainRise: positive,
-  strainRecover: nonNegative,
+  /**
+   * The crack's drift (bubble widths per second) toward the thin side, per unit of unevenness
+   * (|thin − thick| ÷ the piece), and how much more it pulls per log length a second of speed.
+   */
+  pullPerUnevenness: nonNegative,
+  speedPull: nonNegative,
+  /**
+   * Narrow pieces wobble: a crack wanders either way, up to this much (bubble widths per second)
+   * for each step narrower than `wobbleFrom` degrees (a piece half that wide wobbles 1 step). The
+   * wander changes direction every `wobbleSeconds`.
+   */
+  wobblePerThinness: nonNegative,
+  wobbleFrom: positive,
+  wobbleSeconds: positive,
+  /** Leaning: a sideways drag of `leanTravel` pixels pushes the bubble back at `leanRate`. */
+  leanRate: positive,
+  leanTravel: positive,
+  /** A crack through rot pulls harder (×) and wanders more (bubble widths per second). */
+  rotPull: positive,
+  rotJitter: nonNegative,
+  /** A split along a check pulls and wanders less (×). */
   checkEase: fraction,
   /** Seconds the halves take to come apart after a split. */
   pieceSeconds: positive,
-  /** Vibration (ms): the mallet strike, each tick of a straining crack, a clean split, a runout. */
+  /** Vibration (ms): the mallet strike, each tick of a drifting crack, a clean split, a runout. */
   buzzStrikeMs: nonNegative,
   buzzCrackMs: nonNegative,
   buzzCleanMs: nonNegative,
@@ -370,17 +380,16 @@ const rivingLogSchema = z.object({
 
 /**
  * Riving a log into staves with a froe. Every split runs along a radius through the pith (the
- * first one across the whole log), halving a piece: `halvings` splits deep, a piece is a stave.
- * A split more than `centreTolerance` (share of the piece) off its middle loses the smaller side;
- * a runout wastes the short side. Grains multiply the whole log's staves (rot halves them, silver
- * and gold double and triple them) if they end up in a stave you keep, and a split line through a
- * grain cancels it, good or bad.
+ * first one across the whole log), anywhere you aim it. A piece `stave.min`–`stave.max` degrees
+ * wide is a stave; narrower is kindling; wider has to be split again. A split pulls toward its
+ * thin side, the harder the more uneven it is (and narrow pieces wobble): lean against it, or it
+ * runs out and a side is lost. Grains multiply the whole log's staves if they end up in a stave
+ * you keep, and a split line through a grain cancels it, good or bad.
  */
 const rivingSchema = z.object({
   /** The recipe a riven log runs: its yield is the staves it's worth. */
   recipe: id,
-  halvings: positiveInt,
-  centreTolerance: fraction,
+  stave: z.object({ min: positive, max: positive }),
   multiplierCap: positive,
   /** A split line within this many degrees of a check runs along it, and splits more easily. */
   checkTolerance: nonNegative,

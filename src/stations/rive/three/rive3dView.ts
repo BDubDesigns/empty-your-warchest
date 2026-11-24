@@ -7,8 +7,17 @@ import { WarchestHud, type ScreenPoint } from '../../../app/warchestHud';
 import type { EventLogger, Game, LiveTuning } from '../../../core';
 import type { RivingFeel, RivingLog } from '../../../data';
 import { generateLog } from '../logic/generate';
-import { DEG, isWhole, normalize, splitLines, type Fate, type Piece } from '../logic/pieces';
-import { RivingRound, type RivingEvent } from '../logic/round';
+import {
+  DEG,
+  isWhole,
+  normalize,
+  splitLines,
+  splitPiece,
+  thinSide,
+  type Fate,
+  type Piece,
+} from '../logic/pieces';
+import { RivingRound, type AimPreview, type RivingEvent } from '../logic/round';
 
 export interface Rive3DDeps {
   game: Game;
@@ -27,13 +36,13 @@ const BLOCK_SPREAD = 1.25;
 /** How far apart pieces stand after each split (world units per split), so the cracks show. */
 const PIECE_GAP = 0.07;
 /** Finished pieces shrink as they go to the pile, so it stays out of the way. */
-const PILE_SCALE = 0.5;
+const PILE_SCALE = 0.4;
 /** How high the piece being worked on is lifted, so it stands out. */
 const LIFT = 0.06;
 /** The camera: how far it looks down (radians) and how far back it sits. */
 const CAMERA_ELEVATION = 58 * DEG;
 const CAMERA_DISTANCE = 9;
-/** While straining: how often the crack creaks and buzzes (seconds). */
+/** While the crack drifts: how often it creaks and buzzes (seconds). */
 const STRAIN_TICK = 0.11;
 /** How far the froe's handle tips over by the end of a lever (radians). */
 const LEVER_TIP = 70 * DEG;
@@ -75,6 +84,7 @@ const COLORS = {
   gold: 0xf0cd5c,
   crack: 0x1d120a,
   strain: 0xe0503c,
+  pull: [0xf2ead3, 0xf0cd5c, 0xf09a3c, 0xe0503c],
   spoiled: 0x7c7468,
 };
 
@@ -126,6 +136,9 @@ export class Rive3DView implements ScreenView {
   /** Total handle drag (pixels) this lever, carried across finger lifts. */
   #leverPixels = 0;
   #strainTickAt = 0;
+  /** Which way the thin side looks on screen this lever: +1 right, −1 left (for leaning). */
+  #thinSign = 1;
+  #sideLabels: HTMLElement[] = [];
   #shake = 0;
   #frozenUntil = 0;
   #bankedXp: XpDeposit | undefined;
@@ -536,8 +549,8 @@ export class Rive3DView implements ScreenView {
    * pieces to the back, out of the way.
    */
   #finishedPlace(fate: Fate, index: number): THREE.Vector3 {
-    if (fate === 'stave') return new THREE.Vector3(-1.2 + index * 0.34, -BLOCK_HEIGHT, 1.5);
-    return new THREE.Vector3(-1.5 + index * 0.4, -BLOCK_HEIGHT, -1.6);
+    if (fate === 'stave') return new THREE.Vector3(-1.3 + index * 0.17, -BLOCK_HEIGHT, 1.5);
+    return new THREE.Vector3(-1.5 + index * 0.25, -BLOCK_HEIGHT, -1.6);
   }
 
   #move(visual: PieceVisual, to: THREE.Vector3, tilt: number, scale = 1): void {
@@ -560,9 +573,6 @@ export class Rive3DView implements ScreenView {
     if (event.type === 'strike') {
       // The mallet lands as the swing ends; the thock plays then (see the loop).
       this.#mallet.visible = true;
-    } else if (event.type === 'bound') {
-      this.#play('chop-2', 0.5, -400);
-      this.#flash('Binding! Strike again', 'warn');
     } else if (event.type === 'split') {
       const parent = this.#pieces.get(event.piece.id);
       if (parent) {
@@ -579,15 +589,16 @@ export class Rive3DView implements ScreenView {
       }
       const log = this.#log;
       if (log && event.cut.length > 0) this.#drawFace(log, round.live);
-      const halvings = this.#deps.game.data.riving.halvings;
-      const lost = event.lost ? 2 ** (halvings - event.lost.depth) : 0;
-      const staves = `−${String(lost)} stave${lost === 1 ? '' : 's'}`;
-      if (event.result === 'runout' || event.offCentre) {
+      if (event.result !== 'clean') {
         this.#play('crash-wood', 0.8, -300);
         this.#play(`creak-${1 + Math.floor(Math.random() * 3)}`, 0.7, -500);
         this.#deps.haptics.pulse(feel.buzzRunoutMs);
         this.#shake = 0.12 * feel.shakeStrength;
-        this.#flash(`${event.result === 'runout' ? 'Runout' : 'Off centre'}! ${staves}`, 'bad');
+        const degrees = Math.round((event.lost?.width ?? 0) / DEG);
+        this.#flash(
+          `${event.result === 'thin' ? 'Ran out to the thin side' : 'Leaned too far'}! −${String(degrees)}°`,
+          'bad',
+        );
       } else {
         this.#play('chop-perfect', 0.8, 200);
         this.#play(`land-${1 + Math.floor(Math.random() * 3)}`, 0.5, 300);
@@ -661,7 +672,10 @@ export class Rive3DView implements ScreenView {
       round.tick(realDt);
       // Read again: the tick moves the round on.
       const after: string = round.phase.kind;
-      if (before === 'swing' && after === 'lever') this.#strikeLanded();
+      if (before === 'swing' && after === 'lever') {
+        this.#strikeLanded();
+        this.#findThinSide();
+      }
     }
     this.#updatePieces();
     this.#updateTools();
@@ -725,7 +739,7 @@ export class Rive3DView implements ScreenView {
     root.rotation.set(0, Math.atan2(-along.z, along.x), 0);
     blade.scale.set(length * 0.98, 1, 1);
     handle.position.set((length * 0.98) / 2, 0, 0);
-    const lever = phase.kind === 'lever' || phase.kind === 'bound' ? phase.lever : undefined;
+    const lever = phase.kind === 'lever' ? phase.lever : undefined;
     const progress = lever?.progress ?? 0;
     // Driven in by the strike, deeper as it levers; the handle tips over as the crack opens.
     blade.position.y =
@@ -735,17 +749,13 @@ export class Rive3DView implements ScreenView {
     // The mallet: raised over the blade, swinging down during the strike.
     const swing =
       phase.kind === 'swing' ? Math.min((round.now - phase.at) / round.feel.strikeSeconds, 1) : 1;
-    this.#mallet.visible = phase.kind === 'swing' || phase.kind === 'bound';
+    this.#mallet.visible = phase.kind === 'swing';
     this.#mallet.position.copy(middle).add(new THREE.Vector3(0, 0, 0.55));
     this.#mallet.rotation.set(-(1 - swing ** 2) * 1.3 - 0.25, Math.atan2(-along.z, along.x), 0);
-    // The guide: each line along the end face, red off centre, gold along a check.
+    // The guide: each line along the end face, warming from white to red the harder it'll pull.
     if (phase.kind === 'aim') {
       const preview = round.aimPreview;
-      const color = preview?.offCentre
-        ? COLORS.danger
-        : preview?.check
-          ? COLORS.gold
-          : COLORS.guide;
+      const color = COLORS.pull[pullLevel(preview?.unevenness ?? 0)] ?? COLORS.guide;
       lines.forEach((angle, index) => {
         const mesh = this.#guide.lines[index];
         if (!mesh) return;
@@ -756,7 +766,7 @@ export class Rive3DView implements ScreenView {
         (mesh.material as THREE.MeshBasicMaterial).color.setHex(color);
       });
     }
-    // The crack racing down the bark at each end of the line, reddening as it strains.
+    // The crack racing down the bark at each end of the line, reddening as the bubble drifts.
     if (lever) {
       lines.forEach((angle, index) => {
         const crack = this.#crack(index);
@@ -769,9 +779,9 @@ export class Rive3DView implements ScreenView {
         crack.rotation.set(0, Math.atan2(-out.z, out.x) + Math.PI / 2, 0);
         (crack.material as THREE.MeshBasicMaterial).color
           .setHex(COLORS.crack)
-          .lerp(new THREE.Color(COLORS.strain), Math.min(lever.strain, 1));
+          .lerp(new THREE.Color(COLORS.strain), Math.min(Math.abs(lever.offset), 1));
       });
-      this.#strainFeedback();
+      this.#driftFeedback();
     }
   }
 
@@ -787,21 +797,42 @@ export class Rive3DView implements ScreenView {
     return crack;
   }
 
-  /** While the crack strains: a rising creak and harder buzz ticks. */
-  #strainFeedback(): void {
+  /** While the crack drifts off straight: a creak and buzz ticks, stronger the further it's gone. */
+  #driftFeedback(): void {
     const round = this.#round;
     const phase = round?.phase;
     if (!round || phase?.kind !== 'lever') return;
-    const { lever } = phase;
-    if (!lever.straining || round.now < this.#strainTickAt) return;
+    const drift = Math.abs(phase.lever.offset);
+    if (drift < 0.3 || round.now < this.#strainTickAt) return;
     this.#strainTickAt = round.now + STRAIN_TICK;
     const feel = this.#deps.feel.values;
-    this.#play(
-      `creak-${1 + Math.floor(Math.random() * 3)}`,
-      0.35 + lever.strain * 0.4,
-      lever.strain * 900,
-    );
-    this.#deps.haptics.pulse(feel.buzzCrackMs + Math.round(lever.strain * 12));
+    this.#play(`creak-${1 + Math.floor(Math.random() * 3)}`, 0.3 + drift * 0.45, drift * 900);
+    this.#deps.haptics.pulse(feel.buzzCrackMs + Math.round(drift * 14));
+  }
+
+  /**
+   * At the start of a lever: which way the thin side looks on screen, so a sideways drag away
+   * from it pushes the bubble back.
+   */
+  #findThinSide(): void {
+    const round = this.#round;
+    const piece = round?.current;
+    const phase = round?.phase;
+    const log = this.#log;
+    if (!round || !piece || !log || phase?.kind !== 'lever') return;
+    const pieces = splitPiece(piece, phase.angle);
+    const [thin, thick] = thinSide(pieces) === 0 ? pieces : [pieces[1], pieces[0]];
+    const x = (part: Piece) =>
+      this.#facePoint(piece, part.start + part.width / 2, log.radius * 0.6).project(this.#camera).x;
+    this.#thinSign = x(thin) >= x(thick) ? 1 : -1;
+  }
+
+  /** A point on a piece's top, `distance` from the pith at `angle`, in world space. */
+  #facePoint(piece: Piece, angle: number, distance: number): THREE.Vector3 {
+    const log = this.#log;
+    return this.#restingPlace(piece)
+      .addScaledVector(this.#direction(angle), distance)
+      .setY(BLOCK_HEIGHT + (log?.height ?? 1.6) + LIFT);
   }
 
   #updateCamera(dt: number): void {
@@ -863,9 +894,12 @@ export class Rive3DView implements ScreenView {
       if (phase.kind === 'aim') {
         if (pointer.aiming) this.#aimAt(event.clientX, event.clientY);
       } else if (phase.kind === 'lever' && !pointer.aiming) {
-        // Pulling the handle down (toward the bottom of the screen) runs the crack.
+        // Pulling the handle down runs the crack; sideways moves the bubble (lean against the
+        // pull, away from the thin side).
         this.#leverPixels = pointer.base + Math.max(event.clientY - pointer.startY, 0);
         round.drag(this.#leverPixels);
+        const lean = (event.clientX - pointer.startX) / this.#deps.feel.values.leanTravel;
+        round.lean(lean * this.#thinSign);
       }
     });
     const end = (event: PointerEvent) => {
@@ -875,6 +909,7 @@ export class Rive3DView implements ScreenView {
       if (this.#round?.phase.kind === 'lever' && !pointer.aiming) {
         this.#leverPixels = pointer.base + Math.max(event.clientY - pointer.startY, 0);
         this.#round.drag(this.#leverPixels);
+        this.#round.lean(0);
       }
       this.#pointer = undefined;
     };
@@ -954,7 +989,16 @@ export class Rive3DView implements ScreenView {
     });
     left.setAttribute('aria-label', 'Turn the froe counter-clockwise');
     right.setAttribute('aria-label', 'Turn the froe clockwise');
-    controls.append(left, strike, right);
+    const finish = button('Keep', 'rv-button rv-finish', () => {
+      this.#round?.finish();
+    });
+    controls.append(left, strike, right, finish);
+    // The bubble while levering: drifts toward the thin side; drag sideways to keep it centred.
+    const level = el('div', 'rv-level');
+    const levelBubble = el('div', 'rv-level-bubble');
+    const levelThin = el('div', 'rv-level-thin', 'thin side');
+    level.append(levelThin, levelBubble);
+    const sideLabels = el('div', 'rv-sides');
     const card = el('div', 'rv-card');
     const cardTitle = el('div', 'rv-card-title');
     const cardText = el('div', 'rv-card-text');
@@ -970,7 +1014,7 @@ export class Rive3DView implements ScreenView {
     cardButtons.append(leave, next);
     card.append(cardTitle, cardText, cardButtons);
     card.hidden = true;
-    root.append(logName, tally, hint, flashes, controls, card);
+    root.append(logName, tally, sideLabels, hint, flashes, controls, level, card);
     this.#element.append(root);
     return {
       root,
@@ -982,6 +1026,11 @@ export class Rive3DView implements ScreenView {
       left,
       strike,
       right,
+      finish,
+      level,
+      levelBubble,
+      levelThin,
+      sideLabels,
       card,
       cardTitle,
       cardText,
@@ -1007,42 +1056,93 @@ export class Rive3DView implements ScreenView {
     const logs = this.#deps.game.inventory.count('log');
     const multiplier = round.multiplierLeft;
     const grains = multiplier === 1 ? '' : ` · ×${times(multiplier)} if kept`;
-    ui.tally.textContent = `Staves ${String(round.staves)} / ${String(round.maxStaves)}${grains} · logs left ${String(logs)}`;
+    const staves = round.staves + round.stavesReady;
+    ui.tally.textContent = `Staves ${String(staves)} / ${String(round.maxStaves)}${grains} · logs left ${String(logs)}`;
     const kind = round.phase.kind;
     ui.controls.hidden = kind === 'done';
-    ui.left.hidden = ui.right.hidden = kind !== 'aim';
-    ui.strike.hidden = kind !== 'aim' && kind !== 'bound';
-    ui.strike.textContent = kind === 'bound' ? 'Strike again' : 'Strike';
+    ui.left.hidden = ui.right.hidden = ui.strike.hidden = kind !== 'aim';
+    ui.finish.hidden = !round.canFinish;
+    ui.finish.textContent = `Keep ${String(staves)}`;
     const preview = round.aimPreview;
+    this.#showSides(preview);
     const kinds = this.#deps.game.data.riving.grainKinds;
     const cuts = (preview?.cut ?? []).flatMap((index) => {
-      const kind = kinds.find((entry) => entry.id === this.#log?.grains[index]?.kind);
-      if (!kind) return [];
-      const verb = kind.multiplier < 1 ? 'cuts out' : 'cuts';
-      return [`${verb} the ${kind.name.toLowerCase()} ×${times(kind.multiplier)}`];
+      const grain = kinds.find((entry) => entry.id === this.#log?.grains[index]?.kind);
+      if (!grain) return [];
+      const verb = grain.multiplier < 1 ? 'cuts out' : 'cuts';
+      return [`${verb} the ${grain.name.toLowerCase()} ×${times(grain.multiplier)}`];
     });
+    const pull = pullLevel(preview?.unevenness ?? 0);
     const hints: Record<string, string> = {
-      aim: preview?.offCentre
-        ? 'Off centre: the smaller side will be lost'
+      aim: preview?.throughRot
+        ? 'Through rot: the crack will wobble · or slice the rot out thin'
         : cuts.length > 0
           ? `This line ${cuts.join(' and ')}`
-          : preview?.check
-            ? 'Along a check: it splits easier'
-            : 'Drag to line the froe up with the middle · then Strike',
+          : pull > 0
+            ? "Uneven: it'll pull to the thin side · lean against it"
+            : preview?.check
+              ? 'Along a check: it splits easier'
+              : 'Drag to aim anywhere · thinner staves = more staves, harder to hold',
       swing: '',
-      lever: 'Drag down steadily to lever it open: not too fast, not too slow',
-      bound: 'Too slow: the crack bound. Strike again',
+      lever: 'Drag down to open it · slide sideways to keep the bubble in the middle',
       done: '',
     };
     ui.hint.textContent = hints[kind] ?? '';
-    ui.hint.classList.toggle('rv-hint-warn', kind === 'aim' && Boolean(preview?.offCentre));
+    ui.hint.classList.toggle(
+      'rv-hint-warn',
+      kind === 'aim' && (pull >= 2 || Boolean(preview?.throughRot)),
+    );
     const phaseNow = round.phase;
-    this.#element.dataset.crack =
-      phaseNow.kind === 'lever' || phaseNow.kind === 'bound'
-        ? phaseNow.lever.progress.toFixed(2)
-        : '';
+    const lever = phaseNow.kind === 'lever' ? phaseNow.lever : undefined;
+    ui.level.hidden = !lever;
+    if (lever) {
+      const x = Math.max(-1, Math.min(1, lever.offset)) * this.#thinSign;
+      ui.levelBubble.style.left = `${String(50 + x * 45)}%`;
+      ui.levelBubble.classList.toggle('rv-level-danger', Math.abs(lever.offset) > 0.6);
+      ui.levelThin.classList.toggle('rv-level-thin-left', this.#thinSign < 0);
+    }
+    this.#element.dataset.crack = lever ? lever.progress.toFixed(2) : '';
+    this.#element.dataset.bubble = lever ? lever.offset.toFixed(2) : '';
     this.#element.dataset.aim =
       round.phase.kind === 'aim' ? String(Math.round(normalize(round.phase.angle) / DEG)) : '';
+  }
+
+  /**
+   * While aiming: each side of the line labelled on the log with its width and what it'll be
+   * (a stave, kindling, or a slab to split again), and the thin side with how hard it'll pull.
+   */
+  #showSides(preview: AimPreview | undefined): void {
+    const ui = this.#ui;
+    const round = this.#round;
+    const piece = round?.current;
+    const log = this.#log;
+    if (!preview || !piece || !log) {
+      ui.sideLabels.hidden = true;
+      return;
+    }
+    ui.sideLabels.hidden = false;
+    const { clientWidth: width, clientHeight: height } = this.#element;
+    const names = { stave: 'stave', kindling: 'kindling', slab: 'split again' };
+    preview.pieces.forEach((part, index) => {
+      let label = this.#sideLabels[index];
+      if (!label) {
+        label = document.createElement('div');
+        label.className = 'rv-side';
+        ui.sideLabels.append(label);
+        this.#sideLabels[index] = label;
+      }
+      const size = preview.sizes[index] ?? 'slab';
+      const pull = index === preview.thin ? pullLevel(preview.unevenness) : 0;
+      label.textContent = `${String(Math.round(part.width / DEG))}° ${names[size]}${
+        pull > 0 ? ` ${'›'.repeat(pull)}` : ''
+      }`;
+      label.dataset.size = size;
+      const at = this.#facePoint(piece, part.start + part.width / 2, log.radius * 0.55).project(
+        this.#camera,
+      );
+      label.style.left = `${String(((at.x + 1) / 2) * width)}px`;
+      label.style.top = `${String(((1 - at.y) / 2) * height)}px`;
+    });
   }
 
   /**
@@ -1064,9 +1164,11 @@ export class Rive3DView implements ScreenView {
     const product = kept.reduce((total, index) => total * (kindOf(index)?.multiplier ?? 1), 1);
     const sum = [`${String(staves)} stave${staves === 1 ? '' : 's'}`, ...factors].join(' ');
     const capped = product > multiplier ? ` (capped at ×${times(multiplier)})` : '';
-    const lost = round.finished.filter((entry) => entry.fate !== 'stave').length;
+    const runouts = round.finished.filter((entry) => entry.fate === 'runout').length;
+    const kindling = round.finished.filter((entry) => entry.fate === 'kindling').length;
     const notes: string[] = [];
-    if (lost > 0) notes.push(`${String(lost)} piece${lost === 1 ? '' : 's'} lost`);
+    if (runouts > 0) notes.push(`${String(runouts)} runout${runouts === 1 ? '' : 's'}`);
+    if (kindling > 0) notes.push(`${String(kindling)} kindling`);
     log.grains.forEach((_, index) => {
       if (kept.includes(index)) return;
       const kind = kindOf(index);
@@ -1105,4 +1207,12 @@ export class Rive3DView implements ScreenView {
 function times(value: number): string {
   if (Math.abs(value - 0.5) < 1e-9) return '½';
   return Number.isInteger(value) ? String(value) : value.toFixed(1);
+}
+
+/** How hard a split will pull, for the guide: 0 (even) to 3. */
+function pullLevel(unevenness: number): number {
+  if (unevenness < 0.08) return 0;
+  if (unevenness < 0.25) return 1;
+  if (unevenness < 0.45) return 2;
+  return 3;
 }

@@ -1503,3 +1503,99 @@ body:not([data-view='camp']) #build-label {
     opacity: 0;
   }
 }
+
+/* Riving's bubble while levering: drifts toward the thin side; slide sideways to keep it centred. */
+.rv-level {
+  position: absolute;
+  left: 50%;
+  bottom: calc(var(--safe-bottom) + 40px);
+  width: min(78%, 320px);
+  height: 34px;
+  transform: translateX(-50%);
+  border: 2px solid rgb(255 255 255 / 0.55);
+  border-radius: 17px;
+  background: linear-gradient(
+    90deg,
+    rgb(224 80 60 / 0.55) 0 8%,
+    rgb(0 0 0 / 0.45) 8% 92%,
+    rgb(224 80 60 / 0.55) 92%
+  );
+}
+
+.rv-level::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 4px;
+  bottom: 4px;
+  width: 2px;
+  margin-left: -1px;
+  background: rgb(255 255 255 / 0.45);
+}
+
+.rv-level-bubble {
+  position: absolute;
+  top: 50%;
+  width: 26px;
+  height: 26px;
+  margin: -13px 0 0 -13px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 35%, #fff, #b9e3c2 60%, #6fae4f);
+  box-shadow: 0 0 8px rgb(0 0 0 / 0.4);
+}
+
+.rv-level-bubble.rv-level-danger {
+  background: radial-gradient(circle at 35% 35%, #fff, #f4b3a6 60%, #e0503c);
+}
+
+.rv-level-thin {
+  position: absolute;
+  right: 4px;
+  top: -20px;
+  font:
+    700 12px system-ui,
+    sans-serif;
+  color: #ffd2c8;
+  text-shadow: 0 1px 3px rgb(0 0 0 / 0.8);
+}
+
+.rv-level-thin.rv-level-thin-left {
+  right: auto;
+  left: 4px;
+}
+
+/* While aiming: each side of the line, labelled on the log with its width and what it'll be. */
+.rv-sides {
+  position: absolute;
+  inset: 0;
+}
+
+.rv-side {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: rgb(0 0 0 / 0.55);
+  font:
+    800 13px system-ui,
+    sans-serif;
+  color: #fff;
+  white-space: nowrap;
+}
+
+.rv-side[data-size='stave'] {
+  color: #b9f0a0;
+}
+
+.rv-side[data-size='kindling'] {
+  color: #f0a08c;
+}
+
+.rv-side[data-size='slab'] {
+  color: #f0e0b0;
+}
+
+.rv-finish {
+  min-width: 96px;
+  background: #6fae4f;
+}

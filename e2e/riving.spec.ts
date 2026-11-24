@@ -9,11 +9,11 @@ const feel = riving.feel;
 async function openWorkbench(page: Page, logs: number) {
   if (!bench) throw new Error('No riving station in data');
   await page.addInitScript((count) => {
-    // CI renders 3D in software, slowly enough that a steady drag reads as too slow: widen the
-    // steady band so the test follows the flow (the lever's feel is unit tested).
+    // A steady test hand: no pull or wobble, so the test follows the flow (steering is unit
+    // tested).
     localStorage.setItem(
       'warchest.tuning.riving',
-      JSON.stringify({ bandLow: 0.01, bandHigh: 50, bindSeconds: 30 }),
+      JSON.stringify({ pullPerUnevenness: 0, wobblePerThinness: 0, rotJitter: 0 }),
     );
     localStorage.setItem(
       'warchest.save',
@@ -48,8 +48,8 @@ async function leverSteadily(page: Page) {
   const x = box.x + box.width / 2;
   const y = box.y + box.height * 0.35;
   const steps = 12;
-  // About one log length a second: the middle of the band.
-  const seconds = 1 / ((feel.bandLow + feel.bandHigh) / 2);
+  // About one log length a second.
+  const seconds = 1;
   const travel = feel.leverTravel * 1.1;
   await session.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y }] });
   for (let step = 1; step <= steps; step++) {
@@ -69,14 +69,16 @@ test('rives a log into staves that land in the chest', async ({ page }) => {
   await openWorkbench(page, 3);
   const body = page.locator('body');
   await expect(body).toHaveAttribute('data-riving', 'aim', { timeout: 20_000 });
-  // Seven splits make 8 staves (strike again if a crack binds).
-  for (let turn = 0; turn < 20; turn++) {
-    const phase = await body.getAttribute('data-riving');
-    if (phase === 'done') break;
-    if (phase === 'aim' || phase === 'bound') {
-      await page.getByRole('button', { name: /^Strike/ }).tap();
-      await expect(body).toHaveAttribute('data-riving', 'lever');
+  // Halve to eighths (seven splits), then keep them.
+  const keep = page.getByRole('button', { name: /^Keep/ });
+  for (let turn = 0; turn < 12; turn++) {
+    if ((await body.getAttribute('data-riving')) === 'done') break;
+    if (await keep.isVisible()) {
+      await keep.tap();
+      break;
     }
+    await page.getByRole('button', { name: 'Strike', exact: true }).tap();
+    await expect(body).toHaveAttribute('data-riving', 'lever');
     await leverSteadily(page);
     await expect(body).not.toHaveAttribute('data-riving', 'lever', { timeout: 10_000 });
   }

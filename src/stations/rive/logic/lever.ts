@@ -1,43 +1,67 @@
+import { Rng } from '../../../core';
 import type { RivingFeel } from '../../../data';
 
-export type LeverResult = 'clean' | 'runout' | 'bound';
+/** How a lever ended: clean, or run out to the thin side or (over-leaned) to the thick side. */
+export type LeverResult = 'clean' | 'thin' | 'thick';
+
+/** What a split is like to lever, from where it was aimed. */
+export interface LeverSetup {
+  /** 0 (even) to 1 (a sliver): how hard the crack pulls to the thin side. */
+  unevenness: number;
+  /** The piece's width (degrees): narrow pieces wobble. */
+  width: number;
+  onCheck: boolean;
+  throughRot: boolean;
+  /** Seeds the wobble, so a round replays. */
+  seed: number;
+  /** Where the crack had got to, if this lever carries on an earlier one. */
+  from?: number;
+}
 
 /**
- * Levering a split open after the strike: the handle's drag runs the crack down the log. Keep the
- * crack's speed in the steady band. Faster builds strain (less along a check) and enough of it
- * runs out; slower for too long and the crack binds, so the froe has to be struck again.
+ * Levering a split open after the strike: dragging down runs the crack down the log, and the crack
+ * drifts toward the thin side (harder the more uneven the split and the faster you go; narrow
+ * pieces and rot wobble it either way). A bubble shows the drift, from −1 (thick side) to +1 (thin
+ * side): lean against it with a sideways drag. At either edge it runs out.
  */
 export class Lever {
   /** How far down the log the crack has run, 0–1. */
   progress: number;
-  /** 0–1: at 1 the split runs out. */
-  strain = 0;
+  /** The bubble: −1 (run out to the thick side) … 0 (straight) … +1 (run out to the thin side). */
+  offset = 0;
   result: LeverResult | undefined;
-  /** For the logs: the fastest the crack ran and the most strain it took. */
+  /** For the logs: the fastest the crack ran and the furthest the bubble got. */
   peakSpeed = 0;
-  peakStrain = 0;
+  peakOffset = 0;
   /** Seconds levered. */
   seconds = 0;
   readonly #feel: () => RivingFeel;
-  readonly #onCheck: boolean;
-  readonly #from: number;
+  readonly #setup: LeverSetup;
+  readonly #rng: Rng;
   #target: number;
+  #lean = 0;
   #samples: { t: number; progress: number }[] = [];
-  #slowFor = 0;
+  #wander = 0;
+  #wanderUntil = 0;
 
-  constructor(feel: () => RivingFeel, options: { onCheck: boolean; from?: number }) {
+  constructor(feel: () => RivingFeel, setup: LeverSetup) {
     this.#feel = feel;
-    this.#onCheck = options.onCheck;
-    this.#from = options.from ?? 0;
-    this.progress = this.#from;
-    this.#target = this.#from;
+    this.#setup = setup;
+    this.#rng = new Rng(setup.seed);
+    this.progress = setup.from ?? 0;
+    this.#target = this.progress;
   }
 
-  /** The handle has been pulled `pixels` since this lever started: the crack follows it down. */
+  /** The handle has been pulled down `pixels` since this lever started: the crack follows. */
   drag(pixels: number): void {
     if (this.result) return;
-    const target = this.#from + Math.max(pixels, 0) / this.#feel().leverTravel;
+    const target = (this.#setup.from ?? 0) + Math.max(pixels, 0) / this.#feel().leverTravel;
     this.#target = Math.max(this.#target, Math.min(target, 1));
+  }
+
+  /** Leaning, −1 to 1: pushes the bubble that way (toward the thin side is positive). */
+  lean(amount: number): void {
+    this.#lean = Math.max(-1, Math.min(1, amount));
   }
 
   /** How fast the crack is running, in log lengths per second (averaged over the speed window). */
@@ -49,15 +73,35 @@ export class Lever {
     return (this.progress - old.progress) / (now - old.t);
   }
 
-  /** Whether the crack is running faster than the steady band right now. */
-  get straining(): boolean {
-    return this.speed > this.#feel().bandHigh;
+  /** How hard the crack pulls toward the thin side right now (bubble widths per second). */
+  get pull(): number {
+    const feel = this.#feel();
+    const { unevenness, onCheck, throughRot } = this.#setup;
+    return (
+      unevenness *
+      feel.pullPerUnevenness *
+      (1 + this.speed * feel.speedPull) *
+      (onCheck ? feel.checkEase : 1) *
+      (throughRot ? feel.rotPull : 1)
+    );
+  }
+
+  /** How much the crack wanders either way (bubble widths per second, at most). */
+  get wobble(): number {
+    const feel = this.#feel();
+    const { width, onCheck, throughRot } = this.#setup;
+    const thinness = Math.max(feel.wobbleFrom / Math.max(width, 1) - 1, 0);
+    return (
+      (thinness * feel.wobblePerThinness + (throughRot ? feel.rotJitter : 0)) *
+      (onCheck ? feel.checkEase : 1)
+    );
   }
 
   tick(dt: number): LeverResult | undefined {
     if (this.result || dt <= 0) return this.result;
     const feel = this.#feel();
     this.seconds += dt;
+    const moving = this.#target > this.progress;
     this.progress = this.#target;
     this.#samples.push({ t: this.seconds, progress: this.progress });
     while (
@@ -66,20 +110,18 @@ export class Lever {
     ) {
       this.#samples.shift();
     }
-    const speed = this.speed;
-    this.peakSpeed = Math.max(this.peakSpeed, speed);
-    const over = speed - feel.bandHigh;
-    this.strain =
-      over > 0
-        ? this.strain + over * feel.strainRise * (this.#onCheck ? feel.checkEase : 1) * dt
-        : Math.max(this.strain - feel.strainRecover * dt, 0);
-    this.peakStrain = Math.max(this.peakStrain, Math.min(this.strain, 1));
-    if (this.strain >= 1) return this.#end('runout');
+    this.peakSpeed = Math.max(this.peakSpeed, this.speed);
+    if (this.seconds >= this.#wanderUntil) {
+      this.#wander = this.#rng.range(-1, 1);
+      this.#wanderUntil = this.seconds + feel.wobbleSeconds;
+    }
+    // The crack only drifts while it's running; holding still holds it.
+    const drift = moving || this.speed > 0 ? this.pull + this.#wander * this.wobble : 0;
+    this.offset += (drift + this.#lean * feel.leanRate) * dt;
+    this.peakOffset = Math.max(this.peakOffset, Math.abs(this.offset));
+    if (this.offset >= 1) return this.#end('thin');
+    if (this.offset <= -1) return this.#end('thick');
     if (this.progress >= 1) return this.#end('clean');
-    // Too slow once started: the crack binds.
-    if (this.progress > this.#from && speed < feel.bandLow) this.#slowFor += dt;
-    else this.#slowFor = 0;
-    if (this.#slowFor >= feel.bindSeconds) return this.#end('bound');
     return undefined;
   }
 
