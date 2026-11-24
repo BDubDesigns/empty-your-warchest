@@ -76,7 +76,7 @@ const COLORS = {
   grain: { silver: '#cfd8dc', gold: '#f2c037' } as Record<string, string>,
   grainEdge: { silver: '#8fa0a8', gold: '#a87a12' } as Record<string, string>,
   knot: '#3b2413',
-  knotRing: '#5a3720',
+  knotRing: '#86532c',
   cancelled: '#9b9284',
   glowGood: '#7fd65a',
   glowBad: '#ff4a3a',
@@ -379,7 +379,7 @@ export class Rive3DView implements ScreenView {
   #drawFace(
     log: RivingLog,
     live: ReadonlySet<number>,
-    /** Grains the current aim would cut: they glow, green for bad ones, red for good ones. */
+    /** Grains the current aim would cut: they glow red. */
     aimed: readonly number[] = [],
   ): THREE.CanvasTexture {
     const size = 512;
@@ -1128,9 +1128,9 @@ export class Rive3DView implements ScreenView {
     const pull = pullLevel(preview?.unevenness ?? 0);
     const practice = this.#log?.id === this.#deps.game.data.riving.tutorialLog.id;
     const hints: Record<string, string> = {
-      aim: preview?.throughKnot
-        ? 'Through a knot: the crack wobbles hard'
-        : (preview?.cut.length ?? 0) > 0
+      // The chips say what a line through a knot or a grain does.
+      aim:
+        preview?.throughKnot || (preview?.cut.length ?? 0) > 0
           ? ''
           : pull > 0
             ? "Uneven: it'll pull to the thin side · lean against it"
