@@ -24,7 +24,6 @@ export const runnerTunables: readonly Tunable[] = [
   { key: 'slowMoSeconds', label: 'Wall break slow-mo (s)', min: 0, max: 2, step: 0.1 },
   { key: 'buzzGoodGateMs', label: 'Vibrate: good gate (ms)', min: 0, max: 100, step: 1 },
   { key: 'buzzBadGateMs', label: 'Vibrate: bad gate (ms)', min: 0, max: 150, step: 1 },
-  { key: 'buzzFlipMs', label: 'Vibrate: gate flips (ms)', min: 0, max: 100, step: 1 },
   { key: 'buzzTradeMs', label: 'Vibrate: clash trade (ms)', min: 0, max: 40, step: 1 },
   { key: 'buzzWallHitMs', label: 'Vibrate: wall hit (ms)', min: 0, max: 40, step: 1 },
   { key: 'buzzWallBreakMs', label: 'Vibrate: wall breaks (ms)', min: 0, max: 300, step: 5 },

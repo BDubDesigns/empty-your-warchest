@@ -122,18 +122,18 @@ describe('runner', () => {
     expect(runner.x).toBeCloseTo(runner.maxX);
   });
 
-  it('flips a gate once the squad beats its guards, and only on that side', () => {
+  it("makes a squad fight a gate's guards to reach it, and only on that side", () => {
     const fought = play(sim(), route('left', 'left', 'right'));
-    const third = fought.filter((event) => event.type === 'gate')[2];
     expect(fought.filter((event) => event.type === 'clashStart')).toHaveLength(3);
-    expect(fought.some((event) => event.type === 'flip')).toBe(true);
-    expect(third).toMatchObject({ gate: { op: 'multiply', value: 3 }, flipped: true, good: true });
+    const third = fought.filter((event) => event.type === 'gate')[2];
+    expect(third).toMatchObject({ side: 'right', gate: { op: 'multiply', value: 3 }, good: true });
 
-    // On the other side the guards are skipped, and the gate stays as it was.
+    // On the other side the guards are skipped.
     const skipped = play(sim(), route('left', 'left', 'left'));
-    expect(skipped.some((event) => event.type === 'flip')).toBe(false);
-    const safe = skipped.filter((event) => event.type === 'gate')[2];
-    expect(safe).toMatchObject({ gate: { op: 'add', value: 5 } });
+    expect(skipped.filter((event) => event.type === 'avoided')).toHaveLength(2);
+    expect(skipped.filter((event) => event.type === 'gate')[2]).toMatchObject({
+      gate: { op: 'add', value: 5 },
+    });
   });
 
   it('only fights a lane group when the squad is on its side', () => {

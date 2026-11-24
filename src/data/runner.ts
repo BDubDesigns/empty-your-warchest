@@ -30,7 +30,6 @@ export const runner = {
     slowMoSeconds: 0.6,
     buzzGoodGateMs: 25,
     buzzBadGateMs: 60,
-    buzzFlipMs: 40,
     buzzTradeMs: 6,
     buzzWallHitMs: 10,
     buzzVolleyMs: 30,

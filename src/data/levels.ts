@@ -21,26 +21,20 @@ export const levels = [
       },
       // A warm-up: mostly unarmed, so spearmen tear through them.
       { type: 'enemies', at: 0.26, enemy: 'bandit', count: 8, armed: 2 },
-      // Safe vs greedy: a clear +10, or fight through a few bandits for ×3. ×3 mostly adds unarmed men
-      // unless you brought spare spears: a gate is only worth what you can arm.
-      { type: 'enemies', at: 0.45, enemy: 'bandit', count: 5, armed: 4, lane: 'right' },
+      // Safe vs greedy, twice, each riskier than the last: fight through the guards for a bigger gate,
+      // or take the clear one. Every fight is paid for in spearmen, and the extra bodies are only
+      // worth what you can arm.
       {
         type: 'gates',
         at: 0.49,
         left: { op: 'add', value: 10 },
-        right: { op: 'multiply', value: 3 },
+        right: { op: 'multiply', value: 2, guards: { enemy: 'bandit', count: 3, armed: 1 } },
       },
-      // Risk-reward: fight the guards in that lane to flip −10 into ×3 (more than you can arm), or
-      // take the safe +5.
       {
         type: 'gates',
         at: 0.65,
         left: { op: 'add', value: 5 },
-        right: {
-          op: 'subtract',
-          value: 10,
-          flip: { op: 'multiply', value: 3, enemy: 'bandit', guards: 6, armedGuards: 5 },
-        },
+        right: { op: 'multiply', value: 3, guards: { enemy: 'bandit', count: 6, armed: 5 } },
       },
       // The real test: mostly armed.
       { type: 'enemies', at: 0.82, enemy: 'bandit', count: 22, armed: 13 },

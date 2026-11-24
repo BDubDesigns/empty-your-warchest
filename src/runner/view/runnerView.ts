@@ -380,9 +380,9 @@ export class RunnerView implements ScreenView {
   #drawGate(visual: GateVisual, gate: TrackGate): void {
     const active = this.#sim.activeGate(gate);
     const good = isGoodOp(active.op);
-    const flipHint =
-      gate.base.flip && !gate.flipped ? `beat guards → ${gateLabel(gate.base.flip)}` : '';
-    const key = `${gateLabel(active)}|${flipHint}`;
+    // A guarded gate says so under its number; the guards stand right in front of it.
+    const subtitle = gate.base.guards ? 'guarded' : '';
+    const key = `${gateLabel(active)}|${subtitle}`;
     if (visual.drawn === key) return;
     visual.drawn = key;
     visual.panel.material.color.setHex(good ? COLORS.good : COLORS.bad);
@@ -392,7 +392,7 @@ export class RunnerView implements ScreenView {
     context.clearRect(0, 0, width, height);
     context.fillStyle = good ? GOOD_CSS : BAD_CSS;
     context.beginPath();
-    context.roundRect(8, 8, width - 16, flipHint ? height - 16 : height * 0.72, 36);
+    context.roundRect(8, 8, width - 16, subtitle ? height - 16 : height * 0.72, 36);
     context.fill();
     context.lineWidth = 8;
     context.strokeStyle = 'rgba(255,255,255,0.85)';
@@ -402,11 +402,11 @@ export class RunnerView implements ScreenView {
     context.textBaseline = 'middle';
     // Colour plus a shape cue, so colourblind players can read it too.
     context.font = '900 112px system-ui, sans-serif';
-    const mainY = flipHint ? height * 0.36 : height * 0.39;
+    const mainY = subtitle ? height * 0.36 : height * 0.39;
     context.fillText(`${good ? '▲' : '▼'} ${gateLabel(active)}`, width / 2, mainY);
-    if (flipHint) {
+    if (subtitle) {
       context.font = '800 52px system-ui, sans-serif';
-      context.fillText(flipHint, width / 2, height * 0.76);
+      context.fillText(subtitle, width / 2, height * 0.76);
     }
     visual.texture.needsUpdate = true;
   }
@@ -1092,7 +1092,6 @@ export class RunnerView implements ScreenView {
           side: event.side,
           op: event.gate.op,
           value: event.gate.value,
-          flipped: event.flipped,
           before: event.before,
           after: event.after,
           armedBefore: event.armedBefore,
@@ -1110,28 +1109,6 @@ export class RunnerView implements ScreenView {
           this.#shake = 0.6;
           haptics.pulse(feel.buzzBadGateMs);
         }
-        break;
-      }
-      case 'flip': {
-        logger.log('runner.flip', {
-          index: event.index,
-          side: event.side,
-          seconds: round2(sim.seconds),
-        });
-        const gates = sim.track[event.index];
-        if (gates?.kind === 'gates') {
-          const visual = this.#gates.get(event.index)?.[event.side];
-          if (visual) this.#drawGate(visual, gates[event.side]);
-          const at = new THREE.Vector3(
-            (event.side === 'left' ? -1 : 1) * (sim.halfWidth / 2),
-            3,
-            -gates.at,
-          );
-          this.#burst(at, 30, COLORS.good, 6);
-        }
-        this.#sound('chest-latch', 1, -200, 0);
-        this.#sound('star', 0.6, 700, 0);
-        haptics.pulse(feel.buzzFlipMs);
         break;
       }
       case 'clashStart':

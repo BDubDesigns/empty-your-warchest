@@ -77,19 +77,16 @@ const gateSchema = z.object({
   op: gateOp,
   value: positiveInt,
   /**
-   * A flip gate: guards stand in front of it in its lane, and a squad on that side has to fight
-   * them (decided Nov 24: physically, so archers can later clear them from range). Beat them all
-   * and the gate turns into `op` and `value`.
+   * A guarded gate: enemies stand in front of it in its lane, and a squad on that side has to
+   * fight through them to reach it (decided Nov 24: a blue gate behind enemies reads as "fight for
+   * it"; it replaced the red flip gate, which read as "bad thing, guarded").
    */
-  flip: z
+  guards: z
     .object({
-      op: gateOp,
-      value: positiveInt,
-      /** Who guards it, how many, and how many of them carry spears. */
       enemy: id,
-      guards: positiveInt,
-      /** How many guards carry spears; the rest are unarmed and stand in front. */
-      armedGuards: z.number().int().nonnegative(),
+      count: positiveInt,
+      /** How many of them carry spears; the armed lead and fall first. */
+      armed: z.number().int().nonnegative(),
     })
     .optional(),
 });
@@ -385,7 +382,6 @@ const runnerFeelSchema = z.object({
   /** Vibration pulses (ms). */
   buzzGoodGateMs: nonNegative,
   buzzBadGateMs: nonNegative,
-  buzzFlipMs: nonNegative,
   buzzTradeMs: nonNegative,
   buzzWallHitMs: nonNegative,
   buzzVolleyMs: nonNegative,
@@ -403,7 +399,7 @@ export const runnerSchema = z.object({
    * at this speed. The run-speed slider changes how fast you run it, not how long it is.
    */
   trackMetersPerSecond: positive,
-  /** How far in front of a flip gate its guards stand (m). */
+  /** How far in front of a guarded gate its guards stand (m). */
   guardGap: positive,
   /** Room to the side of the track the squad's centre can't enter (m). */
   edgeMargin: nonNegative,

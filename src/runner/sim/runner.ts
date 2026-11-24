@@ -20,8 +20,6 @@ export type Lane = Side | 'both';
 /** One gate of a pair, as it stands on the track. */
 export interface TrackGate {
   readonly base: Gate;
-  /** A flip gate turns once its guards are beaten. */
-  flipped: boolean;
 }
 
 export interface TrackGates {
@@ -47,8 +45,6 @@ export interface TrackEnemies {
   frontHp: number;
   /** True once the squad went past it in the other lane. */
   avoided: boolean;
-  /** A flip gate's guards: beating them flips this gate. */
-  readonly guarding?: TrackGate;
 }
 
 export interface TrackWall {
@@ -71,16 +67,13 @@ export type RunnerEvent =
       type: 'gate';
       index: number;
       side: Side;
-      /** The gate as passed (its flipped form if it flipped). */
       gate: Pick<Gate, 'op' | 'value'>;
       good: boolean;
-      flipped: boolean;
       before: number;
       after: number;
       armedBefore: number;
       armedAfter: number;
     }
-  | { type: 'flip'; index: number; side: Side }
   | {
       type: 'clashStart';
       index: number;
@@ -183,18 +176,16 @@ export class RunnerSim {
           const gates: TrackGates = {
             kind: 'gates',
             at,
-            left: { base: event.left, flipped: false },
-            right: { base: event.right, flipped: false },
+            left: { base: event.left },
+            right: { base: event.right },
             passed: false,
           };
-          // A flip gate's guards stand in its lane, just in front of it.
+          // A guarded gate's guards stand in its lane, just in front of it.
           for (const side of ['left', 'right'] as const) {
-            const flip = event[side].flip;
-            if (!flip) continue;
+            const guards = event[side].guards;
+            if (!guards) continue;
             track.push(
-              this.#group(at - runner.guardGap, flip.enemy, side, flip.guards, flip.armedGuards, {
-                guarding: gates[side],
-              }),
+              this.#group(at - runner.guardGap, guards.enemy, side, guards.count, guards.armed),
             );
           }
           track.push(gates);
@@ -218,14 +209,7 @@ export class RunnerSim {
     this.track = track;
   }
 
-  #group(
-    at: number,
-    enemy: string,
-    lane: Lane,
-    count: number,
-    armed: number,
-    extra: { guarding?: TrackGate } = {},
-  ): TrackEnemies {
+  #group(at: number, enemy: string, lane: Lane, count: number, armed: number): TrackEnemies {
     return {
       kind: 'enemies',
       at,
@@ -237,7 +221,6 @@ export class RunnerSim {
       armed,
       frontHp: this.#enemyUnit(enemy).hp,
       avoided: false,
-      ...extra,
     };
   }
 
@@ -292,9 +275,9 @@ export class RunnerSim {
     return undefined;
   }
 
-  /** A gate's current form: its flipped side once flipped. */
+  /** What a gate does to the squad. */
   activeGate(gate: TrackGate): Pick<Gate, 'op' | 'value'> {
-    return gate.flipped && gate.base.flip ? gate.base.flip : gate.base;
+    return gate.base;
   }
 
   /**
@@ -437,7 +420,6 @@ export class RunnerSim {
       side,
       gate,
       good: isGoodOp(gate.op),
-      flipped: trackGate.flipped,
       before,
       after: this.squad.count,
       armedBefore,
@@ -508,15 +490,6 @@ export class RunnerSim {
           squad: this.squad.count,
           armed: this.squad.armedCount,
         });
-        const gate = group.guarding;
-        if (gate) {
-          gate.flipped = true;
-          const gates = this.nextGates;
-          if (gates) {
-            const side = gates.event.left === gate ? 'left' : 'right';
-            events.push({ type: 'flip', index: gates.index, side });
-          }
-        }
       } else {
         this.#gap = Math.max(this.#feel.tradeMinSeconds, this.#gap * this.#feel.tradeSpeedup);
         this.#timer += this.#gap;
