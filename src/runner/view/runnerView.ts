@@ -7,7 +7,6 @@ import { Rng, type EventLogger, type LiveTuning } from '../../core';
 import type { GameData, RunnerFeel } from '../../data';
 import {
   gateLabel,
-  guardsLeft,
   isGoodOp,
   runnerConfig,
   RunnerSim,
@@ -80,8 +79,6 @@ interface GateVisual {
   label: THREE.Sprite;
   canvas: HTMLCanvasElement;
   texture: THREE.CanvasTexture;
-  /** A flip gate's guards, standing in front of it until the squad cuts them down. */
-  guards: THREE.InstancedMesh | undefined;
   drawn: string;
 }
 
@@ -148,7 +145,6 @@ export class RunnerView implements ScreenView {
   #bandits = new Map<number, BanditGroup>();
   #wall!: { group: THREE.Group; logs: THREE.Mesh[]; tilts: number[]; archers: THREE.Mesh[] };
   #arrows: Arrow[] = [];
-  #lastAttackSpark = 0;
   #planks: Plank[] = [];
   #started = false;
   #accumulator = 0;
@@ -372,27 +368,8 @@ export class RunnerView implements ScreenView {
       label.position.y = 3.8;
       label.renderOrder = 2;
       group.add(label);
-      let guards: THREE.InstancedMesh | undefined;
-      const flip = event[side].base.flip;
-      if (flip) {
-        const geometry = new THREE.CapsuleGeometry(UNIT.radius * 1.1, UNIT.length, 4, 8);
-        geometry.translate(0, UNIT.radius + UNIT.length / 2, 0);
-        guards = new THREE.InstancedMesh(
-          geometry,
-          new THREE.MeshLambertMaterial({ color: COLORS.bandit }),
-          flip.guards,
-        );
-        // A row in front of the gate, facing the squad.
-        const matrix = new THREE.Matrix4();
-        for (let i = 0; i < flip.guards; i++) {
-          const spread = half - 1;
-          const gx = flip.guards > 1 ? -spread / 2 + (i / (flip.guards - 1)) * spread : 0;
-          guards.setMatrixAt(i, matrix.makeTranslation(gx, 0, 1.2));
-        }
-        group.add(guards);
-      }
       this.#world.add(group);
-      visuals[side] = { panel, label, canvas, texture, guards, drawn: '' };
+      visuals[side] = { panel, label, canvas, texture, drawn: '' };
       this.#drawGate(visuals[side], event[side]);
     }
     this.#gates.set(index, visuals);
@@ -1009,16 +986,6 @@ export class RunnerView implements ScreenView {
       this.#drawGate(visual, gate);
       visual.label.material.opacity = opacity;
       visual.panel.material.opacity = event.passed ? 0.15 : 0.42;
-      if (visual.guards) {
-        // Guards fall as the squad's attacks land; the last one flips the gate.
-        visual.guards.count = guardsLeft(gate);
-        if (this.#sim.attacking(event, side) && this.#clock - this.#lastAttackSpark > 0.08) {
-          this.#lastAttackSpark = this.#clock;
-          const x = (side === 'left' ? -1 : 1) * (this.#sim.halfWidth / 2);
-          const at = new THREE.Vector3(x + this.#fx.range(-1.5, 1.5), 0.8, -event.at + 1.2);
-          this.#burst(at, 2, COLORS.spark, 2);
-        }
-      }
     }
   }
 
@@ -1153,16 +1120,6 @@ export class RunnerView implements ScreenView {
         this.#sound('chest-latch', 1, -200, 0);
         this.#sound('star', 0.6, 700, 0);
         haptics.pulse(feel.buzzFlipMs);
-        break;
-      }
-      case 'guardFell': {
-        const gates = sim.track[event.index];
-        if (gates?.kind === 'gates') {
-          const x = (event.side === 'left' ? -1 : 1) * (sim.halfWidth / 2);
-          this.#burst(new THREE.Vector3(x, 0.8, -gates.at + 1.2), 10, COLORS.bandit, 3);
-        }
-        this.#sound(`chop-${1 + this.#fx.int(0, 2)}`, 0.6, 300 + (5 - event.guardsLeft) * 120, 0);
-        haptics.pulse(feel.buzzTradeMs * 2);
         break;
       }
       case 'clashStart':

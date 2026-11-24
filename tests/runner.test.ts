@@ -115,29 +115,23 @@ describe('runner', () => {
     expect(runner.x).toBeCloseTo(runner.maxX);
   });
 
-  it('flips a gate the squad attacks long enough, and not one it ignores', () => {
-    const flipped = play(sim({ flipAttackRate: 10 }), route('left', 'left', 'right'));
-    const third = flipped.filter((event) => event.type === 'gate')[2];
-    expect(flipped.some((event) => event.type === 'flip')).toBe(true);
-    expect(flipped.filter((event) => event.type === 'guardFell')).toHaveLength(4);
+  it('flips a gate once the squad beats its guards, and only on that side', () => {
+    const fought = play(sim(), route('left', 'left', 'right'));
+    const third = fought.filter((event) => event.type === 'gate')[2];
+    expect(fought.filter((event) => event.type === 'clashStart')).toHaveLength(3);
+    expect(fought.some((event) => event.type === 'flip')).toBe(true);
     expect(third).toMatchObject({ gate: { op: 'multiply', value: 3 }, flipped: true, good: true });
 
-    // Steering over only at the last moment leaves no time to fill the bar.
-    const late = play(sim({ flipAttackRate: 10 }), (runner) => {
-      const next = runner.nextGates;
-      const flipPair = next?.event.right.base.flip !== undefined;
-      const close = next !== undefined && next.event.at - runner.distance < 0.5;
-      return flipPair && close ? runner.halfWidth : -runner.halfWidth;
-    });
-    expect(late.some((event) => event.type === 'flip')).toBe(false);
-    const events = play(sim({ flipAttackRate: 0 }), route('left', 'left', 'right'));
-    const gate = events.filter((event) => event.type === 'gate')[2];
-    expect(gate).toMatchObject({ gate: { op: 'subtract', value: 10 }, good: false });
+    // On the other side the guards are skipped, and the gate stays as it was.
+    const skipped = play(sim(), route('left', 'left', 'left'));
+    expect(skipped.some((event) => event.type === 'flip')).toBe(false);
+    const safe = skipped.filter((event) => event.type === 'gate')[2];
+    expect(safe).toMatchObject({ gate: { op: 'add', value: 5 } });
   });
 
   it('only fights a lane group when the squad is on its side', () => {
     const avoided = play(sim(), route('left', 'left', 'left'));
-    expect(avoided.some((event) => event.type === 'avoided')).toBe(true);
+    expect(avoided.filter((event) => event.type === 'avoided')).toHaveLength(2);
     const fought = play(sim(), route('left', 'right', 'left'));
     const clashes = fought.filter((event) => event.type === 'clashStart');
     expect(clashes).toHaveLength(3);

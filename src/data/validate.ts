@@ -97,6 +97,12 @@ function checkReferences(data: GameData, ctx: z.RefinementCtx): void {
           if (gate.flip && (gate.op === 'add' || gate.op === 'multiply')) {
             issue([...eventPath, side], 'Only negative gates (subtract, divide) can be flippable');
           }
+          if (gate.flip && !enemies.has(gate.flip.enemy)) {
+            issue([...eventPath, side, 'flip', 'enemy'], `Unknown enemy "${gate.flip.enemy}"`);
+          }
+          if (gate.flip && gate.flip.armedGuards > gate.flip.guards) {
+            issue([...eventPath, side, 'flip', 'armedGuards'], 'More armed guards than guards');
+          }
           if (gate.flip && (gate.flip.op === 'subtract' || gate.flip.op === 'divide')) {
             issue([...eventPath, side, 'flip'], 'A flip gate must flip to add or multiply');
           }

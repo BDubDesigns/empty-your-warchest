@@ -5,6 +5,7 @@ export const runner = {
   level: 'skirmish_1',
   trackWidth: 8,
   trackMetersPerSecond: 8.5,
+  guardGap: 5,
   edgeMargin: 0.6,
   feel: {
     runSpeed: 8.5,
@@ -17,8 +18,6 @@ export const runner = {
     tradeSpeedup: 0.96,
     tradeMinSeconds: 0.03,
     wallAttackRate: 1,
-    flipAttackRate: 0.7,
-    flipRange: 45,
     gateReadSeconds: 2.2,
     cameraAngle: 48,
     cameraDistance: 17,

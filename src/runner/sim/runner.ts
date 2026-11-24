@@ -20,8 +20,7 @@ export type Lane = Side | 'both';
 /** One gate of a pair, as it stands on the track. */
 export interface TrackGate {
   readonly base: Gate;
-  /** Attack points landed on a flip gate so far. */
-  flipPoints: number;
+  /** A flip gate turns once its guards are beaten. */
   flipped: boolean;
 }
 
@@ -48,6 +47,8 @@ export interface TrackEnemies {
   frontHp: number;
   /** True once the squad went past it in the other lane. */
   avoided: boolean;
+  /** A flip gate's guards: beating them flips this gate. */
+  readonly guarding?: TrackGate;
 }
 
 export interface TrackWall {
@@ -79,7 +80,6 @@ export type RunnerEvent =
       armedBefore: number;
       armedAfter: number;
     }
-  | { type: 'guardFell'; index: number; side: Side; guardsLeft: number }
   | { type: 'flip'; index: number; side: Side }
   | {
       type: 'clashStart';
@@ -126,7 +126,7 @@ export interface RunnerConfig {
   unit: Unit;
   /** Each enemy kind and the unit whose numbers it fights with. */
   enemies: ReadonlyMap<string, { enemy: Enemy; unit: Unit }>;
-  runner: Pick<RunnerData, 'trackWidth' | 'trackMetersPerSecond' | 'edgeMargin'>;
+  runner: Pick<RunnerData, 'trackWidth' | 'trackMetersPerSecond' | 'edgeMargin' | 'guardGap'>;
   feel: RunnerFeel;
   /** Spear qualities, worst to best. */
   qualities: readonly string[];
@@ -175,41 +175,70 @@ export class RunnerSim {
     this.squad.recruit(level.startingRecruits);
     this.length = level.durationSeconds * runner.trackMetersPerSecond;
     this.halfWidth = runner.trackWidth / 2;
-    this.track = level.events.map((event): TrackEvent => {
+    const track: TrackEvent[] = [];
+    for (const event of level.events) {
       const at = event.at * this.length;
       switch (event.type) {
-        case 'gates':
-          return {
+        case 'gates': {
+          const gates: TrackGates = {
             kind: 'gates',
             at,
-            left: { base: event.left, flipPoints: 0, flipped: false },
-            right: { base: event.right, flipPoints: 0, flipped: false },
+            left: { base: event.left, flipped: false },
+            right: { base: event.right, flipped: false },
             passed: false,
           };
+          // A flip gate's guards stand in its lane, just in front of it.
+          for (const side of ['left', 'right'] as const) {
+            const flip = event[side].flip;
+            if (!flip) continue;
+            track.push(
+              this.#group(at - runner.guardGap, flip.enemy, side, flip.guards, flip.armedGuards, {
+                guarding: gates[side],
+              }),
+            );
+          }
+          track.push(gates);
+          break;
+        }
         case 'enemies':
-          return {
-            kind: 'enemies',
-            at,
-            enemy: event.enemy,
-            lane: event.lane,
-            total: event.count,
-            totalArmed: event.armed,
-            unarmed: event.count - event.armed,
-            armed: event.armed,
-            frontHp: this.#enemyUnit(event.enemy).hp,
-            avoided: false,
-          };
+          track.push(this.#group(at, event.enemy, event.lane, event.count, event.armed));
+          break;
         case 'wall':
-          return {
+          track.push({
             kind: 'wall',
             at,
             maxHp: event.hp,
             hp: event.hp,
             volleySeconds: event.archers.volleySeconds,
             perVolley: event.archers.perVolley,
-          };
+          });
+          break;
       }
-    });
+    }
+    this.track = track;
+  }
+
+  #group(
+    at: number,
+    enemy: string,
+    lane: Lane,
+    count: number,
+    armed: number,
+    extra: { guarding?: TrackGate } = {},
+  ): TrackEnemies {
+    return {
+      kind: 'enemies',
+      at,
+      enemy,
+      lane,
+      total: count,
+      totalArmed: armed,
+      unarmed: count - armed,
+      armed,
+      frontHp: this.#enemyUnit(enemy).hp,
+      avoided: false,
+      ...extra,
+    };
   }
 
   get feel(): RunnerFeel {
@@ -266,19 +295,6 @@ export class RunnerSim {
   /** A gate's current form: its flipped side once flipped. */
   activeGate(gate: TrackGate): Pick<Gate, 'op' | 'value'> {
     return gate.flipped && gate.base.flip ? gate.base.flip : gate.base;
-  }
-
-  /** True while the squad is close enough to a flip gate on its side to be attacking it. */
-  attacking(gates: TrackGates, side: Side): boolean {
-    const gate = gates[side];
-    return (
-      this.phase === 'running' &&
-      gate.base.flip !== undefined &&
-      !gate.flipped &&
-      !gates.passed &&
-      this.side === side &&
-      gates.at - this.distance <= this.#feel.flipRange
-    );
   }
 
   /**
@@ -357,7 +373,6 @@ export class RunnerSim {
 
   #run(dt: number, events: RunnerEvent[]): void {
     this.distance = Math.min(this.length, this.distance + this.#feel.runSpeed * dt);
-    this.#attackFlipGates(dt, events);
     for (let event = this.nextEvent; event && this.distance >= event.at; event = this.nextEvent) {
       const index = this.#next;
       if (event.kind === 'gates') {
@@ -396,31 +411,6 @@ export class RunnerSim {
         events.push({ type: 'wallStart', index, squad, armed });
       }
       return;
-    }
-  }
-
-  /** The squad attacks a flip gate on its side while it's in range, filling its bar. */
-  #attackFlipGates(dt: number, events: RunnerEvent[]): void {
-    const next = this.nextGates;
-    if (!next) return;
-    const side = this.side;
-    if (!this.attacking(next.event, side)) return;
-    const gate = next.event[side];
-    const flip = gate.base.flip;
-    if (!flip) return;
-    const before = guardsLeft(gate);
-    gate.flipPoints = Math.min(
-      flip.hp,
-      gate.flipPoints + this.#squadDamage() * this.#feel.flipAttackRate * dt,
-    );
-    const after = guardsLeft(gate);
-    if (after < before && after > 0) {
-      events.push({ type: 'guardFell', index: next.index, side, guardsLeft: after });
-    }
-    if (after === 0) {
-      gate.flipPoints = flip.hp;
-      gate.flipped = true;
-      events.push({ type: 'flip', index: next.index, side });
     }
   }
 
@@ -508,6 +498,15 @@ export class RunnerSim {
           squad: this.squad.count,
           armed: this.squad.armedCount,
         });
+        const gate = group.guarding;
+        if (gate) {
+          gate.flipped = true;
+          const gates = this.nextGates;
+          if (gates) {
+            const side = gates.event.left === gate ? 'left' : 'right';
+            events.push({ type: 'flip', index: gates.index, side });
+          }
+        }
       } else {
         this.#gap = Math.max(this.#feel.tradeMinSeconds, this.#gap * this.#feel.tradeSpeedup);
         this.#timer += this.#gap;
@@ -559,14 +558,6 @@ export class RunnerSim {
       won ? { type: 'won', result } : { type: 'lost', cause: cause ?? 'enemies', result },
     );
   }
-}
-
-/** Guards still standing in front of a flip gate: each takes `hp / guards` attack points. */
-export function guardsLeft(gate: TrackGate): number {
-  const flip = gate.base.flip;
-  if (!flip || gate.flipped) return 0;
-  const perGuard = flip.hp / flip.guards;
-  return Math.max(0, flip.guards - Math.floor(gate.flipPoints / perGuard + 1e-9));
 }
 
 /** The spears a run starts with, by quality, from the debug sliders. */

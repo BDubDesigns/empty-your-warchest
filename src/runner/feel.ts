@@ -16,8 +16,6 @@ export const runnerTunables: readonly Tunable[] = [
   { key: 'tradeSpeedup', label: 'Clash: speed-up per trade', min: 0.8, max: 1, step: 0.01 },
   { key: 'tradeMinSeconds', label: 'Clash: fastest gap (s)', min: 0.01, max: 0.2, step: 0.01 },
   { key: 'wallHitSeconds', label: 'Wall: first hit gap (s)', min: 0.03, max: 0.5, step: 0.01 },
-  { key: 'flipAttackRate', label: 'Flip gate attack rate', min: 0, max: 3, step: 0.05 },
-  { key: 'flipRange', label: 'Flip gate attack range (m)', min: 10, max: 120, step: 5 },
   { key: 'gateReadSeconds', label: 'Gate read-ahead (s)', min: 0.5, max: 5, step: 0.1 },
   { key: 'cameraAngle', label: 'Camera angle (°)', min: 15, max: 75, step: 1 },
   { key: 'cameraDistance', label: 'Camera distance (m)', min: 6, max: 40, step: 0.5 },

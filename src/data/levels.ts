@@ -30,8 +30,8 @@ export const levels = [
         left: { op: 'add', value: 10 },
         right: { op: 'multiply', value: 3 },
       },
-      // Risk-reward: commit early and cut down its guards for ×3 (more than you can arm), or take the
-      // safe +5.
+      // Risk-reward: fight the guards in that lane to flip −10 into ×3 (more than you can arm), or
+      // take the safe +5.
       {
         type: 'gates',
         at: 0.65,
@@ -39,7 +39,7 @@ export const levels = [
         right: {
           op: 'subtract',
           value: 10,
-          flip: { op: 'multiply', value: 3, hp: 120, guards: 5 },
+          flip: { op: 'multiply', value: 3, enemy: 'bandit', guards: 5, armedGuards: 2 },
         },
       },
       // The real test: mostly armed.
