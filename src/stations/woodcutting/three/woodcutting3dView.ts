@@ -9,7 +9,13 @@ import { SkillBar, type XpDeposit } from '../../../app/skillBar';
 import { WarchestHud, type Deposit, type ScreenPoint } from '../../../app/warchestHud';
 import { Rng, type EventLogger, type Game, type LiveChoice, type LiveTuning } from '../../../core';
 import type { Clearing, ClearingTree, WoodcuttingFeel } from '../../../data';
-import { fallTip, previewFelling, type FallStep, type Point } from '../logic/chain';
+import {
+  fallTip,
+  previewFelling,
+  type BoulderRoll,
+  type FallStep,
+  type Point,
+} from '../logic/chain';
 import { fallTilt, rollDistance } from '../logic/fall';
 import { WoodcuttingRound, type RoundEvent, type RoundRoller } from '../logic/round';
 import { chainLogs } from '../logic/score';
@@ -135,6 +141,8 @@ const CHASE_FOLLOW = 5;
 const CHASE_MIN_DISTANCE = 6;
 const CHASE_LOOKAHEAD = 0.3;
 const CHASE_HOLD = 0.9;
+/** How far ahead (seconds) the chase frames a rolling boulder: where it's about to be. */
+const CHASE_ROLL_AHEAD = 0.6;
 /** Seconds a banked tree takes to sink away (hauled off). */
 const HAUL_SECONDS = 0.6;
 /** Rough trunk radius of the tree models after scaling, for where the axe bites. */
@@ -1254,12 +1262,29 @@ export class Woodcutting3DView implements ScreenView {
         }
       }
     }
-    // Boulders rolling now (or about to be): where each is and the rest of its roll.
+    // Boulders rolling now (or about to be): where each is and where it'll be a moment later, not
+    // its whole roll, which can cross the clearing and bounce back.
+    const speed = feel.boulderSpeed;
     for (const roller of round.rollers) {
       if (round.now < roller.start - CHASE_LOOKAHEAD || round.now > roller.end) continue;
-      const visual = this.#boulders.get(roller.roll.boulder);
-      if (visual) points.push(visual.holder.position.clone());
-      for (const point of roller.roll.path) points.push(this.#world(point));
+      const { roll } = roller;
+      const radius =
+        (round.clearing.boulders.find((boulder) => boulder.id === roll.boulder)?.radius ?? 0) *
+        SCALE;
+      for (const ahead of [0, CHASE_ROLL_AHEAD]) {
+        const elapsed = Math.max(round.now + ahead - roller.start, 0);
+        const at = this.#world(
+          rollPoint(roll, rollDistance(elapsed, roll.natural, speed, roll.distance)),
+        );
+        for (const [dx, dz] of [
+          [1, 0],
+          [-1, 0],
+          [0, 1],
+          [0, -1],
+        ] as const) {
+          points.push(at.clone().add(new THREE.Vector3(dx, 0, dz).multiplyScalar(radius * 2)));
+        }
+      }
     }
     if (points.length === 0) return undefined;
     const direction = side
@@ -1267,7 +1292,13 @@ export class Woodcutting3DView implements ScreenView {
       .multiplyScalar(Math.cos(CHASE_ELEVATION))
       .setY(Math.sin(CHASE_ELEVATION))
       .normalize();
-    return this.#framing(points, direction, CHASE_MIN_DISTANCE);
+    const pose = this.#framing(points, direction, CHASE_MIN_DISTANCE);
+    // Spread wider than the overview shows: the overview is the better view of it all.
+    const overview = this.#overview;
+    if (pose.position.distanceTo(pose.target) > overview.position.distanceTo(overview.target)) {
+      return overview;
+    }
+    return pose;
   }
 
   /**
@@ -2461,6 +2492,22 @@ export class Woodcutting3DView implements ScreenView {
  * Whether `visual` stands near the line from the camera toward its target (on the ground), within
  * the first `share` of that line and `radius` of it.
  */
+/** Where a boulder is once it has rolled `distance` along its roll (bounces and all). */
+function rollPoint(roll: BoulderRoll, distance: number): Point {
+  let left = distance;
+  let at = roll.path[0] ?? roll.from;
+  for (const to of roll.path.slice(1)) {
+    const length = Math.hypot(to.x - at.x, to.y - at.y);
+    if (left <= length) {
+      const share = length > 0 ? left / length : 0;
+      return { x: at.x + (to.x - at.x) * share, y: at.y + (to.y - at.y) * share };
+    }
+    left -= length;
+    at = to;
+  }
+  return at;
+}
+
 function blocks(visual: TreeVisual, pose: CameraPose, share: number, radius: number): boolean {
   return blocksAt(visual.root.position, pose, share, radius);
 }
