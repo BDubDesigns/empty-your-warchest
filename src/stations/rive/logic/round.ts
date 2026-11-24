@@ -82,11 +82,16 @@ export class RivingRound {
     this.#rng = new Rng(seed);
     this.count = count !== undefined && hooks.heads.includes(count) ? count : first;
     this.best = bestPlan(hooks.rules, log, hooks.heads);
-    // The cuts start at a random turn that isn't already the best, so there's always a look.
+    // The cuts start at a random turn well short of the best (under 2 stars if there is one), so
+    // the first look always has work to do.
     this.rotation = this.#rng.range(0, Math.PI * 2);
-    for (let tries = 0; tries < 20 && this.plan.worth >= this.best.worth; tries++) {
+    let start = { rotation: this.rotation, worth: this.plan.worth };
+    for (let tries = 0; tries < 40 && this.starsNow >= 2; tries++) {
       this.rotation = this.#rng.range(0, Math.PI * 2);
+      if (this.plan.worth < start.worth)
+        start = { rotation: this.rotation, worth: this.plan.worth };
     }
+    this.rotation = start.rotation;
     this.#log('riving.logStart', {
       log: log.id,
       seed,
@@ -110,6 +115,11 @@ export class RivingRound {
   /** What the head as chosen and turned makes now (with any pieces lost so far). */
   get plan(): Plan {
     return planFor(this.rules, this.log, this.count, this.rotation, this.lost);
+  }
+
+  /** Stars the plan as it stands would earn, pulled cleanly. */
+  get starsNow(): number {
+    return starsFor(this.rules, this.plan.worth, this.best.worth);
   }
 
   /** The staves needed for 1, 2 and 3 stars. */

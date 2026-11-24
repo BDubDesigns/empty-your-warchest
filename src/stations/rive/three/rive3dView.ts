@@ -247,9 +247,9 @@ export class Rive3DView implements ScreenView {
     }
     const tutorial = !game.hasDone(TUTORIAL);
     const seed = Date.now() >>> 0;
-    const log = tutorial ? rules.tutorialLog : generateLog(rules, seed);
     const level = game.level(this.#skill);
     const heads = openHeads(rules, level);
+    const log = tutorial ? rules.tutorialLog : generateLog(rules, seed, heads);
     this.#log = log;
     this.#round = new RivingRound(
       log,

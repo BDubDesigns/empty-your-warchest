@@ -414,7 +414,9 @@ const rivingSchema = z.object({
   starBonus: z.object({ two: nonNegative, three: nonNegative }),
   /**
    * The kinds of grain: what each multiplies the whole log's staves by when it ends up whole in
-   * a stave (they multiply together, up to `multiplierCap`), and how often each turns up.
+   * a stave (they multiply together, up to `multiplierCap`; under 1 is a bad grain), how often
+   * each turns up among the good or bad ones, and how wide (degrees) it can be. A grain must fit
+   * inside one wedge to count, so a wide one can only be kept by a head with few pieces.
    */
   grainKinds: z
     .array(
@@ -423,6 +425,7 @@ const rivingSchema = z.object({
         name: z.string().min(1),
         multiplier: positive,
         weight: positive,
+        width: z.object({ min: positive, max: positive }),
       }),
     )
     .min(1),
@@ -434,18 +437,27 @@ const rivingSchema = z.object({
     height: z.object({ min: positive, max: positive }),
     rings: z.object({ min: positiveInt, max: positiveInt }),
     checks: z.object({ min: z.number().int().min(0), max: z.number().int().min(0) }),
-    grains: z.object({ min: z.number().int().min(0), max: z.number().int().min(0) }),
-    grainWidth: z.object({ min: positive, max: positive }),
+    /** Good grains (multiplier over 1) and bad ones on every log. */
+    good: z.object({ min: z.number().int().min(0), max: z.number().int().min(0) }),
+    bad: z.object({ min: z.number().int().min(0), max: z.number().int().min(0) }),
     knots: z.object({ min: z.number().int().min(0), max: z.number().int().min(0) }),
     knotWidth: z.object({ min: positive, max: positive }),
     /** Least gap (degrees) between two grains or knots, so each reads on its own. */
     grainGap: nonNegative,
     /**
-     * How often a log puts a grain close to a knot (`conflictGap` degrees from its edge): the hard
-     * case, where trimming the knot tight risks the grain. Other logs place everything freely.
+     * How often the first good grain sits close to the first bad one (`nearGap` degrees from its
+     * edge), so a line through the bad one lands its neighbours near the good one.
      */
-    conflictChance: fraction,
-    conflictGap: z.object({ min: nonNegative, max: positive }),
+    nearChance: fraction,
+    nearGap: z.object({ min: nonNegative, max: positive }),
+    /**
+     * Logs are checked with the best-split search: a log is easy when more than `easyShare` of
+     * every head at every turn would earn 3 stars. Only `easyChance` of easy logs are kept; the
+     * rest are made again (up to `tries` times), so most logs are a real choice.
+     */
+    easyShare: fraction,
+    easyChance: fraction,
+    tries: positiveInt,
   }),
   feel: rivingFeelSchema,
 });

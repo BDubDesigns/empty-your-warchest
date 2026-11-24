@@ -3,8 +3,8 @@ import type { GameDataInput } from './schema';
 // Riving (M4a feel prototype). All numbers are first guesses, meant to be tuned on a phone.
 export const riving = {
   recipe: 'rive_stave',
-  // Grains multiply the whole log; three could stack to ×18, so they're capped while we tune.
-  multiplierCap: 6,
+  // Grains multiply the whole log, high enough that every good grain kept counts.
+  multiplierCap: 18,
   checkTolerance: 8,
   // Three heads to start, then one more every few levels (a drip-feed), up to the 16-way.
   cutters: [
@@ -26,10 +26,12 @@ export const riving = {
   // 3 stars asks for most of it. The bonus matches woodcutting's.
   stars: { one: 0.4, two: 0.7, three: 0.9 },
   starBonus: { two: 0.1, three: 0.25 },
+  // Good grains come narrow to wide: a 55° one won't fit an 8-way's 45° wedges, a 75° one
+  // needs the 4-way. Rot is narrower, so cutting it out takes aim.
   grainKinds: [
-    { id: 'rot', name: 'Rot', multiplier: 0.5, weight: 35 },
-    { id: 'silver', name: 'Silver', multiplier: 2, weight: 40 },
-    { id: 'gold', name: 'Gold', multiplier: 3, weight: 25 },
+    { id: 'rot', name: 'Rot', multiplier: 0.5, weight: 1, width: { min: 10, max: 26 } },
+    { id: 'silver', name: 'Silver', multiplier: 2, weight: 60, width: { min: 12, max: 80 } },
+    { id: 'gold', name: 'Gold', multiplier: 3, weight: 40, width: { min: 12, max: 70 } },
   ],
   tutorialLog: {
     id: 'tutorial_log',
@@ -41,7 +43,7 @@ export const riving = {
     knots: [],
     grains: [
       { kind: 'rot', angle: 40, width: 16 },
-      { kind: 'silver', angle: 215, width: 16 },
+      { kind: 'silver', angle: 215, width: 40 },
     ],
   },
   generator: {
@@ -49,14 +51,20 @@ export const riving = {
     height: { min: 1.55, max: 1.8 },
     rings: { min: 11, max: 19 },
     checks: { min: 0, max: 2 },
-    grains: { min: 2, max: 4 },
-    grainWidth: { min: 10, max: 20 },
+    // Always something to keep and something to cut out.
+    good: { min: 1, max: 3 },
+    bad: { min: 1, max: 2 },
     // Knots are parked while rot does the "bad patch" job: one bad rule reads clearer than two.
     knots: { min: 0, max: 0 },
     knotWidth: { min: 10, max: 18 },
-    grainGap: 12,
-    conflictChance: 0.65,
-    conflictGap: { min: 4, max: 25 },
+    grainGap: 10,
+    nearChance: 0.7,
+    nearGap: { min: 4, max: 30 },
+    // With good and bad grains on every log, typically 2–4% of head × turn plans earn 3 stars.
+    // The easiest logs (over 6%) are mostly made again; about 1 in 4 of them gets through.
+    easyShare: 0.06,
+    easyChance: 0.25,
+    tries: 12,
   },
   feel: {
     fineAimStep: 0.5,

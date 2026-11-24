@@ -139,15 +139,31 @@ function checkReferences(data: GameData, ctx: z.RefinementCtx): void {
     'height',
     'rings',
     'checks',
-    'grains',
-    'grainWidth',
+    'good',
+    'bad',
     'knots',
     'knotWidth',
-    'conflictGap',
+    'nearGap',
   ] as const) {
     if (rivingGenerator[key].min > rivingGenerator[key].max) {
       issue(['riving', 'generator', key], 'min must not be more than max');
     }
+  }
+  // A grain wider than the fewest-piece head's wedges could never be kept.
+  const widest = 360 / Math.min(...riving.cutters.map((cutter) => cutter.count));
+  riving.grainKinds.forEach((kind, index) => {
+    if (kind.width.min > kind.width.max) {
+      issue(['riving', 'grainKinds', index, 'width'], 'min must not be more than max');
+    }
+    if (kind.width.max >= widest) {
+      issue(['riving', 'grainKinds', index, 'width', 'max'], 'Too wide for any head to keep');
+    }
+  });
+  if (rivingGenerator.good.max > 0 && !riving.grainKinds.some((kind) => kind.multiplier > 1)) {
+    issue(['riving', 'generator', 'good'], 'Good grains need a kind with a multiplier over 1');
+  }
+  if (rivingGenerator.bad.max > 0 && !riving.grainKinds.some((kind) => kind.multiplier < 1)) {
+    issue(['riving', 'generator', 'bad'], 'Bad grains need a kind with a multiplier under 1');
   }
 
   const woodcutting = data.woodcutting;

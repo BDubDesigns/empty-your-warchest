@@ -146,22 +146,39 @@ export function planFor(
   };
 }
 
+/** Every head at every half degree of turn (a head repeats every 1/count of a turn). */
+function everyPlan(rules: Riving, log: RivingLog, counts: readonly number[]): Plan[] {
+  return counts.flatMap((count) =>
+    Array.from({ length: Math.ceil(TAU / count / SEARCH_STEP) }, (_, step) =>
+      planFor(rules, log, count, step * SEARCH_STEP),
+    ),
+  );
+}
+
 /**
  * The best a log could make with these heads, pulled perfectly: every head tried at every half
- * degree of turn (a head repeats every 1/count of a turn). The first best found wins ties, so the
- * answer is the same every time.
+ * degree of turn. The first best found wins ties, so the answer is the same every time.
  */
 export function bestPlan(rules: Riving, log: RivingLog, counts: readonly number[]): Plan {
+  return survey(rules, log, counts).best;
+}
+
+/**
+ * The best plan, and how easy the log is: the share of every head at every turn that would earn
+ * 3 stars (high means nearly anything works).
+ */
+export function survey(
+  rules: Riving,
+  log: RivingLog,
+  counts: readonly number[],
+): { best: Plan; easy: number } {
+  const plans = everyPlan(rules, log, counts);
   let best: Plan | undefined;
-  for (const count of counts) {
-    const steps = Math.ceil(TAU / count / SEARCH_STEP);
-    for (let step = 0; step < steps; step++) {
-      const plan = planFor(rules, log, count, step * SEARCH_STEP);
-      if (!best || plan.worth > best.worth) best = plan;
-    }
-  }
+  for (const plan of plans) if (!best || plan.worth > best.worth) best = plan;
   if (!best) throw new Error('No heads to rive with');
-  return best;
+  const top = best.worth;
+  const easy = plans.filter((plan) => starsFor(rules, plan.worth, top) >= 3).length / plans.length;
+  return { best, easy };
 }
 
 /** Stars for a log's worth against the best it could make: 0 to 3. */

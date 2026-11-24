@@ -9,6 +9,7 @@ import {
   openHeads,
   planFor,
   starsFor,
+  survey,
   wedgesOf,
   type PressSetup,
   type RivingEvent,
@@ -99,8 +100,9 @@ describe('the cut pattern', () => {
     expect(plan.cut).toEqual([]);
     expect(plan.multiplier).toBe(4.5);
     expect(plan.worth).toBe(22);
-    const capped = planFor(rules, logWith(log.grains.slice(0, 2)), 4, 60 * DEG);
-    expect(capped.multiplier).toBe(rules.multiplierCap);
+    const four = [20, 110, 200, 290].map((angle) => ({ kind: 'gold', angle, width: 10 }));
+    const capped = planFor(rules, logWith(four), 4, 60 * DEG);
+    expect(capped.multiplier).toBe(Math.min(81, rules.multiplierCap));
   });
 
   it('a knot spoils the wedge it touches; lost wedges take their grains with them', () => {
@@ -149,21 +151,51 @@ describe('the cut pattern', () => {
 });
 
 describe('random logs', () => {
-  it('the same seed gives the same log, with grains kept apart', () => {
-    const one = generateLog(rules, 1234);
-    expect(generateLog(rules, 1234)).toEqual(one);
+  const heads = [4, 5, 6];
+  const value = (kind: string) => rules.grainKinds.find((entry) => entry.id === kind);
+
+  it('the same seed gives the same log: good and bad grains, each as wide as its kind allows', () => {
+    const one = generateLog(rules, 1234, heads);
+    expect(generateLog(rules, 1234, heads)).toEqual(one);
     for (let seed = 1; seed <= 40; seed++) {
-      const log = generateLog(rules, seed);
-      expect(log.grains.length).toBeLessThanOrEqual(rules.generator.grains.max);
-      expect(log.knots.length).toBeLessThanOrEqual(rules.generator.knots.max);
+      const log = generateLog(rules, seed, heads);
+      const good = log.grains.filter((grain) => (value(grain.kind)?.multiplier ?? 1) > 1);
+      const bad = log.grains.filter((grain) => (value(grain.kind)?.multiplier ?? 1) < 1);
+      expect(good.length).toBeGreaterThanOrEqual(1);
+      expect(bad.length).toBeGreaterThanOrEqual(1);
+      expect(good.length).toBeLessThanOrEqual(rules.generator.good.max);
+      expect(bad.length).toBeLessThanOrEqual(rules.generator.bad.max);
       log.grains.forEach((grain, index) => {
-        expect(rules.grainKinds.map((kind) => kind.id)).toContain(grain.kind);
+        const kind = value(grain.kind);
+        expect(grain.width).toBeGreaterThanOrEqual(Math.floor(kind?.width.min ?? 0));
+        expect(grain.width).toBeLessThanOrEqual(Math.ceil(kind?.width.max ?? 0));
         for (const other of log.grains.slice(index + 1)) {
           const gap = Math.abs(((grain.angle - other.angle + 540) % 360) - 180);
           expect(gap).toBeGreaterThan((grain.width + other.width) / 2);
         }
       });
     }
+  });
+
+  it('a wide grain only fits a head with few pieces', () => {
+    // A 60° gold can't sit inside an 8-way's 45° wedges, but fits a 5-way's 72°.
+    const log = logWith([{ kind: 'gold', angle: 90, width: 60 }]);
+    expect(bestPlan(rules, log, [8]).multiplier).toBe(1);
+    expect(bestPlan(rules, log, [5]).multiplier).toBe(3);
+    expect(bestPlan(rules, log, [5, 8]).count).toBe(5);
+  });
+
+  it('most logs are a real choice: the biggest head often is not the best', () => {
+    let notBiggest = 0;
+    let easy = 0;
+    for (let seed = 1; seed <= 40; seed++) {
+      const log = generateLog(rules, seed * 7919, heads);
+      const result = survey(rules, log, heads);
+      if (result.best.count !== 6) notBiggest += 1;
+      if (result.easy > rules.generator.easyShare) easy += 1;
+    }
+    expect(notBiggest).toBeGreaterThan(12);
+    expect(easy).toBeLessThan(10);
   });
 });
 
