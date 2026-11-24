@@ -112,14 +112,23 @@ function checkReferences(data: GameData, ctx: z.RefinementCtx): void {
   if (riving.feel.bandLow >= riving.feel.bandHigh) {
     issue(['riving', 'feel', 'bandLow'], 'The steady band must be lower than it is high');
   }
-  if (riving.minStaveDegrees * 2 ** riving.halvings > 360) {
-    issue(['riving', 'minStaveDegrees'], 'Too wide for even halving to make a stave');
-  }
-  const logIds = new Set<string>();
-  riving.logs.forEach((log, index) => {
-    if (logIds.has(log.id)) issue(['riving', 'logs', index, 'id'], `Duplicate id "${log.id}"`);
-    logIds.add(log.id);
+  const kinds = new Set<string>();
+  riving.grainKinds.forEach((kind, index) => {
+    if (kinds.has(kind.id))
+      issue(['riving', 'grainKinds', index, 'id'], `Duplicate id "${kind.id}"`);
+    kinds.add(kind.id);
   });
+  riving.tutorialLog.grains.forEach((grain, index) => {
+    if (!kinds.has(grain.kind)) {
+      issue(['riving', 'tutorialLog', 'grains', index, 'kind'], `Unknown grain "${grain.kind}"`);
+    }
+  });
+  const rivingGenerator = riving.generator;
+  for (const key of ['radius', 'height', 'rings', 'checks', 'grains', 'grainWidth'] as const) {
+    if (rivingGenerator[key].min > rivingGenerator[key].max) {
+      issue(['riving', 'generator', key], 'min must not be more than max');
+    }
+  }
 
   const woodcutting = data.woodcutting;
   if (!data.recipes.some((recipe) => recipe.id === woodcutting.recipe)) {

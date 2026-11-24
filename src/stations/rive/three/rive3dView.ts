@@ -4,9 +4,19 @@ import type { Haptics } from '../../../app/haptics';
 import { Sfx } from '../../../app/sfx';
 import { SkillBar, type XpDeposit } from '../../../app/skillBar';
 import { WarchestHud, type ScreenPoint } from '../../../app/warchestHud';
-import type { EventLogger, Game, KeyValueStore, LiveTuning } from '../../../core';
+import type { EventLogger, Game, LiveTuning } from '../../../core';
 import type { RivingFeel, RivingLog } from '../../../data';
-import { isWhole, normalize, splitLines, DEG, type Fate, type Piece } from '../logic/pieces';
+import { generateLog } from '../logic/generate';
+import {
+  DEG,
+  inArc,
+  isWhole,
+  normalize,
+  splitLines,
+  staveWorth,
+  type Fate,
+  type Piece,
+} from '../logic/pieces';
 import { RivingRound, type RivingEvent } from '../logic/round';
 
 export interface Rive3DDeps {
@@ -14,13 +24,12 @@ export interface Rive3DDeps {
   logger: EventLogger;
   feel: LiveTuning<RivingFeel>;
   haptics: Haptics;
-  /** Remembers which hand-made log comes next, across visits. */
-  store: KeyValueStore;
   /** Leaves the station (the end card's Back to camp). */
   onLeave: () => void;
 }
 
-const NEXT_LOG_KEY = 'warchest.riving.nextLog';
+/** One-time flag: the practice log (no grains) has been riven. */
+const TUTORIAL = 'tutorial.riving';
 /** The chopping block the log stands on: its height, and how much wider than the log it is. */
 const BLOCK_HEIGHT = 0.55;
 const BLOCK_SPREAD = 1.25;
@@ -64,8 +73,9 @@ const COLORS = {
   ringLight: '#e2c08c',
   pith: '#8a5d32',
   check: '#3b2415',
-  knot: '#4a2a16',
-  knotRing: '#6b3f22',
+  grain: { rot: '#4b3a1f', silver: '#cfd8dc', gold: '#f2c037' } as Record<string, string>,
+  grainEdge: { rot: '#2c2112', silver: '#8fa0a8', gold: '#a87a12' } as Record<string, string>,
+  cancelled: '#9b9284',
   froe: 0x9aa3a8,
   handle: 0x8b5a2b,
   mallet: 0x7a5232,
@@ -95,7 +105,7 @@ interface PieceVisual {
  * Riving in 3D: a log stood on end on a chopping block, seen from above, split with a froe and a
  * mallet into staves. The rules (RivingRound) decide everything; this draws them and feeds them
  * touches. Each piece is a wedge of the log whose top shows its part of the end grain (rings,
- * checks, knots), drawn from the same data the rules use.
+ * checks, grains), drawn from the same data the rules use.
  */
 export class Rive3DView implements ScreenView {
   readonly #element: HTMLElement;
@@ -115,6 +125,7 @@ export class Rive3DView implements ScreenView {
   #log: RivingLog | undefined;
   #pieces = new Map<string, PieceVisual>();
   #faceTexture: THREE.CanvasTexture | undefined;
+  #faceCanvas: HTMLCanvasElement | undefined;
   #froe!: { root: THREE.Group; blade: THREE.Mesh; handle: THREE.Group };
   #mallet!: THREE.Group;
   #guide!: { lines: THREE.Mesh[] };
@@ -198,38 +209,34 @@ export class Rive3DView implements ScreenView {
       this.#showNoLogs();
       return;
     }
-    let index = 0;
-    try {
-      index = Number(this.#deps.store.get(NEXT_LOG_KEY) ?? 0) || 0;
-    } catch {
-      // No storage: start from the first log.
-    }
-    const log = rules.logs[index % rules.logs.length] ?? rules.logs[0];
-    if (!log) throw new Error('No riving logs in data');
+    // The first log ever is the practice one; after that every log is new.
+    const tutorial = !game.hasDone(TUTORIAL);
+    const seed = Date.now() >>> 0;
+    const log = tutorial ? rules.tutorialLog : generateLog(rules, seed);
     this.#log = log;
-    this.#round = new RivingRound(log, {
-      logger: this.#deps.logger,
-      feel: () => this.#deps.feel.values,
-      rules,
-      bank: (staves) => {
-        const before = game.xp(this.#skill);
-        const result = game.craft(rules.recipe, { yield: staves });
-        this.#bankedXp = this.#skillBar.hold(game.xp(this.#skill) - before);
-        try {
-          this.#deps.store.set(NEXT_LOG_KEY, String((index + 1) % rules.logs.length));
-        } catch {
-          // Not saved: the same log comes up again next visit.
-        }
-        return result.produced.reduce((sum, stack) => sum + stack.count, 0);
+    this.#round = new RivingRound(
+      log,
+      {
+        logger: this.#deps.logger,
+        feel: () => this.#deps.feel.values,
+        rules,
+        bank: (staves) => {
+          const before = game.xp(this.#skill);
+          const result = game.craft(rules.recipe, { yield: staves });
+          this.#bankedXp = this.#skillBar.hold(game.xp(this.#skill) - before);
+          if (tutorial) game.markDone(TUTORIAL);
+          return result.produced.reduce((sum, stack) => sum + stack.count, 0);
+        },
+        onEvent: (event) => {
+          this.#onEvent(event);
+        },
       },
-      onEvent: (event) => {
-        this.#onEvent(event);
-      },
-    });
+      seed,
+    );
     this.#stavesShown = 0;
     this.#leverPixels = 0;
     this.#buildLog(log);
-    this.#ui.logName.textContent = log.name;
+    this.#ui.logName.textContent = tutorial ? 'Practice log' : this.#grainNames(log);
   }
 
   #clearLog(): void {
@@ -345,19 +352,21 @@ export class Rive3DView implements ScreenView {
   /** The log as one piece (the whole end face), its end grain drawn from data. */
   #buildLog(log: RivingLog): void {
     this.#clearLog();
-    this.#faceTexture = this.#drawFace(log);
     const round = this.#round;
     if (!round) return;
+    this.#faceTexture = this.#drawFace(log, round.live);
     for (const piece of round.pieces) this.#addPiece(piece, new THREE.Vector3(), 0);
   }
 
   /**
-   * The end grain: growth rings round the pith, checks as dark cracks, knots as dark ovals with
-   * their own rings, across the arc of the face each covers (the same arcs the rules use).
+   * The end grain: growth rings round the pith, checks as dark cracks, and each grain as a
+   * coloured patch over the arc of the face it covers (the arc the rules use), marked with what
+   * it's worth. A grain a split has cut through is drawn faded and crossed out.
    */
-  #drawFace(log: RivingLog): THREE.CanvasTexture {
+  #drawFace(log: RivingLog, live: ReadonlySet<number>): THREE.CanvasTexture {
     const size = 512;
-    const canvas = document.createElement('canvas');
+    const canvas = this.#faceCanvas ?? document.createElement('canvas');
+    this.#faceCanvas = canvas;
     canvas.width = canvas.height = size;
     const context = canvas.getContext('2d');
     if (!context) throw new Error('No 2D canvas');
@@ -378,20 +387,35 @@ export class Rive3DView implements ScreenView {
     context.arc(middle, middle, radius * 0.04, 0, Math.PI * 2);
     context.fillStyle = COLORS.pith;
     context.fill();
-    for (const knot of log.knots) {
-      const centre = at(knot.angle * DEG, 0.55);
-      const across = Math.tan((knot.width * DEG) / 2) * radius * 0.55;
-      context.save();
-      context.translate(centre.x, centre.y);
-      context.rotate(-knot.angle * DEG);
-      for (let ring = 3; ring >= 1; ring--) {
-        context.beginPath();
-        context.ellipse(0, 0, radius * 0.3 * (ring / 3), across * (ring / 3), 0, 0, Math.PI * 2);
-        context.fillStyle = ring % 2 === 0 ? COLORS.knotRing : COLORS.knot;
-        context.fill();
-      }
-      context.restore();
-    }
+    const kinds = this.#deps.game.data.riving.grainKinds;
+    log.grains.forEach((grain, index) => {
+      const alive = live.has(index);
+      // Canvas angles run clockwise, so the face's angles are negated.
+      const from = -(grain.angle + grain.width / 2) * DEG;
+      const to = -(grain.angle - grain.width / 2) * DEG;
+      context.beginPath();
+      context.arc(middle, middle, radius * 0.93, from, to);
+      context.arc(middle, middle, radius * 0.16, to, from, true);
+      context.closePath();
+      context.globalAlpha = alive ? 0.92 : 0.35;
+      context.fillStyle = alive ? (COLORS.grain[grain.kind] ?? '#888') : COLORS.cancelled;
+      context.fill();
+      context.globalAlpha = 1;
+      context.lineWidth = 4;
+      context.strokeStyle = alive ? (COLORS.grainEdge[grain.kind] ?? '#444') : COLORS.cancelled;
+      context.stroke();
+      const label = at(grain.angle * DEG, 0.62);
+      const multiplier = kinds.find((kind) => kind.id === grain.kind)?.multiplier ?? 1;
+      context.font = '900 44px system-ui, sans-serif';
+      context.textAlign = 'center';
+      context.textBaseline = 'middle';
+      context.lineWidth = 7;
+      context.strokeStyle = 'rgba(0,0,0,0.75)';
+      context.fillStyle = alive ? '#fff' : '#ddd';
+      const text = alive ? `×${times(multiplier)}` : '✕';
+      context.strokeText(text, label.x, label.y);
+      context.fillText(text, label.x, label.y);
+    });
     context.strokeStyle = COLORS.check;
     context.lineWidth = 5;
     context.lineCap = 'round';
@@ -403,12 +427,26 @@ export class Rive3DView implements ScreenView {
       context.lineTo(to.x, to.y);
       context.stroke();
     }
+    if (this.#faceTexture) {
+      this.#faceTexture.needsUpdate = true;
+      return this.#faceTexture;
+    }
     const texture = new THREE.CanvasTexture(canvas);
     texture.colorSpace = THREE.SRGBColorSpace;
     // The wedge tops' UVs are their outline in world units (−radius to +radius): fit the face.
     texture.repeat.set(1 / (2 * log.radius), 1 / (2 * log.radius));
     texture.offset.set(0.5, 0.5);
     return texture;
+  }
+
+  /** The log's grains, for its name: "Gold grain ×3 · Rot ×½". */
+  #grainNames(log: RivingLog): string {
+    const kinds = this.#deps.game.data.riving.grainKinds;
+    const names = log.grains.map((grain) => {
+      const kind = kinds.find((entry) => entry.id === grain.kind);
+      return kind ? `${kind.name} ×${times(kind.multiplier)}` : grain.kind;
+    });
+    return names.length > 0 ? names.join(' · ') : 'Plain log';
   }
 
   /**
@@ -547,23 +585,34 @@ export class Rive3DView implements ScreenView {
         );
         this.#move(visual, this.#restingPlace(child), 0);
       }
-      if (event.result === 'clean') {
-        this.#play('chop-perfect', 0.8, 200);
-        this.#play(`land-${1 + Math.floor(Math.random() * 3)}`, 0.5, 300);
-        this.#deps.haptics.pulse(feel.buzzCleanMs);
-        this.#flash(event.knot ? 'Split!' : 'Clean split!', 'good');
-      } else {
+      const log = this.#log;
+      if (log && event.cut.length > 0) this.#drawFace(log, round.live);
+      const halvings = this.#deps.game.data.riving.halvings;
+      const lost = event.lost ? 2 ** (halvings - event.lost.depth) : 0;
+      const staves = `−${String(lost)} stave${lost === 1 ? '' : 's'}`;
+      if (event.result === 'runout' || event.offCentre) {
         this.#play('crash-wood', 0.8, -300);
         this.#play(`creak-${1 + Math.floor(Math.random() * 3)}`, 0.7, -500);
         this.#deps.haptics.pulse(feel.buzzRunoutMs);
         this.#shake = 0.12 * feel.shakeStrength;
-        const lost = event.wasted
-          ? 2 ** (this.#deps.game.data.riving.halvings - event.wasted.depth)
-          : 0;
-        this.#flash(
-          `${event.knot ? 'Ran out at a knot' : 'Runout'}! −${String(lost)} stave${lost === 1 ? '' : 's'}`,
-          'bad',
-        );
+        this.#flash(`${event.result === 'runout' ? 'Runout' : 'Off centre'}! ${staves}`, 'bad');
+      } else {
+        this.#play('chop-perfect', 0.8, 200);
+        this.#play(`land-${1 + Math.floor(Math.random() * 3)}`, 0.5, 300);
+        this.#deps.haptics.pulse(feel.buzzCleanMs);
+        this.#flash('Clean split!', 'good');
+      }
+      const kinds = this.#deps.game.data.riving.grainKinds;
+      for (const index of event.cut) {
+        const kind = kinds.find((entry) => entry.id === log?.grains[index]?.kind);
+        if (!kind) continue;
+        const bad = kind.multiplier < 1;
+        window.setTimeout(() => {
+          this.#flash(
+            bad ? `${kind.name} cut out!` : `${kind.name} cut: ×${times(kind.multiplier)} gone`,
+            bad ? 'good' : 'warn',
+          );
+        }, 450);
       }
     } else if (event.type === 'finished') {
       const visual = this.#pieces.get(event.piece.id);
@@ -586,7 +635,7 @@ export class Rive3DView implements ScreenView {
         this.#sfx.play('star', 0.35, 300 + this.#stavesShown * 120);
       }
     } else {
-      this.#showCard(event.staves);
+      this.#showCard(event.staves, event.worth);
       window.setTimeout(() => {
         this.#pourStaves(event.banked);
       }, 450);
@@ -697,10 +746,14 @@ export class Rive3DView implements ScreenView {
     this.#mallet.visible = phase.kind === 'swing' || phase.kind === 'bound';
     this.#mallet.position.copy(middle).add(new THREE.Vector3(0, 0, 0.55));
     this.#mallet.rotation.set(-(1 - swing ** 2) * 1.3 - 0.25, Math.atan2(-along.z, along.x), 0);
-    // The guide: each line along the end face, red through a knot, gold along a check.
+    // The guide: each line along the end face, red off centre, gold along a check.
     if (phase.kind === 'aim') {
       const preview = round.aimPreview;
-      const color = preview?.knot ? COLORS.danger : preview?.check ? COLORS.gold : COLORS.guide;
+      const color = preview?.offCentre
+        ? COLORS.danger
+        : preview?.check
+          ? COLORS.gold
+          : COLORS.guide;
       lines.forEach((angle, index) => {
         const mesh = this.#guide.lines[index];
         if (!mesh) return;
@@ -967,19 +1020,28 @@ export class Rive3DView implements ScreenView {
     ui.strike.hidden = kind !== 'aim' && kind !== 'bound';
     ui.strike.textContent = kind === 'bound' ? 'Strike again' : 'Strike';
     const preview = round.aimPreview;
+    const kinds = this.#deps.game.data.riving.grainKinds;
+    const cuts = (preview?.cut ?? []).flatMap((index) => {
+      const kind = kinds.find((entry) => entry.id === this.#log?.grains[index]?.kind);
+      if (!kind) return [];
+      const verb = kind.multiplier < 1 ? 'cuts out' : 'cuts';
+      return [`${verb} the ${kind.name.toLowerCase()} ×${times(kind.multiplier)}`];
+    });
     const hints: Record<string, string> = {
-      aim: preview?.knot
-        ? 'That line runs through a knot: it will run out'
-        : preview?.check
-          ? 'Along a check: it splits easier'
-          : 'Drag to turn the froe · tap another piece to switch · then Strike',
+      aim: preview?.offCentre
+        ? 'Off centre: the smaller side will be lost'
+        : cuts.length > 0
+          ? `This line ${cuts.join(' and ')}`
+          : preview?.check
+            ? 'Along a check: it splits easier'
+            : 'Drag to line the froe up with the middle · then Strike',
       swing: '',
       lever: 'Drag down steadily to lever it open: not too fast, not too slow',
       bound: 'Too slow: the crack bound. Strike again',
       done: '',
     };
     ui.hint.textContent = hints[kind] ?? '';
-    ui.hint.classList.toggle('rv-hint-warn', kind === 'aim' && Boolean(preview?.knot));
+    ui.hint.classList.toggle('rv-hint-warn', kind === 'aim' && Boolean(preview?.offCentre));
     const phaseNow = round.phase;
     this.#element.dataset.crack =
       phaseNow.kind === 'lever' || phaseNow.kind === 'bound'
@@ -989,22 +1051,38 @@ export class Rive3DView implements ScreenView {
       round.phase.kind === 'aim' ? String(Math.round(normalize(round.phase.angle) / DEG)) : '';
   }
 
-  #showCard(staves: number): void {
+  /** The end card: staves, then each grain's bonus or loss, adding up to what's banked. */
+  #showCard(staves: number, worth: number): void {
     const round = this.#round;
-    if (!round) return;
+    const log = this.#log;
+    if (!round || !log) return;
     const ui = this.#ui;
-    const count = (fate: Fate) => round.finished.filter((entry) => entry.fate === fate).length;
+    const rules = this.#deps.game.data.riving;
+    const lost = round.finished.filter((entry) => entry.fate !== 'stave').length;
+    const notes = [`${String(staves)} of ${String(round.maxStaves)} staves`];
+    if (lost > 0) notes.push(`${String(lost)} piece${lost === 1 ? '' : 's'} lost`);
+    log.grains.forEach((grain, index) => {
+      const kind = rules.grainKinds.find((entry) => entry.id === grain.kind);
+      if (!kind) return;
+      if (!round.live.has(index)) {
+        notes.push(`${kind.name} cut`);
+        return;
+      }
+      const home = round.finished.find((entry) =>
+        inArc(grain.angle * DEG, entry.piece.start, entry.piece.width),
+      );
+      if (home?.fate !== 'stave') {
+        notes.push(`${kind.name} lost`);
+        return;
+      }
+      const change = staveWorth(rules, log, home.piece, new Set([index])) - 1;
+      notes.push(`${kind.name} ${change >= 0 ? '+' : '−'}${times(Math.abs(change))}`);
+    });
     ui.cardTitle.textContent =
-      staves === round.maxStaves ? 'Perfect log!' : `${String(staves)} staves`;
-    const notes = [
-      `${String(staves)} of ${String(round.maxStaves)} staves`,
-      count('runout') > 0
-        ? `${String(count('runout'))} runout${count('runout') === 1 ? '' : 's'}`
-        : '',
-      count('knot') > 0 ? `${String(count('knot'))} knotted` : '',
-      count('thin') > 0 ? `${String(count('thin'))} too thin` : '',
-    ].filter(Boolean);
-    ui.cardText.textContent = notes.join(' · ');
+      staves === round.maxStaves && round.finished.every((entry) => entry.fate === 'stave')
+        ? `Perfect log! ${String(worth)} staves`
+        : `${String(worth)} staves`;
+    ui.cardText.textContent = `${notes.join(' · ')} = ${String(worth)}`;
     ui.next.hidden = false;
     ui.card.hidden = false;
   }
@@ -1027,4 +1105,10 @@ export class Rive3DView implements ScreenView {
       flash.remove();
     }, 1100);
   }
+}
+
+/** A multiplier or bonus for show: ½ for a half, whole numbers as they are. */
+function times(value: number): string {
+  if (Math.abs(value - 0.5) < 1e-9) return '½';
+  return Number.isInteger(value) ? String(value) : value.toFixed(1);
 }

@@ -5,8 +5,7 @@ export type LeverResult = 'clean' | 'runout' | 'bound';
 /**
  * Levering a split open after the strike: the handle's drag runs the crack down the log. Keep the
  * crack's speed in the steady band. Faster builds strain (less along a check) and enough of it
- * runs out; slower for too long and the crack binds, so the froe has to be struck again. A knot
- * on the line runs out when the crack reaches it.
+ * runs out; slower for too long and the crack binds, so the froe has to be struck again.
  */
 export class Lever {
   /** How far down the log the crack has run, 0–1. */
@@ -21,20 +20,14 @@ export class Lever {
   seconds = 0;
   readonly #feel: () => RivingFeel;
   readonly #onCheck: boolean;
-  /** Where (0–1 down the log) a knot on the line runs it out, if there is one. */
-  readonly #knotAt: number | undefined;
   readonly #from: number;
   #target: number;
   #samples: { t: number; progress: number }[] = [];
   #slowFor = 0;
 
-  constructor(
-    feel: () => RivingFeel,
-    options: { onCheck: boolean; knotAt?: number; from?: number },
-  ) {
+  constructor(feel: () => RivingFeel, options: { onCheck: boolean; from?: number }) {
     this.#feel = feel;
     this.#onCheck = options.onCheck;
-    this.#knotAt = options.knotAt;
     this.#from = options.from ?? 0;
     this.progress = this.#from;
     this.#target = this.#from;
@@ -81,7 +74,6 @@ export class Lever {
         ? this.strain + over * feel.strainRise * (this.#onCheck ? feel.checkEase : 1) * dt
         : Math.max(this.strain - feel.strainRecover * dt, 0);
     this.peakStrain = Math.max(this.peakStrain, Math.min(this.strain, 1));
-    if (this.#knotAt !== undefined && this.progress >= this.#knotAt) return this.#end('runout');
     if (this.strain >= 1) return this.#end('runout');
     if (this.progress >= 1) return this.#end('clean');
     // Too slow once started: the crack binds.

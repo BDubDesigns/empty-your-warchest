@@ -96,16 +96,12 @@ export async function startApp(): Promise<void> {
         });
       }),
       rive3d: lazyScreen(rive3dElement, async () => {
-        const [{ Rive3DView }, { localStorageStore }] = await Promise.all([
-          import('../stations/rive/three/rive3dView'),
-          import('../core'),
-        ]);
+        const { Rive3DView } = await import('../stations/rive/three/rive3dView');
         return Rive3DView.create(rive3dElement, {
           game,
           logger,
           feel: feel.riving,
           haptics,
-          store: localStorageStore(),
           onLeave: run((): Promise<void> => navigation.back()),
         });
       }),

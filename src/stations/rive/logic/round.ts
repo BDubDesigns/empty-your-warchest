@@ -1,25 +1,28 @@
-import type { EventLogger } from '../../../core';
+import { Rng, type EventLogger } from '../../../core';
 import type { Riving, RivingFeel, RivingLog } from '../../../data';
 import { Lever, type LeverResult } from './lever';
 import {
   alongCheck,
   clampAim,
   DEG,
-  fateOf,
+  grainsCut,
+  isStave,
+  isWhole,
   middle,
   normalize,
-  runoutSide,
+  offCentre,
+  smallerSide,
   splitPiece,
-  throughKnot,
+  staveWorth,
   wholeLog,
   type Fate,
   type Piece,
 } from './pieces';
 
-/** How far down the log the crack gets before a knot on its line runs it out. */
-const KNOT_AT = 0.5;
 /** The froe stays this far (radians) inside a piece's edges. */
 const AIM_MARGIN = 6 * DEG;
+/** How far off a piece's middle the froe starts, at most (share of the piece). */
+const START_SPREAD = 0.35;
 
 const degrees = (radians: number) => Math.round(normalize(radians) / DEG);
 
@@ -43,20 +46,25 @@ export type RivingEvent =
       angle: number;
       result: 'clean' | 'runout';
       children: [Piece, Piece];
-      /** The short side a runout wasted. */
-      wasted: Piece | undefined;
-      knot: boolean;
+      /** The smaller side, lost to a runout or to splitting off centre. */
+      lost: Piece | undefined;
+      offCentre: boolean;
+      /** Grains the line cut through: cancelled, good or bad. */
+      cut: number[];
     }
-  /** A piece split as far as it goes: a stave, or spoiled. */
+  /** A piece that's done: a stave, or lost. */
   | { type: 'finished'; piece: Piece; fate: Fate }
-  | { type: 'done'; staves: number; banked: number };
+  | { type: 'done'; staves: number; worth: number; banked: number };
 
 export interface RivingHooks {
   logger: EventLogger;
   /** Read every time, so live tuning applies at once. */
   feel: () => RivingFeel;
   rules: Riving;
-  /** Banks a finished log: runs the riving recipe for `staves` (uses up the log). Returns staves. */
+  /**
+   * Banks a finished log: runs the riving recipe for what its staves are worth (uses up the log).
+   * Returns the staves banked.
+   */
   bank: (staves: number) => number;
   onEvent?: (event: RivingEvent) => void;
 }
@@ -73,18 +81,37 @@ export class RivingRound {
   finished: { piece: Piece; fate: Fate }[] = [];
   phase: RivingPhase;
   now = 0;
+  /** The log's grains (by index) no split has cut through yet. */
+  live: Set<number>;
   readonly #hooks: RivingHooks;
+  readonly #rng: Rng;
   #strikes = 0;
   #splitStart = 0;
   /** Where a crack that bound had got to, for the strike that restarts it. */
   #resumeFrom = 0;
   #banked = false;
 
-  constructor(log: RivingLog, hooks: RivingHooks) {
+  constructor(log: RivingLog, hooks: RivingHooks, seed: number) {
     this.log = log;
     this.#hooks = hooks;
-    this.phase = { kind: 'aim', piece: 'log', angle: 0 };
-    this.#log('riving.logStart', { log: log.id, feel: hooks.feel() });
+    this.#rng = new Rng(seed);
+    this.live = new Set(log.grains.map((_, index) => index));
+    const first = wholeLog();
+    this.phase = { kind: 'aim', piece: first.id, angle: this.#startAngle(first) };
+    this.#log('riving.logStart', {
+      log: log.id,
+      seed,
+      grains: log.grains.map((grain) => grain.kind),
+      checks: log.checks.length,
+      feel: hooks.feel(),
+    });
+  }
+
+  /** Where the froe starts on a piece: somewhere off its middle, so lining it up is up to you. */
+  #startAngle(piece: Piece): number {
+    if (isWhole(piece)) return normalize(this.#rng.range(0, Math.PI * 2));
+    const off = this.#rng.range(-START_SPREAD, START_SPREAD) * piece.width;
+    return clampAim(piece, middle(piece) + off, AIM_MARGIN);
   }
 
   get feel(): RivingFeel {
@@ -103,6 +130,17 @@ export class RivingRound {
     return this.finished.filter((entry) => entry.fate === 'stave').length;
   }
 
+  /** What the staves so far are worth, with their grains (rot halves one, silver and gold
+   * double and triple it), rounded down at the end. */
+  get worth(): number {
+    return this.finished
+      .filter((entry) => entry.fate === 'stave')
+      .reduce(
+        (sum, entry) => sum + staveWorth(this.#hooks.rules, this.log, entry.piece, this.live),
+        0,
+      );
+  }
+
   /** The most staves a log can give (every halving clean, no knots). */
   get maxStaves(): number {
     return 2 ** this.#hooks.rules.halvings;
@@ -114,7 +152,7 @@ export class RivingRound {
   select(pieceId: string): void {
     const piece = this.pieces.find((entry) => entry.id === pieceId);
     if (!piece || this.phase.kind !== 'aim') return;
-    this.phase = { kind: 'aim', piece: piece.id, angle: middle(piece) };
+    this.phase = { kind: 'aim', piece: piece.id, angle: this.#startAngle(piece) };
   }
 
   /** Turns the froe to `angle` (radians round the pith), kept inside the piece. */
@@ -132,14 +170,20 @@ export class RivingRound {
     this.aimTo(phase.angle + direction * this.feel.fineAimStep * DEG);
   }
 
-  /** What a split at the current aim would do: runs through a knot, runs along a check. */
-  get aimPreview(): { knot: boolean; check: boolean; pieces: [Piece, Piece] } | undefined {
+  /**
+   * What a split at the current aim would do: the grains it cuts through, whether it's off centre
+   * (losing the smaller side), whether it runs along a check.
+   */
+  get aimPreview():
+    { cut: number[]; offCentre: boolean; check: boolean; pieces: [Piece, Piece] } | undefined {
     const phase = this.phase;
     const piece = this.current;
     if (phase.kind !== 'aim' || !piece) return undefined;
+    const rules = this.#hooks.rules;
     return {
-      knot: throughKnot(this.log, piece, phase.angle),
-      check: alongCheck(this.#hooks.rules, this.log, piece, phase.angle),
+      cut: grainsCut(this.log, piece, phase.angle, this.live),
+      offCentre: offCentre(rules, piece, phase.angle),
+      check: alongCheck(rules, this.log, piece, phase.angle),
       pieces: splitPiece(piece, phase.angle),
     };
   }
@@ -176,7 +220,6 @@ export class RivingRound {
       const from = this.#strikes > 1 ? this.#resumeFrom : 0;
       const lever = new Lever(() => this.feel, {
         onCheck: alongCheck(this.#hooks.rules, this.log, piece, phase.angle),
-        ...(throughKnot(this.log, piece, phase.angle) ? { knotAt: KNOT_AT } : {}),
         from,
       });
       this.phase = { kind: 'lever', piece: phase.piece, angle: phase.angle, lever };
@@ -206,9 +249,12 @@ export class RivingRound {
       return;
     }
     const rules = this.#hooks.rules;
-    const knot = throughKnot(this.log, piece, phase.angle);
     const children = splitPiece(piece, phase.angle);
-    const wasted = result === 'runout' ? children[runoutSide(children)] : undefined;
+    const off = offCentre(rules, piece, phase.angle);
+    // A runout wastes the side the crack ran off into; off centre, the small side is lost too.
+    const lost = result === 'runout' || off ? children[smallerSide(children)] : undefined;
+    const cut = grainsCut(this.log, piece, phase.angle, this.live);
+    for (const index of cut) this.live.delete(index);
     this.pieces = this.pieces.filter((entry) => entry.id !== piece.id);
     const lever = phase.lever;
     this.#log('riving.split', {
@@ -217,14 +263,15 @@ export class RivingRound {
       depth: piece.depth,
       angle: degrees(phase.angle),
       check: alongCheck(rules, this.log, piece, phase.angle),
-      knot,
+      offCentre: off,
+      grainsCut: cut.map((index) => this.log.grains[index]?.kind),
       result,
       strikes: this.#strikes,
       seconds: Math.round((this.now - this.#splitStart) * 100) / 100,
       leverSeconds: Math.round(lever.seconds * 100) / 100,
       peakSpeed: Math.round(lever.peakSpeed * 100) / 100,
       peakStrain: Math.round(lever.peakStrain * 100) / 100,
-      stavesLost: wasted ? 2 ** (rules.halvings - wasted.depth) : 0,
+      stavesLost: lost ? 2 ** (rules.halvings - lost.depth) : 0,
     });
     this.#hooks.onEvent?.({
       type: 'split',
@@ -232,21 +279,18 @@ export class RivingRound {
       angle: phase.angle,
       result,
       children,
-      wasted,
-      knot,
+      lost,
+      offCentre: off,
+      cut,
     });
     for (const child of children) {
-      if (child === wasted) {
-        this.#finish(child, 'runout');
-        continue;
-      }
-      const fate = fateOf(rules, this.log, child);
-      if (fate) this.#finish(child, fate);
+      if (child === lost) this.#finish(child, result === 'runout' ? 'runout' : 'offcentre');
+      else if (isStave(rules, child)) this.#finish(child, 'stave');
       else this.pieces.push(child);
     }
     const next = [...this.pieces].sort((a, b) => b.width - a.width)[0];
     if (next) {
-      this.phase = { kind: 'aim', piece: next.id, angle: middle(next) };
+      this.phase = { kind: 'aim', piece: next.id, angle: this.#startAngle(next) };
       return;
     }
     this.phase = { kind: 'done' };
@@ -262,17 +306,19 @@ export class RivingRound {
     if (this.#banked) return;
     this.#banked = true;
     const staves = this.staves;
-    const banked = this.#hooks.bank(staves);
+    const worth = Math.floor(this.worth + 1e-9);
+    const banked = this.#hooks.bank(worth);
     const count = (fate: Fate) => this.finished.filter((entry) => entry.fate === fate).length;
     this.#log('riving.logEnd', {
       log: this.log.id,
       staves,
-      runoutPieces: count('runout'),
-      knotted: count('knot'),
-      thin: count('thin'),
+      worth,
+      runouts: count('runout'),
+      offCentre: count('offcentre'),
+      grainsKept: [...this.live].map((index) => this.log.grains[index]?.kind),
       seconds: Math.round(this.now * 10) / 10,
     });
-    this.#hooks.onEvent?.({ type: 'done', staves, banked });
+    this.#hooks.onEvent?.({ type: 'done', staves, worth, banked });
   }
 
   #log(type: string, data: Record<string, unknown>): void {

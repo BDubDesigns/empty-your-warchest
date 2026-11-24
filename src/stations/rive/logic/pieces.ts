@@ -15,8 +15,9 @@ export interface Piece {
   depth: number;
 }
 
-/** What became of a piece that's done: a stave, spoiled (a knot, too thin), or wasted. */
-export type Fate = 'stave' | 'knot' | 'thin' | 'runout';
+/** What became of a piece that's done: a stave, or lost (a runout, or the small side of an
+ * off-centre split). */
+export type Fate = 'stave' | 'runout' | 'offcentre';
 
 /** An angle brought into 0 to 2π. */
 export function normalize(angle: number): number {
@@ -91,20 +92,51 @@ export function splitPiece(piece: Piece, angle: number): [Piece, Piece] {
   ];
 }
 
-/** A log's knots, as arcs of its end face. */
-export function knotArcs(log: RivingLog): { start: number; width: number }[] {
-  return log.knots.map((knot) => ({
-    start: normalize((knot.angle - knot.width / 2) * DEG),
-    width: knot.width * DEG,
-  }));
+/** A grain's arc of the end face. */
+export function grainArc(grain: RivingLog['grains'][number]): { start: number; width: number } {
+  return { start: normalize((grain.angle - grain.width / 2) * DEG), width: grain.width * DEG };
 }
 
-/** Whether a split at `angle` runs through a knot (it will run out). */
-export function throughKnot(log: RivingLog, piece: Piece, angle: number): boolean {
-  const knots = knotArcs(log);
-  return splitLines(piece, angle).some((line) =>
-    knots.some((knot) => inArc(line, knot.start, knot.width)),
-  );
+/** The grains (by index, of those still `live`) a split at `angle` would cut through. */
+export function grainsCut(
+  log: RivingLog,
+  piece: Piece,
+  angle: number,
+  live: ReadonlySet<number>,
+): number[] {
+  const lines = splitLines(piece, angle);
+  return log.grains.flatMap((grain, index) => {
+    if (!live.has(index)) return [];
+    const arc = grainArc(grain);
+    return lines.some((line) => inArc(line, arc.start, arc.width)) ? [index] : [];
+  });
+}
+
+/**
+ * Whether a split at `angle` is too far off the piece's middle (more than the rules' tolerance,
+ * as a share of the piece): its smaller side is lost. Any line across the whole log is even.
+ */
+export function offCentre(rules: Riving, piece: Piece, angle: number): boolean {
+  if (isWhole(piece)) return false;
+  const offset = normalize(angle - piece.start);
+  return Math.abs(offset - piece.width / 2) > rules.centreTolerance * piece.width;
+}
+
+/**
+ * What a stave is worth: 1, times each grain still whole inside it (a grain no line cut lies
+ * wholly in one piece, so its middle says which).
+ */
+export function staveWorth(
+  rules: Riving,
+  log: RivingLog,
+  piece: Piece,
+  live: ReadonlySet<number>,
+): number {
+  return log.grains.reduce((worth, grain, index) => {
+    if (!live.has(index) || !inArc(grain.angle * DEG, piece.start, piece.width)) return worth;
+    const kind = rules.grainKinds.find((entry) => entry.id === grain.kind);
+    return worth * (kind?.multiplier ?? 1);
+  }, 1);
 }
 
 /** Whether a split at `angle` runs along the log's checks (every end of it): it splits easier. */
@@ -119,23 +151,15 @@ export function alongCheck(rules: Riving, log: RivingLog, piece: Piece, angle: n
   );
 }
 
-/** Whether a piece touches a knot (a stave that does is spoiled). */
-export function touchesKnot(log: RivingLog, piece: Piece): boolean {
-  return knotArcs(log).some((knot) => arcsOverlap(piece, knot));
-}
-
-/** What a piece becomes once it's split as far as it goes: a stave, or spoiled. */
-export function fateOf(rules: Riving, log: RivingLog, piece: Piece): Fate | undefined {
-  if (piece.depth < rules.halvings) return undefined;
-  if (piece.width < rules.minStaveDegrees * DEG) return 'thin';
-  if (touchesKnot(log, piece)) return 'knot';
-  return 'stave';
+/** Whether a piece is split as far as it goes: it's a stave. */
+export function isStave(rules: Riving, piece: Piece): boolean {
+  return piece.depth >= rules.halvings;
 }
 
 /**
- * Which of a split's two pieces a runout wastes: the short side the crack ran off into (the
- * narrower one; the second if they're even).
+ * A split's smaller side: what a runout wastes (the crack runs off into it) and what an off-centre
+ * split loses. The second piece if they're even.
  */
-export function runoutSide(pieces: [Piece, Piece]): 0 | 1 {
+export function smallerSide(pieces: [Piece, Piece]): 0 | 1 {
   return pieces[0].width < pieces[1].width - 1e-9 ? 0 : 1;
 }

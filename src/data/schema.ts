@@ -355,37 +355,57 @@ export const rivingFeelSchema = z.object({
   buzzRunoutMs: nonNegative,
 });
 
+/** A log to rive: its size, end grain, and the grains on its end face. */
+const rivingLogSchema = z.object({
+  id,
+  /** Size in world units, for drawing it. */
+  radius: positive,
+  height: positive,
+  rings: positiveInt,
+  /** Natural cracks in the end grain, as angles (degrees) from the pith. */
+  checks: z.array(z.number()),
+  /** Grains: patches of the end face, each `width` degrees wide centred on `angle`. */
+  grains: z.array(z.object({ kind: id, angle: z.number(), width: positive })),
+});
+
 /**
  * Riving a log into staves with a froe. Every split runs along a radius through the pith (the
  * first one across the whole log), halving a piece: `halvings` splits deep, a piece is a stave.
- * A knot spoils any stave it touches, and a split line through a knot runs out. A runout wastes
- * the short side (and every stave it would have made); the other side carries on.
+ * A split more than `centreTolerance` (share of the piece) off its middle loses the smaller side;
+ * a runout wastes the short side. Grains change what a stave is worth (rot halves it, silver and
+ * gold double and triple it), and a split line through a grain cancels it, good or bad.
  */
 const rivingSchema = z.object({
-  /** The recipe a riven log runs: its yield is the staves it gave. */
+  /** The recipe a riven log runs: its yield is the staves it's worth. */
   recipe: id,
   halvings: positiveInt,
-  /** A stave narrower than this (degrees of the log's end) is too thin to use. */
-  minStaveDegrees: positive,
+  centreTolerance: fraction,
   /** A split line within this many degrees of a check runs along it, and splits more easily. */
   checkTolerance: nonNegative,
-  /** Hand-made logs for the feel prototype, played in turn. */
-  logs: z
+  /** The kinds of grain: what a stave holding one is worth (×), and how often each turns up. */
+  grainKinds: z
     .array(
       z.object({
         id,
         name: z.string().min(1),
-        /** Size in world units, for drawing it. */
-        radius: positive,
-        height: positive,
-        rings: positiveInt,
-        /** Natural cracks in the end grain, as angles (degrees) from the pith. */
-        checks: z.array(z.number()),
-        /** Knots: the arc of the end face each covers, centred on `angle`, `width` degrees wide. */
-        knots: z.array(z.object({ angle: z.number(), width: positive })),
+        multiplier: positive,
+        weight: positive,
       }),
     )
     .min(1),
+  /** The first log ever: no grains, to learn the controls on. */
+  tutorialLog: rivingLogSchema,
+  /** Random logs: sizes, rings, checks and grains, from a seed. */
+  generator: z.object({
+    radius: z.object({ min: positive, max: positive }),
+    height: z.object({ min: positive, max: positive }),
+    rings: z.object({ min: positiveInt, max: positiveInt }),
+    checks: z.object({ min: z.number().int().min(0), max: z.number().int().min(0) }),
+    grains: z.object({ min: z.number().int().min(0), max: z.number().int().min(0) }),
+    grainWidth: z.object({ min: positive, max: positive }),
+    /** Least gap (degrees) between two grains, so each reads on its own. */
+    grainGap: nonNegative,
+  }),
   feel: rivingFeelSchema,
 });
 
@@ -424,5 +444,5 @@ export type Clearing = GameData['woodcutting']['clearings'][number];
 export type ClearingTree = Clearing['trees'][number];
 export type WoodcuttingFeel = GameData['woodcutting']['feel'];
 export type Riving = GameData['riving'];
-export type RivingLog = Riving['logs'][number];
+export type RivingLog = Riving['tutorialLog'];
 export type RivingFeel = Riving['feel'];

@@ -4,9 +4,12 @@ import {
   Lever,
   RivingRound,
   alongCheck,
-  fateOf,
+  generateLog,
+  grainsCut,
+  middle,
+  offCentre,
   splitPiece,
-  throughKnot,
+  staveWorth,
   wholeLog,
   type RivingEvent,
 } from '../src/stations/rive';
@@ -15,12 +18,13 @@ import { data, testLogger } from './helpers';
 
 const rules = data.riving;
 const feel = rules.feel;
-const logOf = (id: string): RivingLog => {
-  const log = rules.logs.find((entry) => entry.id === id);
-  if (!log) throw new Error(`No log ${id}`);
-  return log;
-};
 const STEP = 1 / 60;
+const steady = (feel.bandLow + feel.bandHigh) / 2;
+
+/** A plain test log, with these grains. */
+function logWith(grains: RivingLog['grains'], checks: number[] = []): RivingLog {
+  return { id: 'test_log', radius: 1, height: 1.6, rings: 12, checks, grains };
+}
 
 /** Levers at a steady `speed` (log lengths a second) until the lever ends, or `seconds` pass. */
 function leverAt(lever: Lever, speed: number, seconds = 5) {
@@ -44,38 +48,55 @@ describe('pieces', () => {
     expect(d.depth).toBe(2);
   });
 
-  it('knots have a width: lines through them run out, and staves touching them are spoiled', () => {
-    const log = logOf('knotty_log');
-    // Straight across at 0°: fine, but the next halving at 45° runs through the first knot.
-    expect(throughKnot(log, wholeLog(), 0)).toBe(false);
+  it('a split too far off the middle is off centre; the first split never is', () => {
     const [half] = splitPiece(wholeLog(), 0);
-    expect(throughKnot(log, half, 45 * DEG)).toBe(true);
-    // At 29° + 45° steps both knots sit in the one stave from 29° to 74°.
-    const quarter = splitPiece(splitPiece(wholeLog(), 29 * DEG)[0], 119 * DEG)[0];
-    expect(throughKnot(log, quarter, 74 * DEG)).toBe(false);
-    const [knotted, clean] = splitPiece(quarter, 74 * DEG);
-    expect(fateOf(rules, log, knotted)).toBe('knot');
-    expect(fateOf(rules, log, clean)).toBe('stave');
+    const tolerance = rules.centreTolerance * 180;
+    expect(offCentre(rules, half, (90 + tolerance - 1) * DEG)).toBe(false);
+    expect(offCentre(rules, half, (90 + tolerance + 1) * DEG)).toBe(true);
+    expect(offCentre(rules, wholeLog(), 37 * DEG)).toBe(false);
   });
 
-  it('a stave too thin to use is spoiled', () => {
-    const log = logOf('straight_log');
-    const quarter = splitPiece(splitPiece(wholeLog(), 0)[0], 90 * DEG)[0];
-    const [thin, wide] = splitPiece(quarter, 10 * DEG);
-    expect(fateOf(rules, log, thin)).toBe('thin');
-    expect(fateOf(rules, log, wide)).toBe('stave');
+  it('a line through a grain cuts it; a grain left whole sets its stave’s worth', () => {
+    const log = logWith([
+      { kind: 'gold', angle: 22.5, width: 10 },
+      { kind: 'rot', angle: 200, width: 12 },
+    ]);
+    const live = new Set([0, 1]);
+    expect(grainsCut(log, wholeLog(), 20 * DEG, live)).toEqual([0, 1]);
+    expect(grainsCut(log, wholeLog(), 60 * DEG, live)).toEqual([]);
+    const eighth = { id: 'x', start: 0, width: 45 * DEG, depth: 3 };
+    expect(staveWorth(rules, log, eighth, live)).toBe(3);
+    expect(staveWorth(rules, log, eighth, new Set([1]))).toBe(1);
+    const rotten = { id: 'y', start: 180 * DEG, width: 45 * DEG, depth: 3 };
+    expect(staveWorth(rules, log, rotten, live)).toBe(0.5);
   });
 
   it('a split along a check knows it', () => {
-    const log = logOf('checked_log');
+    const log = logWith([], [100, 280]);
     expect(alongCheck(rules, log, wholeLog(), 100 * DEG)).toBe(true);
     expect(alongCheck(rules, log, wholeLog(), 130 * DEG)).toBe(false);
   });
 });
 
-describe('levering', () => {
-  const steady = (feel.bandLow + feel.bandHigh) / 2;
+describe('random logs', () => {
+  it('the same seed gives the same log, with grains kept apart', () => {
+    const one = generateLog(rules, 1234);
+    expect(generateLog(rules, 1234)).toEqual(one);
+    for (let seed = 1; seed <= 30; seed++) {
+      const log = generateLog(rules, seed);
+      expect(log.grains.length).toBeLessThanOrEqual(rules.generator.grains.max);
+      log.grains.forEach((grain, index) => {
+        expect(rules.grainKinds.map((kind) => kind.id)).toContain(grain.kind);
+        for (const other of log.grains.slice(index + 1)) {
+          const gap = Math.abs(((grain.angle - other.angle + 540) % 360) - 180);
+          expect(gap).toBeGreaterThanOrEqual((grain.width + other.width) / 2);
+        }
+      });
+    }
+  });
+});
 
+describe('levering', () => {
   it('a steady pull inside the band splits clean', () => {
     expect(leverAt(new Lever(() => feel, { onCheck: false }), steady)).toBe('clean');
   });
@@ -83,7 +104,6 @@ describe('levering', () => {
   it('yanking builds strain until it runs out; easing off lets it recover', () => {
     const yanked = new Lever(() => feel, { onCheck: false });
     expect(leverAt(yanked, feel.bandHigh * 3)).toBe('runout');
-    expect(yanked.peakStrain).toBeCloseTo(1, 1);
     const eased = new Lever(() => feel, { onCheck: false });
     leverAt(eased, feel.bandHigh * 1.5, 0.15);
     const strained = eased.strain;
@@ -94,41 +114,42 @@ describe('levering', () => {
 
   it('along a check the same yank strains less', () => {
     const speed = feel.bandHigh + 1.2;
-    const plain = new Lever(() => feel, { onCheck: false });
-    const checked = new Lever(() => feel, { onCheck: true });
-    expect(leverAt(plain, speed)).toBe('runout');
-    expect(leverAt(checked, speed)).toBe('clean');
+    expect(leverAt(new Lever(() => feel, { onCheck: false }), speed)).toBe('runout');
+    expect(leverAt(new Lever(() => feel, { onCheck: true }), speed)).toBe('clean');
   });
 
-  it('too slow and the crack binds, and a knot on the line runs out partway', () => {
+  it('too slow and the crack binds', () => {
     expect(leverAt(new Lever(() => feel, { onCheck: false }), feel.bandLow * 0.3)).toBe('bound');
-    const knotted = new Lever(() => feel, { onCheck: false, knotAt: 0.5 });
-    expect(leverAt(knotted, steady)).toBe('runout');
-    expect(knotted.progress).toBeGreaterThanOrEqual(0.5);
-    expect(knotted.progress).toBeLessThan(1);
   });
 });
 
 describe('RivingRound', () => {
-  function setup(logId: string) {
+  function setup(log: RivingLog, seed = 7) {
     const { logger } = testLogger();
     const events: RivingEvent[] = [];
     let banked: number | undefined;
-    const round = new RivingRound(logOf(logId), {
-      logger,
-      feel: () => feel,
-      rules,
-      bank: (staves) => {
-        banked = staves;
-        return staves;
+    const round = new RivingRound(
+      log,
+      {
+        logger,
+        feel: () => feel,
+        rules,
+        bank: (worth) => {
+          banked = worth;
+          return worth;
+        },
+        onEvent: (event) => events.push(event),
       },
-      onEvent: (event) => events.push(event),
-    });
+      seed,
+    );
     return { round, logger, events, banked: () => banked };
   }
 
-  /** Strikes and levers the current split at `speed`. */
-  function rive(round: RivingRound, speed: number) {
+  /** Aims the current split at `angle` (default: the piece's middle), strikes and levers. */
+  function rive(round: RivingRound, speed = steady, angle?: number) {
+    const piece = round.current;
+    if (!piece) throw new Error('Nothing to split');
+    round.aimTo(angle ?? middle(piece));
     round.strike();
     round.tick(feel.strikeSeconds + STEP);
     let pixels = 0;
@@ -139,38 +160,67 @@ describe('RivingRound', () => {
     }
   }
 
-  it('rives a clean log into 8 staves, halving each piece, and banks them', async () => {
-    const { round, logger, banked, events } = setup('straight_log');
-    const steady = (feel.bandLow + feel.bandHigh) / 2;
-    for (let split = 0; split < 7; split++) {
-      expect(round.phase.kind).toBe('aim');
-      rive(round, steady);
-    }
+  it('the froe starts off the middle, so lining it up is up to you', () => {
+    const { round } = setup(logWith([]));
+    rive(round, steady, 0);
+    const piece = round.current;
+    const phase = round.phase;
+    if (!piece || phase.kind !== 'aim') throw new Error('Not aiming');
+    expect(Math.abs(phase.angle - middle(piece))).toBeGreaterThan(0.001);
+  });
+
+  it('rives a plain log into 8 staves, halving each piece, and banks them', async () => {
+    const { round, logger, banked } = setup(logWith([]));
+    for (let split = 0; split < 7; split++) rive(round);
     expect(round.phase.kind).toBe('done');
     expect(round.staves).toBe(8);
     expect(banked()).toBe(8);
-    expect(events.filter((event) => event.type === 'split')).toHaveLength(7);
     const types = (await logger.readAll()).map((event) => event.type);
-    expect(types).toContain('riving.logStart');
     expect(types.filter((type) => type === 'riving.split')).toHaveLength(7);
     expect(types).toContain('riving.logEnd');
   });
 
-  it('a runout wastes only the short side; the other side carries on', () => {
-    const { round, events } = setup('straight_log');
-    rive(round, feel.bandHigh * 3);
+  it('a gold grain kept whole triples its stave; rot left in halves its stave', () => {
+    const gold = setup(logWith([{ kind: 'gold', angle: 22.5, width: 10 }]));
+    rive(gold.round, steady, 0);
+    while (gold.round.phase.kind === 'aim') rive(gold.round);
+    expect(gold.banked()).toBe(10);
+    const rot = setup(logWith([{ kind: 'rot', angle: 22.5, width: 10 }]));
+    rive(rot.round, steady, 0);
+    while (rot.round.phase.kind === 'aim') rive(rot.round);
+    // 7.5, rounded down.
+    expect(rot.banked()).toBe(7);
+  });
+
+  it('cutting through a grain cancels it, good or bad', () => {
+    const { round, banked, events } = setup(logWith([{ kind: 'rot', angle: 22.5, width: 10 }]));
+    rive(round, steady, 22.5 * DEG);
     const split = events.find((event) => event.type === 'split');
-    expect(split?.type === 'split' && split.result).toBe('runout');
+    expect(split?.type === 'split' && split.cut).toEqual([0]);
+    while (round.phase.kind === 'aim') rive(round);
+    expect(banked()).toBe(8);
+  });
+
+  it('off centre, the smaller side is lost and the bigger one carries on', () => {
+    const { round } = setup(logWith([]));
+    rive(round, steady, 0);
+    const half = round.current;
+    if (!half) throw new Error('No half');
+    rive(round, steady, half.start + half.width * 0.3);
+    expect(round.finished.map((entry) => entry.fate)).toEqual(['offcentre']);
+  });
+
+  it('a runout wastes only the short side; the other side carries on', () => {
+    const { round } = setup(logWith([]));
+    rive(round, feel.bandHigh * 3);
     expect(round.pieces).toHaveLength(1);
     expect(round.finished.map((entry) => entry.fate)).toEqual(['runout']);
-    // The rest gives at most 4.
-    const steady = (feel.bandLow + feel.bandHigh) / 2;
-    while (round.phase.kind === 'aim') rive(round, steady);
+    while (round.phase.kind === 'aim') rive(round);
     expect(round.staves).toBe(4);
   });
 
   it('a crack that binds waits for another strike, then carries on from where it got to', () => {
-    const { round, events } = setup('straight_log');
+    const { round, events } = setup(logWith([]));
     round.strike();
     round.tick(feel.strikeSeconds + STEP);
     round.drag(feel.leverTravel * 0.3);
@@ -179,14 +229,19 @@ describe('RivingRound', () => {
     }
     expect(round.phase.kind).toBe('bound');
     expect(events.map((event) => event.type)).toContain('bound');
-    const steady = (feel.bandLow + feel.bandHigh) / 2;
-    rive(round, steady);
+    round.strike();
+    round.tick(feel.strikeSeconds + STEP);
+    let pixels = feel.leverTravel * 0.3;
+    for (let t = 0; t < 5 && round.phase.kind === 'lever'; t += STEP) {
+      pixels += steady * feel.leverTravel * STEP;
+      round.drag(pixels - feel.leverTravel * 0.3);
+      round.tick(STEP);
+    }
     expect(round.pieces).toHaveLength(2);
-    expect(round.staves).toBe(0);
   });
 
   it('leaving mid-log banks nothing', async () => {
-    const { round, logger, banked } = setup('straight_log');
+    const { round, logger, banked } = setup(logWith([]));
     round.exit();
     expect(banked()).toBeUndefined();
     expect((await logger.readAll()).map((event) => event.type)).toContain('riving.leave');
