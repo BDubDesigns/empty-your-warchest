@@ -322,6 +322,73 @@ export const warchestSchema = z.object({
   haptics: z.object({ openMs: nonNegative, slamMs: nonNegative }),
 });
 
+/** Feel numbers for riving. The debug menu can override them live. */
+export const rivingFeelSchema = z.object({
+  /** Degrees each ↺ ↻ tap turns the froe. */
+  fineAimStep: positive,
+  /** Seconds the mallet takes to come down on the froe, and the freeze when it lands (ms). */
+  strikeSeconds: positive,
+  hitStopMs: nonNegative,
+  shakeStrength: nonNegative,
+  /** Screen pixels of handle drag that run the crack all the way down the log. */
+  leverTravel: positive,
+  /**
+   * The steady speed band, in log lengths per second the crack runs: faster than `bandHigh`
+   * builds strain, slower than `bandLow` for `bindSeconds` and the crack binds (strike again).
+   * Speed is averaged over `speedWindow` seconds so a jittery finger isn't punished.
+   */
+  bandLow: positive,
+  bandHigh: positive,
+  bindSeconds: positive,
+  speedWindow: positive,
+  /** Strain gained per second per log length a second over the band, lost per second within it;
+   * at 1 the split runs out. A check on the line multiplies the gain by `checkEase`. */
+  strainRise: positive,
+  strainRecover: nonNegative,
+  checkEase: fraction,
+  /** Seconds the halves take to come apart after a split. */
+  pieceSeconds: positive,
+  /** Vibration (ms): the mallet strike, each tick of a straining crack, a clean split, a runout. */
+  buzzStrikeMs: nonNegative,
+  buzzCrackMs: nonNegative,
+  buzzCleanMs: nonNegative,
+  buzzRunoutMs: nonNegative,
+});
+
+/**
+ * Riving a log into staves with a froe. Every split runs along a radius through the pith (the
+ * first one across the whole log), halving a piece: `halvings` splits deep, a piece is a stave.
+ * A knot spoils any stave it touches, and a split line through a knot runs out. A runout wastes
+ * the short side (and every stave it would have made); the other side carries on.
+ */
+const rivingSchema = z.object({
+  /** The recipe a riven log runs: its yield is the staves it gave. */
+  recipe: id,
+  halvings: positiveInt,
+  /** A stave narrower than this (degrees of the log's end) is too thin to use. */
+  minStaveDegrees: positive,
+  /** A split line within this many degrees of a check runs along it, and splits more easily. */
+  checkTolerance: nonNegative,
+  /** Hand-made logs for the feel prototype, played in turn. */
+  logs: z
+    .array(
+      z.object({
+        id,
+        name: z.string().min(1),
+        /** Size in world units, for drawing it. */
+        radius: positive,
+        height: positive,
+        rings: positiveInt,
+        /** Natural cracks in the end grain, as angles (degrees) from the pith. */
+        checks: z.array(z.number()),
+        /** Knots: the arc of the end face each covers, centred on `angle`, `width` degrees wide. */
+        knots: z.array(z.object({ angle: z.number(), width: positive })),
+      }),
+    )
+    .min(1),
+  feel: rivingFeelSchema,
+});
+
 export const gameDataShape = z.object({
   /** Ordered worst to best. */
   qualities: z.array(qualitySchema).min(1),
@@ -334,6 +401,7 @@ export const gameDataShape = z.object({
   levels: z.array(levelSchema),
   camp: campSchema,
   woodcutting: woodcuttingSchema,
+  riving: rivingSchema,
   warchest: warchestSchema,
   tuning: tuningSchema,
 });
@@ -355,3 +423,6 @@ export type CampSpot = Camp['chest'];
 export type Clearing = GameData['woodcutting']['clearings'][number];
 export type ClearingTree = Clearing['trees'][number];
 export type WoodcuttingFeel = GameData['woodcutting']['feel'];
+export type Riving = GameData['riving'];
+export type RivingLog = Riving['logs'][number];
+export type RivingFeel = Riving['feel'];

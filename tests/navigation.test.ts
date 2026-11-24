@@ -24,18 +24,22 @@ function setup() {
 }
 
 describe('Navigation', () => {
-  it('opens Phaser stations as scenes and the war tent on its own screen', async () => {
+  it('opens Phaser stations as scenes, and the war tent and workbench on their own screens', async () => {
     const { navigation, calls } = setup();
     await navigation.start();
-    await navigation.openStation('workbench');
+    await navigation.openStation('fire_pit');
     await navigation.back();
     await navigation.openStation('war_tent');
     await navigation.back();
+    await navigation.openStation('workbench');
+    await navigation.back();
     expect(calls).toEqual([
       'camp',
-      'phaser:station-placeholder:workbench',
+      'phaser:station-placeholder:fire_pit',
       'camp',
       'screen:runner:war_tent',
+      'camp',
+      'screen:rive3d:workbench',
       'camp',
     ]);
   });

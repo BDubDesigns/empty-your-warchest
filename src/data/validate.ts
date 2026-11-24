@@ -105,6 +105,22 @@ function checkReferences(data: GameData, ctx: z.RefinementCtx): void {
 
   coversAllQualities(['tuning', 'weaponRecoveryOnWin'], data.tuning.weaponRecoveryOnWin);
 
+  const riving = data.riving;
+  if (!data.recipes.some((recipe) => recipe.id === riving.recipe)) {
+    issue(['riving', 'recipe'], `Unknown recipe "${riving.recipe}"`);
+  }
+  if (riving.feel.bandLow >= riving.feel.bandHigh) {
+    issue(['riving', 'feel', 'bandLow'], 'The steady band must be lower than it is high');
+  }
+  if (riving.minStaveDegrees * 2 ** riving.halvings > 360) {
+    issue(['riving', 'minStaveDegrees'], 'Too wide for even halving to make a stave');
+  }
+  const logIds = new Set<string>();
+  riving.logs.forEach((log, index) => {
+    if (logIds.has(log.id)) issue(['riving', 'logs', index, 'id'], `Duplicate id "${log.id}"`);
+    logIds.add(log.id);
+  });
+
   const woodcutting = data.woodcutting;
   if (!data.recipes.some((recipe) => recipe.id === woodcutting.recipe)) {
     issue(['woodcutting', 'recipe'], `Unknown recipe "${woodcutting.recipe}"`);

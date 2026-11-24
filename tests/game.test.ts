@@ -11,13 +11,14 @@ describe('Game', () => {
   it("pays recipe XP to the station's skill and logs the craft", async () => {
     const { game, logger } = newGame();
     game.addItems('log', 2);
+    const xp = game.data.recipes.find((recipe) => recipe.id === 'rive_stave')?.xp ?? NaN;
     game.craft('rive_stave');
-    expect(game.xp('fletching')).toBe(10);
+    expect(game.xp('fletching')).toBe(xp);
     expect(game.xp('woodcutting')).toBe(0);
     const events = await logger.readAll();
     expect(events.at(-1)).toMatchObject({
       type: 'recipe.craft',
-      data: { recipe: 'rive_stave', xp: 10 },
+      data: { recipe: 'rive_stave', xp },
     });
   });
 

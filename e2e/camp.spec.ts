@@ -30,7 +30,11 @@ test('every station and the chest can be entered and exited by touch', async ({ 
   for (const station of stations) {
     await tapCampSpot(page, station.camp);
     await viewIs(page, `station:${station.id}`);
-    const screens: Record<string, string> = { runner: 'three', woodcutting3d: 'wood3d' };
+    const screens: Record<string, string> = {
+      runner: 'three',
+      woodcutting3d: 'wood3d',
+      rive: 'rive3d',
+    };
     const screen = screens[station.mechanic] ?? 'phaser';
     await expect(page.locator('body')).toHaveAttribute('data-screen', screen);
     await expect(page.locator(`#screen-${screen} canvas`).first()).toBeVisible();

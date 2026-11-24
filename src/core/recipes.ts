@@ -7,8 +7,11 @@ export interface CraftOutcome {
   batches?: number;
   /** Tier for tiered outputs that the recipe leaves open (e.g. how well a spear was hardened). */
   outputQuality?: string;
-  /** Multiplies outputs, e.g. 2 when a perfect trace splits two staves from one log. Default 1. */
-  outputMultiplier?: number;
+  /**
+   * How many times the outputs come out this time, e.g. the staves one log gave (0 allowed: a log
+   * riven into nothing usable). The recipe's XP is per output, so it scales too. Default 1.
+   */
+  yield?: number;
 }
 
 export interface CraftResult {
@@ -40,7 +43,10 @@ export function craft(
   outcome: CraftOutcome = {},
 ): CraftResult {
   const batches = wholeAtLeastOne(outcome.batches ?? 1, 'batches');
-  const multiplier = wholeAtLeastOne(outcome.outputMultiplier ?? 1, 'outputMultiplier');
+  const multiplier = outcome.yield ?? 1;
+  if (!Number.isInteger(multiplier) || multiplier < 0) {
+    throw new RangeError(`yield must be a whole number of at least 0, got ${multiplier}`);
+  }
 
   const consumed = recipe.inputs.map((input) => ({ ...input, count: input.count * batches }));
   const missing = consumed.filter(
@@ -65,6 +71,8 @@ export function craft(
   // Reading each output's count throws on a bad item or tier, before anything is changed.
   for (const stack of produced) inventory.count(stack.item, stack.quality);
   for (const stack of consumed) inventory.remove(stack.item, stack.count, stack.quality);
-  for (const stack of produced) inventory.add(stack.item, stack.count, stack.quality);
-  return { consumed, produced, xp: recipe.xp * batches };
+  for (const stack of produced) {
+    if (stack.count > 0) inventory.add(stack.item, stack.count, stack.quality);
+  }
+  return { consumed, produced, xp: recipe.xp * batches * multiplier };
 }

@@ -11,7 +11,10 @@ test('the live tuning panel changes feel values and logs it', async ({ page }) =
   await page.reload();
   await page.getByRole('button', { name: 'Open debug menu' }).tap();
   await expect(page.locator('.debug-tune', { hasText: 'Fall time (s)' })).toContainText('2 •');
-  await page.getByRole('button', { name: 'Reset to data' }).tap();
+  await page
+    .locator('.debug-section', { hasText: 'Live tuning: woodcutting' })
+    .getByRole('button', { name: 'Reset to data' })
+    .tap();
   await expect(page.locator('.debug-tune', { hasText: 'Fall time (s)' })).not.toContainText('•');
 
   const download = page.getByRole('button', { name: 'Download logs' });

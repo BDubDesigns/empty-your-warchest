@@ -1319,3 +1319,186 @@ body:not([data-view='camp']) #build-label {
     top: calc(var(--safe-top) + 180px);
   }
 }
+
+/* Riving (src/stations/rive/three/rive3dView.ts). */
+.rv-canvas {
+  display: block;
+  touch-action: none;
+}
+
+.rv-ui {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  font-family: system-ui, sans-serif;
+  color: var(--fg);
+}
+
+.rv-ui button {
+  pointer-events: auto;
+}
+
+.rv-ui [hidden] {
+  display: none !important;
+}
+
+.rv-log-name,
+.rv-tally {
+  position: absolute;
+  left: 0;
+  right: 0;
+  text-align: center;
+  text-shadow: 0 1px 3px rgb(0 0 0 / 0.7);
+}
+
+.rv-log-name {
+  top: calc(var(--safe-top) + 66px);
+  font-weight: 800;
+  font-size: 16px;
+}
+
+.rv-tally {
+  top: calc(var(--safe-top) + 88px);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 400px) {
+  .rv-log-name {
+    top: calc(var(--safe-top) + 120px);
+  }
+
+  .rv-tally {
+    top: calc(var(--safe-top) + 142px);
+  }
+}
+
+.rv-hint {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: calc(var(--safe-bottom) + 112px);
+  text-align: center;
+  font-size: 14px;
+  text-shadow: 0 1px 3px rgb(0 0 0 / 0.8);
+}
+
+.rv-hint.rv-hint-warn {
+  color: #ffd2c8;
+  font-weight: 700;
+}
+
+.rv-controls {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(var(--safe-bottom) + 32px);
+  display: flex;
+  justify-content: center;
+  gap: 12px;
+}
+
+.rv-button {
+  min-width: 64px;
+  min-height: 60px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--accent);
+  color: var(--bg);
+  font:
+    700 22px system-ui,
+    sans-serif;
+  touch-action: manipulation;
+}
+
+.rv-button:active {
+  background: var(--accent-pressed);
+}
+
+.rv-strike {
+  min-width: 160px;
+}
+
+.rv-button.rv-secondary {
+  border: 2px solid var(--accent);
+  background: transparent;
+  color: var(--accent);
+  font-size: 18px;
+}
+
+.rv-card {
+  position: absolute;
+  inset: 32% 16px auto;
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+  padding: 20px;
+  border-radius: 14px;
+  background: rgb(20 24 18 / 0.85);
+  pointer-events: auto;
+}
+
+.rv-card-title {
+  font:
+    800 26px system-ui,
+    sans-serif;
+}
+
+.rv-card-text {
+  color: var(--muted);
+  text-align: center;
+}
+
+.rv-card-buttons {
+  display: flex;
+  gap: 12px;
+}
+
+.rv-flashes {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 34%;
+  display: grid;
+  justify-items: center;
+}
+
+.rv-flash {
+  grid-area: 1 / 1;
+  font:
+    900 26px system-ui,
+    sans-serif;
+  text-shadow: 0 2px 5px rgb(0 0 0 / 0.8);
+  animation: rv-rise 1.1s ease-out forwards;
+}
+
+.rv-good {
+  color: #8fd16f;
+}
+
+.rv-bad {
+  color: #f0705c;
+}
+
+.rv-warn {
+  color: #f0cd5c;
+}
+
+@keyframes rv-rise {
+  0% {
+    transform: translateY(8px) scale(1.2);
+    opacity: 0;
+  }
+  15% {
+    transform: translateY(0) scale(1);
+    opacity: 1;
+  }
+  75% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(-30px);
+    opacity: 0;
+  }
+}
