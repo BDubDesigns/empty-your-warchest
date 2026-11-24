@@ -528,12 +528,13 @@ export class Rive3DView implements ScreenView {
     return texture;
   }
 
-  /** The log's grains, for its name: "Gold ×3 · Rot ×½". */
+  /** The log's grains, for its name, repeats counted: "3 Silver ×2 · Rot ×½". */
   #grainNames(log: RivingLog): string {
     const kinds = this.#deps.game.data.riving.grainKinds;
-    const names = log.grains.map((grain) => {
-      const kind = kinds.find((entry) => entry.id === grain.kind);
-      return kind ? `${kind.name} ×${times(kind.multiplier)}` : grain.kind;
+    const names = kinds.flatMap((kind) => {
+      const count = log.grains.filter((grain) => grain.kind === kind.id).length;
+      if (count === 0) return [];
+      return [`${count > 1 ? `${String(count)} ` : ''}${kind.name} ×${times(kind.multiplier)}`];
     });
     const knots = log.knots.length;
     if (knots > 0) names.push(`${String(knots)} knot${knots === 1 ? '' : 's'}`);
