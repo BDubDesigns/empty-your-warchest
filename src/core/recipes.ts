@@ -12,6 +12,11 @@ export interface CraftOutcome {
    * riven into nothing usable). The recipe's XP is per output, so it scales too. Default 1.
    */
   yield?: number;
+  /**
+   * How many outputs the XP counts, when it shouldn't be all of them (e.g. riving pays XP on the
+   * staves split, not on what a grain multiplied them to). Default: the yield.
+   */
+  xpYield?: number;
 }
 
 export interface CraftResult {
@@ -74,5 +79,9 @@ export function craft(
   for (const stack of produced) {
     if (stack.count > 0) inventory.add(stack.item, stack.count, stack.quality);
   }
-  return { consumed, produced, xp: recipe.xp * batches * multiplier };
+  const xpYield = outcome.xpYield ?? multiplier;
+  if (!Number.isInteger(xpYield) || xpYield < 0) {
+    throw new RangeError(`xpYield must be a whole number of at least 0, got ${xpYield}`);
+  }
+  return { consumed, produced, xp: recipe.xp * batches * xpYield };
 }

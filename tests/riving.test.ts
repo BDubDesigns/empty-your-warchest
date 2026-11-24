@@ -8,8 +8,9 @@ import {
   grainsCut,
   middle,
   offCentre,
+  grainsKept,
+  logMultiplier,
   splitPiece,
-  staveWorth,
   wholeLog,
   type RivingEvent,
 } from '../src/stations/rive';
@@ -56,19 +57,28 @@ describe('pieces', () => {
     expect(offCentre(rules, wholeLog(), 37 * DEG)).toBe(false);
   });
 
-  it('a line through a grain cuts it; a grain left whole sets its stave’s worth', () => {
+  it('a line through a grain cuts it; grains whole in kept staves multiply the log together', () => {
     const log = logWith([
       { kind: 'gold', angle: 22.5, width: 10 },
       { kind: 'rot', angle: 200, width: 12 },
+      { kind: 'silver', angle: 300, width: 10 },
     ]);
-    const live = new Set([0, 1]);
+    const live = new Set([0, 1, 2]);
     expect(grainsCut(log, wholeLog(), 20 * DEG, live)).toEqual([0, 1]);
     expect(grainsCut(log, wholeLog(), 60 * DEG, live)).toEqual([]);
-    const eighth = { id: 'x', start: 0, width: 45 * DEG, depth: 3 };
-    expect(staveWorth(rules, log, eighth, live)).toBe(3);
-    expect(staveWorth(rules, log, eighth, new Set([1]))).toBe(1);
-    const rotten = { id: 'y', start: 180 * DEG, width: 45 * DEG, depth: 3 };
-    expect(staveWorth(rules, log, rotten, live)).toBe(0.5);
+    const staves = [
+      { id: 'x', start: 0, width: 45 * DEG, depth: 3 },
+      { id: 'y', start: 180 * DEG, width: 45 * DEG, depth: 3 },
+      { id: 'z', start: 270 * DEG, width: 45 * DEG, depth: 3 },
+    ];
+    const kept = grainsKept(log, staves, live);
+    expect(kept).toEqual([0, 1, 2]);
+    // ×3 × ½ × 2 = ×3.
+    expect(logMultiplier(rules, log, kept)).toBe(3);
+    // A grain in a piece that wasn't kept doesn't count.
+    expect(grainsKept(log, staves.slice(0, 1), live)).toEqual([0]);
+    // Gold and silver: ×6, the cap.
+    expect(logMultiplier(rules, log, [0, 2])).toBe(Math.min(6, rules.multiplierCap));
   });
 
   it('a split along a check knows it', () => {
@@ -127,15 +137,15 @@ describe('RivingRound', () => {
   function setup(log: RivingLog, seed = 7) {
     const { logger } = testLogger();
     const events: RivingEvent[] = [];
-    let banked: number | undefined;
+    let banked: { worth: number; staves: number } | undefined;
     const round = new RivingRound(
       log,
       {
         logger,
         feel: () => feel,
         rules,
-        bank: (worth) => {
-          banked = worth;
+        bank: (worth, staves) => {
+          banked = { worth, staves };
           return worth;
         },
         onEvent: (event) => events.push(event),
@@ -174,22 +184,21 @@ describe('RivingRound', () => {
     for (let split = 0; split < 7; split++) rive(round);
     expect(round.phase.kind).toBe('done');
     expect(round.staves).toBe(8);
-    expect(banked()).toBe(8);
+    expect(banked()).toEqual({ worth: 8, staves: 8 });
     const types = (await logger.readAll()).map((event) => event.type);
     expect(types.filter((type) => type === 'riving.split')).toHaveLength(7);
     expect(types).toContain('riving.logEnd');
   });
 
-  it('a gold grain kept whole triples its stave; rot left in halves its stave', () => {
+  it('a gold grain kept whole triples the whole log; rot left in halves it; XP is on the staves', () => {
     const gold = setup(logWith([{ kind: 'gold', angle: 22.5, width: 10 }]));
     rive(gold.round, steady, 0);
     while (gold.round.phase.kind === 'aim') rive(gold.round);
-    expect(gold.banked()).toBe(10);
+    expect(gold.banked()).toEqual({ worth: 24, staves: 8 });
     const rot = setup(logWith([{ kind: 'rot', angle: 22.5, width: 10 }]));
     rive(rot.round, steady, 0);
     while (rot.round.phase.kind === 'aim') rive(rot.round);
-    // 7.5, rounded down.
-    expect(rot.banked()).toBe(7);
+    expect(rot.banked()).toEqual({ worth: 4, staves: 8 });
   });
 
   it('cutting through a grain cancels it, good or bad', () => {
@@ -198,7 +207,7 @@ describe('RivingRound', () => {
     const split = events.find((event) => event.type === 'split');
     expect(split?.type === 'split' && split.cut).toEqual([0]);
     while (round.phase.kind === 'aim') rive(round);
-    expect(banked()).toBe(8);
+    expect(banked()).toEqual({ worth: 8, staves: 8 });
   });
 
   it('off centre, the smaller side is lost and the bigger one carries on', () => {

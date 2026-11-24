@@ -7,16 +7,7 @@ import { WarchestHud, type ScreenPoint } from '../../../app/warchestHud';
 import type { EventLogger, Game, LiveTuning } from '../../../core';
 import type { RivingFeel, RivingLog } from '../../../data';
 import { generateLog } from '../logic/generate';
-import {
-  DEG,
-  inArc,
-  isWhole,
-  normalize,
-  splitLines,
-  staveWorth,
-  type Fate,
-  type Piece,
-} from '../logic/pieces';
+import { DEG, isWhole, normalize, splitLines, type Fate, type Piece } from '../logic/pieces';
 import { RivingRound, type RivingEvent } from '../logic/round';
 
 export interface Rive3DDeps {
@@ -220,9 +211,10 @@ export class Rive3DView implements ScreenView {
         logger: this.#deps.logger,
         feel: () => this.#deps.feel.values,
         rules,
-        bank: (staves) => {
+        bank: (worth, staves) => {
           const before = game.xp(this.#skill);
-          const result = game.craft(rules.recipe, { yield: staves });
+          // XP on the staves split; the grains multiply what goes into the warchest.
+          const result = game.craft(rules.recipe, { yield: worth, xpYield: staves });
           this.#bankedXp = this.#skillBar.hold(game.xp(this.#skill) - before);
           if (tutorial) game.markDone(TUTORIAL);
           return result.produced.reduce((sum, stack) => sum + stack.count, 0);
@@ -439,7 +431,7 @@ export class Rive3DView implements ScreenView {
     return texture;
   }
 
-  /** The log's grains, for its name: "Gold grain ×3 · Rot ×½". */
+  /** The log's grains, for its name: "Gold ×3 · Rot ×½". */
   #grainNames(log: RivingLog): string {
     const kinds = this.#deps.game.data.riving.grainKinds;
     const names = log.grains.map((grain) => {
@@ -635,7 +627,7 @@ export class Rive3DView implements ScreenView {
         this.#sfx.play('star', 0.35, 300 + this.#stavesShown * 120);
       }
     } else {
-      this.#showCard(event.staves, event.worth);
+      this.#showCard(event.staves, event.kept, event.multiplier, event.worth);
       window.setTimeout(() => {
         this.#pourStaves(event.banked);
       }, 450);
@@ -1013,7 +1005,9 @@ export class Rive3DView implements ScreenView {
       return;
     }
     const logs = this.#deps.game.inventory.count('log');
-    ui.tally.textContent = `Staves ${String(round.staves)} / ${String(round.maxStaves)} · logs left ${String(logs)}`;
+    const multiplier = round.multiplierLeft;
+    const grains = multiplier === 1 ? '' : ` · ×${times(multiplier)} if kept`;
+    ui.tally.textContent = `Staves ${String(round.staves)} / ${String(round.maxStaves)}${grains} · logs left ${String(logs)}`;
     const kind = round.phase.kind;
     ui.controls.hidden = kind === 'done';
     ui.left.hidden = ui.right.hidden = kind !== 'aim';
@@ -1051,38 +1045,38 @@ export class Rive3DView implements ScreenView {
       round.phase.kind === 'aim' ? String(Math.round(normalize(round.phase.angle) / DEG)) : '';
   }
 
-  /** The end card: staves, then each grain's bonus or loss, adding up to what's banked. */
-  #showCard(staves: number, worth: number): void {
+  /**
+   * The end card, as the sum it is: the staves kept, times each grain that counted, equals what
+   * goes into the warchest. Grains cut or lost with a piece are listed under it.
+   */
+  #showCard(staves: number, kept: number[], multiplier: number, worth: number): void {
     const round = this.#round;
     const log = this.#log;
     if (!round || !log) return;
     const ui = this.#ui;
     const rules = this.#deps.game.data.riving;
-    const lost = round.finished.filter((entry) => entry.fate !== 'stave').length;
-    const notes = [`${String(staves)} of ${String(round.maxStaves)} staves`];
-    if (lost > 0) notes.push(`${String(lost)} piece${lost === 1 ? '' : 's'} lost`);
-    log.grains.forEach((grain, index) => {
-      const kind = rules.grainKinds.find((entry) => entry.id === grain.kind);
-      if (!kind) return;
-      if (!round.live.has(index)) {
-        notes.push(`${kind.name} cut`);
-        return;
-      }
-      const home = round.finished.find((entry) =>
-        inArc(grain.angle * DEG, entry.piece.start, entry.piece.width),
-      );
-      if (home?.fate !== 'stave') {
-        notes.push(`${kind.name} lost`);
-        return;
-      }
-      const change = staveWorth(rules, log, home.piece, new Set([index])) - 1;
-      notes.push(`${kind.name} ${change >= 0 ? '+' : '−'}${times(Math.abs(change))}`);
+    const kindOf = (index: number) =>
+      rules.grainKinds.find((entry) => entry.id === log.grains[index]?.kind);
+    const factors = kept.flatMap((index) => {
+      const kind = kindOf(index);
+      return kind ? [`×${times(kind.multiplier)}`] : [];
     });
-    ui.cardTitle.textContent =
-      staves === round.maxStaves && round.finished.every((entry) => entry.fate === 'stave')
-        ? `Perfect log! ${String(worth)} staves`
-        : `${String(worth)} staves`;
-    ui.cardText.textContent = `${notes.join(' · ')} = ${String(worth)}`;
+    const product = kept.reduce((total, index) => total * (kindOf(index)?.multiplier ?? 1), 1);
+    const sum = [`${String(staves)} stave${staves === 1 ? '' : 's'}`, ...factors].join(' ');
+    const capped = product > multiplier ? ` (capped at ×${times(multiplier)})` : '';
+    const lost = round.finished.filter((entry) => entry.fate !== 'stave').length;
+    const notes: string[] = [];
+    if (lost > 0) notes.push(`${String(lost)} piece${lost === 1 ? '' : 's'} lost`);
+    log.grains.forEach((_, index) => {
+      if (kept.includes(index)) return;
+      const kind = kindOf(index);
+      if (kind) notes.push(`${kind.name} ${round.live.has(index) ? 'lost' : 'cut'}`);
+    });
+    const perfect = staves === round.maxStaves;
+    ui.cardTitle.textContent = `${perfect ? 'Perfect log! ' : ''}${String(worth)} staves`;
+    ui.cardText.textContent = `${sum} = ${String(worth)}${capped}${
+      notes.length > 0 ? `\n${notes.join(' · ')}` : ''
+    }`;
     ui.next.hidden = false;
     ui.card.hidden = false;
   }

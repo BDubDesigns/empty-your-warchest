@@ -39,6 +39,13 @@ describe('recipes', () => {
     expect(none.xp).toBe(0);
   });
 
+  it('can pay XP on fewer outputs than it yields', () => {
+    const inventory = new Inventory(data, [{ item: 'log', count: 1 }]);
+    const result = craft(inventory, recipe('rive_stave'), { yield: 24, xpYield: 8 });
+    expect(inventory.count('stave')).toBe(24);
+    expect(result.xp).toBe(recipe('rive_stave').xp * 8);
+  });
+
   it('changes nothing when inputs are missing', () => {
     const inventory = new Inventory(data, [{ item: 'stave', count: 2 }]);
     expect(canCraft(inventory, recipe('harden_spear'), 3)).toBe(false);

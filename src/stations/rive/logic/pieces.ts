@@ -123,20 +123,28 @@ export function offCentre(rules: Riving, piece: Piece, angle: number): boolean {
 }
 
 /**
- * What a stave is worth: 1, times each grain still whole inside it (a grain no line cut lies
- * wholly in one piece, so its middle says which).
+ * The grains (by index) that count: still whole (no line cut them) and in one of the `staves`
+ * you kept (a grain no line cut lies wholly in one piece, so its middle says which).
  */
-export function staveWorth(
-  rules: Riving,
+export function grainsKept(
   log: RivingLog,
-  piece: Piece,
+  staves: readonly Piece[],
   live: ReadonlySet<number>,
-): number {
-  return log.grains.reduce((worth, grain, index) => {
-    if (!live.has(index) || !inArc(grain.angle * DEG, piece.start, piece.width)) return worth;
-    const kind = rules.grainKinds.find((entry) => entry.id === grain.kind);
-    return worth * (kind?.multiplier ?? 1);
+): number[] {
+  return log.grains.flatMap((grain, index) =>
+    live.has(index) && staves.some((piece) => inArc(grain.angle * DEG, piece.start, piece.width))
+      ? [index]
+      : [],
+  );
+}
+
+/** What the grains that count multiply the log's staves by, together, up to the rules' cap. */
+export function logMultiplier(rules: Riving, log: RivingLog, kept: readonly number[]): number {
+  const product = kept.reduce((total, index) => {
+    const kind = rules.grainKinds.find((entry) => entry.id === log.grains[index]?.kind);
+    return total * (kind?.multiplier ?? 1);
   }, 1);
+  return Math.min(product, rules.multiplierCap);
 }
 
 /** Whether a split at `angle` runs along the log's checks (every end of it): it splits easier. */

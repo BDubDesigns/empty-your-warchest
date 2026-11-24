@@ -13,7 +13,8 @@ import {
   offCentre,
   smallerSide,
   splitPiece,
-  staveWorth,
+  grainsKept,
+  logMultiplier,
   wholeLog,
   type Fate,
   type Piece,
@@ -54,7 +55,16 @@ export type RivingEvent =
     }
   /** A piece that's done: a stave, or lost. */
   | { type: 'finished'; piece: Piece; fate: Fate }
-  | { type: 'done'; staves: number; worth: number; banked: number };
+  | {
+      type: 'done';
+      staves: number;
+      /** The grains that counted, and what they multiplied the staves by (capped). */
+      kept: number[];
+      multiplier: number;
+      /** Staves × multiplier, rounded down: what the log banks. */
+      worth: number;
+      banked: number;
+    };
 
 export interface RivingHooks {
   logger: EventLogger;
@@ -62,10 +72,10 @@ export interface RivingHooks {
   feel: () => RivingFeel;
   rules: Riving;
   /**
-   * Banks a finished log: runs the riving recipe for what its staves are worth (uses up the log).
-   * Returns the staves banked.
+   * Banks a finished log: runs the riving recipe for `worth` staves (its staves × its grains;
+   * uses up the log), paying XP on the `staves` split. Returns the staves banked.
    */
-  bank: (staves: number) => number;
+  bank: (worth: number, staves: number) => number;
   onEvent?: (event: RivingEvent) => void;
 }
 
@@ -130,15 +140,26 @@ export class RivingRound {
     return this.finished.filter((entry) => entry.fate === 'stave').length;
   }
 
-  /** What the staves so far are worth, with their grains (rot halves one, silver and gold
-   * double and triple it), rounded down at the end. */
-  get worth(): number {
-    return this.finished
+  /** The grains that count so far: whole, in a stave kept. */
+  get kept(): number[] {
+    const staves = this.finished
       .filter((entry) => entry.fate === 'stave')
-      .reduce(
-        (sum, entry) => sum + staveWorth(this.#hooks.rules, this.log, entry.piece, this.live),
-        0,
-      );
+      .map((entry) => entry.piece);
+    return grainsKept(this.log, staves, this.live);
+  }
+
+  /**
+   * What the log's grains could still multiply it by: every grain not cut and not lost with a
+   * piece (the best it can come to from here, capped).
+   */
+  get multiplierLeft(): number {
+    const lost = this.finished
+      .filter((entry) => entry.fate !== 'stave')
+      .map((entry) => entry.piece);
+    const alive = [...this.live].filter(
+      (index) => grainsKept(this.log, lost, new Set([index])).length === 0,
+    );
+    return logMultiplier(this.#hooks.rules, this.log, alive);
   }
 
   /** The most staves a log can give (every halving clean, no knots). */
@@ -306,19 +327,25 @@ export class RivingRound {
     if (this.#banked) return;
     this.#banked = true;
     const staves = this.staves;
-    const worth = Math.floor(this.worth + 1e-9);
-    const banked = this.#hooks.bank(worth);
+    const kept = this.kept;
+    const multiplier = logMultiplier(this.#hooks.rules, this.log, kept);
+    const worth = Math.floor(staves * multiplier + 1e-9);
+    const banked = this.#hooks.bank(worth, staves);
     const count = (fate: Fate) => this.finished.filter((entry) => entry.fate === fate).length;
     this.#log('riving.logEnd', {
       log: this.log.id,
       staves,
+      multiplier,
       worth,
       runouts: count('runout'),
       offCentre: count('offcentre'),
-      grainsKept: [...this.live].map((index) => this.log.grains[index]?.kind),
+      grainsKept: kept.map((index) => this.log.grains[index]?.kind),
+      grainsCut: this.log.grains
+        .filter((_, index) => !this.live.has(index))
+        .map((grain) => grain.kind),
       seconds: Math.round(this.now * 10) / 10,
     });
-    this.#hooks.onEvent?.({ type: 'done', staves, worth, banked });
+    this.#hooks.onEvent?.({ type: 'done', staves, kept, multiplier, worth, banked });
   }
 
   #log(type: string, data: Record<string, unknown>): void {

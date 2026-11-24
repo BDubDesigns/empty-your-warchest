@@ -7,11 +7,13 @@ export const riving = {
   halvings: 3,
   // A split within 10% of the piece's middle is even enough; past that the smaller side is lost.
   centreTolerance: 0.1,
+  // Grains multiply the whole log; three could stack to ×18, so they're capped while we tune.
+  multiplierCap: 6,
   checkTolerance: 8,
   grainKinds: [
     { id: 'rot', name: 'Rot', multiplier: 0.5, weight: 45 },
-    { id: 'silver', name: 'Silver grain', multiplier: 2, weight: 35 },
-    { id: 'gold', name: 'Gold grain', multiplier: 3, weight: 20 },
+    { id: 'silver', name: 'Silver', multiplier: 2, weight: 35 },
+    { id: 'gold', name: 'Gold', multiplier: 3, weight: 20 },
   ],
   tutorialLog: {
     id: 'tutorial_log',

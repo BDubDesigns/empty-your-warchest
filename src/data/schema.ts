@@ -372,17 +372,22 @@ const rivingLogSchema = z.object({
  * Riving a log into staves with a froe. Every split runs along a radius through the pith (the
  * first one across the whole log), halving a piece: `halvings` splits deep, a piece is a stave.
  * A split more than `centreTolerance` (share of the piece) off its middle loses the smaller side;
- * a runout wastes the short side. Grains change what a stave is worth (rot halves it, silver and
- * gold double and triple it), and a split line through a grain cancels it, good or bad.
+ * a runout wastes the short side. Grains multiply the whole log's staves (rot halves them, silver
+ * and gold double and triple them) if they end up in a stave you keep, and a split line through a
+ * grain cancels it, good or bad.
  */
 const rivingSchema = z.object({
   /** The recipe a riven log runs: its yield is the staves it's worth. */
   recipe: id,
   halvings: positiveInt,
   centreTolerance: fraction,
+  multiplierCap: positive,
   /** A split line within this many degrees of a check runs along it, and splits more easily. */
   checkTolerance: nonNegative,
-  /** The kinds of grain: what a stave holding one is worth (×), and how often each turns up. */
+  /**
+   * The kinds of grain: what each multiplies the whole log's staves by when it ends up in a stave
+   * you keep (they multiply together, up to `multiplierCap`), and how often each turns up.
+   */
   grainKinds: z
     .array(
       z.object({
