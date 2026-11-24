@@ -1599,3 +1599,38 @@ body:not([data-view='camp']) #build-label {
   min-width: 96px;
   background: #6fae4f;
 }
+
+/* Riving's cut chips while aiming: one per grain the line would cut, then the log's change. */
+.rv-chips {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: calc(var(--safe-bottom) + 140px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.rv-chip {
+  padding: 5px 12px;
+  border-radius: 999px;
+  font:
+    800 15px system-ui,
+    sans-serif;
+  color: #fff;
+  box-shadow: 0 2px 6px rgb(0 0 0 / 0.35);
+}
+
+.rv-chip-good {
+  background: #3f8f2c;
+}
+
+.rv-chip-bad {
+  background: #c0392b;
+}
+
+.rv-chip-total {
+  background: rgb(0 0 0 / 0.6);
+  font-variant-numeric: tabular-nums;
+}

@@ -76,6 +76,8 @@ const COLORS = {
   grain: { rot: '#4b3a1f', silver: '#cfd8dc', gold: '#f2c037' } as Record<string, string>,
   grainEdge: { rot: '#2c2112', silver: '#8fa0a8', gold: '#a87a12' } as Record<string, string>,
   cancelled: '#9b9284',
+  glowGood: '#7fd65a',
+  glowBad: '#ff4a3a',
   froe: 0x9aa3a8,
   handle: 0x8b5a2b,
   mallet: 0x7a5232,
@@ -128,6 +130,8 @@ export class Rive3DView implements ScreenView {
   #pieces = new Map<string, PieceVisual>();
   #faceTexture: THREE.CanvasTexture | undefined;
   #faceCanvas: HTMLCanvasElement | undefined;
+  /** The grains the aim would cut, as last drawn (glowing) and shown as chips. */
+  #aimedKey = '';
   #froe!: { root: THREE.Group; blade: THREE.Mesh; handle: THREE.Group };
   #mallet!: THREE.Group;
   #guide!: { lines: THREE.Mesh[] };
@@ -241,6 +245,7 @@ export class Rive3DView implements ScreenView {
     );
     this.#stavesShown = 0;
     this.#leverPixels = 0;
+    this.#aimedKey = '';
     this.#buildLog(log);
     this.#ui.logName.textContent = tutorial ? 'Practice log' : this.#grainNames(log);
   }
@@ -369,7 +374,12 @@ export class Rive3DView implements ScreenView {
    * coloured patch over the arc of the face it covers (the arc the rules use), marked with what
    * it's worth. A grain a split has cut through is drawn faded and crossed out.
    */
-  #drawFace(log: RivingLog, live: ReadonlySet<number>): THREE.CanvasTexture {
+  #drawFace(
+    log: RivingLog,
+    live: ReadonlySet<number>,
+    /** Grains the current aim would cut: they glow, green for bad ones, red for good ones. */
+    aimed: readonly number[] = [],
+  ): THREE.CanvasTexture {
     const size = 512;
     const canvas = this.#faceCanvas ?? document.createElement('canvas');
     this.#faceCanvas = canvas;
@@ -407,11 +417,21 @@ export class Rive3DView implements ScreenView {
       context.fillStyle = alive ? (COLORS.grain[grain.kind] ?? '#888') : COLORS.cancelled;
       context.fill();
       context.globalAlpha = 1;
+      const multiplier = kinds.find((kind) => kind.id === grain.kind)?.multiplier ?? 1;
+      if (alive && aimed.includes(index)) {
+        const glow = multiplier < 1 ? COLORS.glowGood : COLORS.glowBad;
+        context.save();
+        context.shadowColor = glow;
+        context.shadowBlur = 28;
+        context.lineWidth = 12;
+        context.strokeStyle = glow;
+        context.stroke();
+        context.restore();
+      }
       context.lineWidth = 4;
       context.strokeStyle = alive ? (COLORS.grainEdge[grain.kind] ?? '#444') : COLORS.cancelled;
       context.stroke();
       const label = at(grain.angle * DEG, 0.62);
-      const multiplier = kinds.find((kind) => kind.id === grain.kind)?.multiplier ?? 1;
       context.font = '900 44px system-ui, sans-serif';
       context.textAlign = 'center';
       context.textBaseline = 'middle';
@@ -590,6 +610,8 @@ export class Rive3DView implements ScreenView {
       }
       const log = this.#log;
       if (log && event.cut.length > 0) this.#drawFace(log, round.live);
+      // The next aim redraws its glow and chips.
+      this.#aimedKey = '';
       if (event.result !== 'clean') {
         this.#play('crash-wood', 0.8, -300);
         this.#play(`creak-${1 + Math.floor(Math.random() * 3)}`, 0.7, -500);
@@ -986,6 +1008,8 @@ export class Rive3DView implements ScreenView {
     const logName = el('div', 'rv-log-name');
     const tally = el('div', 'rv-tally');
     const hint = el('div', 'rv-hint');
+    // While aiming: a chip for each grain the line would cut, and what it does to the log.
+    const chips = el('div', 'rv-chips');
     const flashes = el('div', 'rv-flashes');
     const controls = el('div', 'rv-controls');
     const left = button('↺', 'rv-button rv-nudge', () => {
@@ -1024,7 +1048,7 @@ export class Rive3DView implements ScreenView {
     cardButtons.append(leave, next);
     card.append(cardTitle, cardText, cardButtons);
     card.hidden = true;
-    root.append(logName, tally, sideLabels, hint, flashes, controls, level, card);
+    root.append(logName, tally, sideLabels, chips, hint, flashes, controls, level, card);
     this.#element.append(root);
     return {
       root,
@@ -1041,6 +1065,7 @@ export class Rive3DView implements ScreenView {
       levelBubble,
       levelThin,
       sideLabels,
+      chips,
       card,
       cardTitle,
       cardText,
@@ -1075,23 +1100,15 @@ export class Rive3DView implements ScreenView {
     ui.finish.textContent = `Keep ${String(staves)}`;
     const preview = round.aimPreview;
     this.#showSides(preview);
-    const kinds = this.#deps.game.data.riving.grainKinds;
-    const cuts = (preview?.cut ?? []).flatMap((index) => {
-      const grain = kinds.find((entry) => entry.id === this.#log?.grains[index]?.kind);
-      if (!grain) return [];
-      const verb = grain.multiplier < 1 ? 'Cuts out' : 'Cuts';
-      return [`${verb} the ${grain.name.toLowerCase()}`];
-    });
-    // What the cut does to the log: "×¾ → ×1½".
-    const change = preview
-      ? `×${times(preview.multiplierNow)} → ×${times(preview.multiplierAfter)}`
-      : '';
+    this.#showCuts(preview);
     const pull = pullLevel(preview?.unevenness ?? 0);
     const practiceRot = this.#log?.id === this.#deps.game.data.riving.tutorialLog.id;
     const hints: Record<string, string> = {
       aim:
-        cuts.length > 0
-          ? `${cuts.join(' and ')}: ${change}${preview?.throughRot ? ' · rot wobbles, hold it' : ''}`
+        (preview?.cut.length ?? 0) > 0
+          ? preview?.throughRot
+            ? 'Rot wobbles the crack: hold it steady'
+            : ''
           : pull > 0
             ? "Uneven: it'll pull to the thin side · lean against it"
             : practiceRot && round.multiplierLeft < 1
@@ -1122,6 +1139,40 @@ export class Rive3DView implements ScreenView {
     this.#element.dataset.bubble = lever ? lever.offset.toFixed(2) : '';
     this.#element.dataset.aim =
       round.phase.kind === 'aim' ? String(Math.round(normalize(round.phase.angle) / DEG)) : '';
+  }
+
+  /**
+   * While aiming, the grains the line would cut: they glow on the log, and each gets a chip on its
+   * own line (green for cutting out something bad, red for cutting something good), with the
+   * log's multiplier before and after under them.
+   */
+  #showCuts(preview: AimPreview | undefined): void {
+    const log = this.#log;
+    const round = this.#round;
+    const cut = preview?.cut ?? [];
+    const key = preview ? `${cut.join(',')}|${String(preview.multiplierAfter)}` : '';
+    if (key === this.#aimedKey || !log || !round) return;
+    this.#aimedKey = key;
+    this.#drawFace(log, round.live, cut);
+    const kinds = this.#deps.game.data.riving.grainKinds;
+    const chips = cut.flatMap((index) => {
+      const kind = kinds.find((entry) => entry.id === log.grains[index]?.kind);
+      if (!kind) return [];
+      const chip = document.createElement('div');
+      const bad = kind.multiplier < 1;
+      chip.className = `rv-chip ${bad ? 'rv-chip-good' : 'rv-chip-bad'}`;
+      chip.textContent = `${bad ? 'Cuts out' : 'Cuts'} the ${kind.name.toLowerCase()} ×${times(
+        kind.multiplier,
+      )}`;
+      return [chip];
+    });
+    if (preview && chips.length > 0) {
+      const total = document.createElement('div');
+      total.className = 'rv-chip rv-chip-total';
+      total.textContent = `Log ×${times(preview.multiplierNow)} → ×${times(preview.multiplierAfter)}`;
+      chips.push(total);
+    }
+    this.#ui.chips.replaceChildren(...chips);
   }
 
   /**
