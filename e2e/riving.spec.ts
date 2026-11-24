@@ -87,7 +87,7 @@ test('rives a log into staves that land in the chest', async ({ page }) => {
     await expect(body).not.toHaveAttribute('data-riving', 'lever', { timeout: 10_000 });
   }
   await expect(body).toHaveAttribute('data-riving', 'done');
-  await expect(page.locator('.rv-card')).toContainText(/\d+ staves? = \d+/);
+  await expect(page.locator('.rv-card')).toContainText(/\d+ staves?( ×\S+)* = \d+/);
   // The staves pour into the chest.
   await expect(page.locator('.warchest-hud')).toHaveAttribute('data-settled', 'true', {
     timeout: 20_000,
