@@ -1,6 +1,6 @@
-import { Rng } from '../../core/rng';
 import {
   byId,
+  type Enemy,
   type GameData,
   type Gate,
   type Level,
@@ -15,6 +15,7 @@ import { Squad, UNARMED, type Fighter } from './squad';
 export const STEP_SECONDS = 1 / 60;
 
 export type Side = 'left' | 'right';
+export type Lane = Side | 'both';
 
 /** One gate of a pair, as it stands on the track. */
 export interface TrackGate {
@@ -37,8 +38,16 @@ export interface TrackEnemies {
   readonly kind: 'enemies';
   readonly at: number;
   readonly enemy: string;
+  readonly lane: Lane;
   readonly total: number;
-  left: number;
+  readonly totalArmed: number;
+  /** Still standing: unarmed ones stand in front and fall first. */
+  unarmed: number;
+  armed: number;
+  /** Hit points left on the enemy fighting at the front. */
+  frontHp: number;
+  /** True once the squad went past it in the other lane. */
+  avoided: boolean;
 }
 
 export interface TrackWall {
@@ -46,6 +55,8 @@ export interface TrackWall {
   readonly at: number;
   readonly maxHp: number;
   hp: number;
+  readonly volleySeconds: number;
+  readonly perVolley: number;
 }
 
 export type TrackEvent = TrackGates | TrackEnemies | TrackWall;
@@ -68,19 +79,32 @@ export type RunnerEvent =
       armedBefore: number;
       armedAfter: number;
     }
+  | { type: 'guardFell'; index: number; side: Side; guardsLeft: number }
   | { type: 'flip'; index: number; side: Side }
-  | { type: 'clashStart'; index: number; enemies: number; squad: number; armed: number }
   | {
-      type: 'trade';
+      type: 'clashStart';
+      index: number;
+      enemies: number;
+      enemiesArmed: number;
+      squad: number;
+      armed: number;
+    }
+  | { type: 'avoided'; index: number }
+  | {
+      type: 'blow';
       index: number;
       fighter: Fighter;
-      killed: number;
+      /** What the front enemy fights with: `UNARMED` or its spear quality. */
+      enemy: Fighter;
+      unitFell: boolean;
+      enemyFell: boolean;
       squad: number;
       enemies: number;
     }
   | { type: 'clashWon'; index: number; squad: number; armed: number }
   | { type: 'wallStart'; index: number; squad: number; armed: number }
-  | { type: 'wallHit'; index: number; fighter: Fighter; damage: number; hp: number; spent: boolean }
+  | { type: 'wallHit'; index: number; hp: number }
+  | { type: 'volley'; index: number; lost: Fighter[]; squad: number }
   | { type: 'won'; result: RunResult }
   | { type: 'lost'; cause: LossCause; result: RunResult };
 
@@ -100,23 +124,30 @@ export interface RunResult {
 export interface RunnerConfig {
   level: Level;
   unit: Unit;
-  runner: Pick<RunnerData, 'trackWidth' | 'trackMetersPerSecond' | 'edgeMargin' | 'clash'>;
+  /** Each enemy kind and the unit whose numbers it fights with. */
+  enemies: ReadonlyMap<string, { enemy: Enemy; unit: Unit }>;
+  runner: Pick<RunnerData, 'trackWidth' | 'trackMetersPerSecond' | 'edgeMargin'>;
   feel: RunnerFeel;
   /** Spear qualities, worst to best. */
   qualities: readonly string[];
+  /** Logged so a run can be found again; the rules themselves have no randomness yet. */
   seed: number | string;
 }
 
+/** Wall hit points between `wallHit` events, as a share of the wall, so the view can crack it. */
+const WALL_HIT_STEP = 0.04;
+
 /**
- * The Attack Run's rules: pure, fixed-step and seeded, so the same inputs and seed always give
- * the same run. The rules decide every outcome; the view only animates the events.
+ * The Attack Run's rules: pure and fixed-step, so the same inputs always give the same run. The
+ * rules decide every outcome; the view only animates the events.
  */
 export class RunnerSim {
   readonly squad: Squad;
   readonly track: readonly TrackEvent[];
   readonly length: number;
   readonly halfWidth: number;
-  /** Distance travelled (m). */
+  readonly seed: number | string;
+  /** Distance travelled by the squad's front line (m). */
   distance = 0;
   /** Squad centre, sideways (m, 0 = middle, negative = left). */
   x = 0;
@@ -125,10 +156,12 @@ export class RunnerSim {
   steps = 0;
   #feel: RunnerFeel;
   readonly #config: RunnerConfig;
-  readonly #rng: Rng;
   #next = 0;
   #timer = 0;
   #gap = 0;
+  /** Hit points left on the squad's front fighter. */
+  #frontHp = 0;
+  #wallHitAt = 0;
   #enemiesBeaten = 0;
   readonly #losses: Record<LossCause, number> = { gate: 0, enemies: 0, wall: 0 };
   #result: RunResult | undefined;
@@ -136,12 +169,9 @@ export class RunnerSim {
   constructor(config: RunnerConfig) {
     this.#config = config;
     this.#feel = config.feel;
-    this.#rng = new Rng(config.seed);
+    this.seed = config.seed;
     const { feel, level, runner } = config;
-    this.squad = new Squad(config.qualities, {
-      ...Object.fromEntries(config.qualities.map((quality) => [quality, 0])),
-      ...spearSupply(config.qualities, feel),
-    });
+    this.squad = new Squad(config.qualities, spearSupply(config.qualities, feel));
     this.squad.recruit(level.startingRecruits);
     this.length = level.durationSeconds * runner.trackMetersPerSecond;
     this.halfWidth = runner.trackWidth / 2;
@@ -157,9 +187,27 @@ export class RunnerSim {
             passed: false,
           };
         case 'enemies':
-          return { kind: 'enemies', at, enemy: event.enemy, total: event.count, left: event.count };
+          return {
+            kind: 'enemies',
+            at,
+            enemy: event.enemy,
+            lane: event.lane,
+            total: event.count,
+            totalArmed: event.armed,
+            unarmed: event.count - event.armed,
+            armed: event.armed,
+            frontHp: this.#enemyUnit(event.enemy).hp,
+            avoided: false,
+          };
         case 'wall':
-          return { kind: 'wall', at, maxHp: event.hp, hp: event.hp };
+          return {
+            kind: 'wall',
+            at,
+            maxHp: event.hp,
+            hp: event.hp,
+            volleySeconds: event.archers.volleySeconds,
+            perVolley: event.archers.perVolley,
+          };
       }
     });
   }
@@ -205,9 +253,32 @@ export class RunnerSim {
     return this.#next;
   }
 
+  /** The next gate pair ahead, past any lane group in front of it. */
+  get nextGates(): { event: TrackGates; index: number } | undefined {
+    for (let index = this.#next; index < this.track.length; index++) {
+      const event = this.track[index];
+      if (event?.kind === 'gates') return { event, index };
+      if (event?.kind !== 'enemies' || event.lane === 'both') return undefined;
+    }
+    return undefined;
+  }
+
   /** A gate's current form: its flipped side once flipped. */
   activeGate(gate: TrackGate): Pick<Gate, 'op' | 'value'> {
     return gate.flipped && gate.base.flip ? gate.base.flip : gate.base;
+  }
+
+  /** True while the squad is close enough to a flip gate on its side to be attacking it. */
+  attacking(gates: TrackGates, side: Side): boolean {
+    const gate = gates[side];
+    return (
+      this.phase === 'running' &&
+      gate.base.flip !== undefined &&
+      !gate.flipped &&
+      !gates.passed &&
+      this.side === side &&
+      gates.at - this.distance <= this.#feel.flipRange
+    );
   }
 
   /**
@@ -215,24 +286,28 @@ export class RunnerSim {
    * reading distance.
    */
   preview(): (GatePreview & { side: Side; index: number }) | undefined {
-    const event = this.nextEvent;
-    if (!event || event.kind !== 'gates' || this.phase !== 'running') return undefined;
-    if (event.at - this.distance > this.#feel.runSpeed * this.#feel.gateReadSeconds) {
+    const next = this.nextGates;
+    if (!next || this.phase !== 'running') return undefined;
+    if (next.event.at - this.distance > this.#feel.runSpeed * this.#feel.gateReadSeconds) {
       return undefined;
     }
     const side = this.side;
     return {
       side,
-      index: this.#next,
-      ...previewGate(this.squad, this.activeGate(event[side])),
+      index: next.index,
+      ...previewGate(this.squad, this.activeGate(next.event[side])),
     };
   }
 
   /** Damage one unit deals: the unarmed value or its spear's. */
-  damageOf(fighter: Fighter): number {
-    const unit = this.#config.unit;
+  damageOf(fighter: Fighter, unit: Unit = this.#config.unit): number {
     if (fighter === UNARMED) return unit.unarmedDamage;
     return unit.weapon.damageByQuality[fighter] ?? 0;
+  }
+
+  /** What the front enemy of a group fights with. */
+  enemyFront(group: TrackEnemies): Fighter {
+    return group.unarmed > 0 ? UNARMED : this.#enemy(group.enemy).weaponQuality;
   }
 
   /** Advances one fixed step, steering toward `targetX` (m). Returns what happened. */
@@ -259,6 +334,18 @@ export class RunnerSim {
     return events;
   }
 
+  #enemy(id: string): Enemy {
+    const entry = this.#config.enemies.get(id);
+    if (!entry) throw new Error(`Unknown enemy "${id}"`);
+    return entry.enemy;
+  }
+
+  #enemyUnit(id: string): Unit {
+    const entry = this.#config.enemies.get(id);
+    if (!entry) throw new Error(`Unknown enemy "${id}"`);
+    return entry.unit;
+  }
+
   #steer(targetX: number, dt: number): void {
     const { steerSmoothing, steerSpeed } = this.#feel;
     const target = Math.max(-this.maxX, Math.min(this.maxX, targetX));
@@ -279,16 +366,33 @@ export class RunnerSim {
         if (this.done) return;
         continue;
       }
+      if (event.kind === 'enemies' && event.lane !== 'both' && event.lane !== this.side) {
+        // A lane group only blocks a squad on its side.
+        event.avoided = true;
+        events.push({ type: 'avoided', index });
+        this.#next++;
+        continue;
+      }
       // Enemies and the wall stop the squad where it meets them.
       this.distance = event.at;
-      this.#gap = event.kind === 'enemies' ? this.#feel.tradeSeconds : this.#feel.wallHitSeconds;
-      this.#timer = this.#gap;
+      this.#frontHp = this.#config.unit.hp;
       const { count: squad, armedCount: armed } = this.squad;
       if (event.kind === 'enemies') {
         this.phase = 'clash';
-        events.push({ type: 'clashStart', index, enemies: event.left, squad, armed });
+        this.#gap = this.#feel.tradeSeconds;
+        this.#timer = this.#gap;
+        events.push({
+          type: 'clashStart',
+          index,
+          enemies: event.unarmed + event.armed,
+          enemiesArmed: event.armed,
+          squad,
+          armed,
+        });
       } else {
         this.phase = 'wall';
+        this.#timer = event.volleySeconds;
+        this.#wallHitAt = event.hp - event.maxHp * WALL_HIT_STEP;
         events.push({ type: 'wallStart', index, squad, armed });
       }
       return;
@@ -297,18 +401,26 @@ export class RunnerSim {
 
   /** The squad attacks a flip gate on its side while it's in range, filling its bar. */
   #attackFlipGates(dt: number, events: RunnerEvent[]): void {
-    const event = this.nextEvent;
-    if (!event || event.kind !== 'gates') return;
-    if (event.at - this.distance > this.#feel.flipRange) return;
+    const next = this.nextGates;
+    if (!next) return;
     const side = this.side;
-    const gate = event[side];
+    if (!this.attacking(next.event, side)) return;
+    const gate = next.event[side];
     const flip = gate.base.flip;
-    if (!flip || gate.flipped) return;
-    gate.flipPoints += this.#squadDamage() * this.#feel.flipAttackRate * dt;
-    if (gate.flipPoints >= flip.hp) {
+    if (!flip) return;
+    const before = guardsLeft(gate);
+    gate.flipPoints = Math.min(
+      flip.hp,
+      gate.flipPoints + this.#squadDamage() * this.#feel.flipAttackRate * dt,
+    );
+    const after = guardsLeft(gate);
+    if (after < before && after > 0) {
+      events.push({ type: 'guardFell', index: next.index, side, guardsLeft: after });
+    }
+    if (after === 0) {
       gate.flipPoints = flip.hp;
       gate.flipped = true;
-      events.push({ type: 'flip', index: this.#next, side });
+      events.push({ type: 'flip', index: next.index, side });
     }
   }
 
@@ -344,34 +456,49 @@ export class RunnerSim {
     if (this.squad.count === 0) this.#finish(false, events, 'gate');
   }
 
-  /** Front-line trade: one pair at a time, speeding up as it goes. */
+  /**
+   * The front-line duel: the squad's front soldier and the group's front enemy swap blows until
+   * one falls (both can), then the next steps up. Blows speed up so big fights don't drag.
+   */
   #clash(dt: number, events: RunnerEvent[]): void {
-    const event = this.nextEvent;
-    if (!event || event.kind !== 'enemies') return;
+    const group = this.nextEvent;
+    if (!group || group.kind !== 'enemies') return;
+    const enemyUnit = this.#enemyUnit(group.enemy);
     this.#timer -= dt;
     while (this.#timer <= 0 && this.phase === 'clash') {
       const fighter = this.squad.front();
       if (fighter === undefined) break;
-      const { killChance, unarmedKillChance, doubleChance } = this.#config.runner.clash;
-      const kills = fighter === UNARMED ? unarmedKillChance : (killChance[fighter] ?? 1);
-      let killed = 0;
-      if (this.#rng.chance(kills)) {
-        killed = fighter !== UNARMED && this.#rng.chance(doubleChance[fighter] ?? 0) ? 2 : 1;
+      const enemy = this.enemyFront(group);
+      group.frontHp -= this.damageOf(fighter);
+      this.#frontHp -= this.damageOf(enemy, enemyUnit);
+      const enemyFell = group.frontHp <= 0;
+      const unitFell = this.#frontHp <= 0;
+      if (enemyFell) {
+        if (group.unarmed > 0) group.unarmed--;
+        else group.armed--;
+        group.frontHp = enemyUnit.hp;
+        this.#enemiesBeaten++;
       }
-      killed = Math.min(killed, event.left);
-      event.left -= killed;
-      this.#enemiesBeaten += killed;
-      this.squad.lose(1);
-      this.#losses.enemies++;
+      if (unitFell) {
+        this.squad.lose(1);
+        this.#losses.enemies++;
+        this.#frontHp = this.#config.unit.hp;
+      }
+      const enemies = group.unarmed + group.armed;
       events.push({
-        type: 'trade',
+        type: 'blow',
         index: this.#next,
         fighter,
-        killed,
+        enemy,
+        unitFell,
+        enemyFell,
         squad: this.squad.count,
-        enemies: event.left,
+        enemies,
       });
-      if (event.left === 0) {
+      if (this.squad.count === 0) {
+        // Losing your last soldier loses the fight, even if the last enemy fell with him.
+        this.#finish(false, events, 'enemies');
+      } else if (enemies === 0) {
         const index = this.#next;
         this.#next++;
         this.phase = 'running';
@@ -381,45 +508,38 @@ export class RunnerSim {
           squad: this.squad.count,
           armed: this.squad.armedCount,
         });
-      } else if (this.squad.count === 0) {
-        this.#finish(false, events, 'enemies');
       } else {
-        this.#nextGap();
+        this.#gap = Math.max(this.#feel.tradeMinSeconds, this.#gap * this.#feel.tradeSpeedup);
+        this.#timer += this.#gap;
       }
     }
   }
 
-  /** The squad spends itself on the palisade, one hit at a time. */
+  /**
+   * The palisade: the whole squad hammers it at once while archers on the walkway fire volleys.
+   * Break it before the volleys get everyone.
+   */
   #wall(dt: number, events: RunnerEvent[]): void {
     const wall = this.nextEvent;
     if (!wall || wall.kind !== 'wall') return;
-    this.#timer -= dt;
-    while (this.#timer <= 0 && this.phase === 'wall') {
-      const fighter = this.squad.front();
-      if (fighter === undefined) break;
-      const damage = this.damageOf(fighter);
-      wall.hp = Math.max(0, wall.hp - damage);
-      // The hit that breaks the wall leaves its unit standing: breaking it with one unit wins.
-      const spent = wall.hp > 0;
-      if (spent) {
-        this.squad.lose(1);
-        this.#losses.wall++;
-      }
-      events.push({ type: 'wallHit', index: this.#next, fighter, damage, hp: wall.hp, spent });
-      if (wall.hp === 0) {
-        this.#next++;
-        this.#finish(true, events);
-      } else if (this.squad.count === 0) {
-        this.#finish(false, events, 'wall');
-      } else {
-        this.#nextGap();
-      }
+    wall.hp = Math.max(0, wall.hp - this.#squadDamage() * this.#feel.wallAttackRate * dt);
+    if (wall.hp <= this.#wallHitAt || wall.hp === 0) {
+      events.push({ type: 'wallHit', index: this.#next, hp: wall.hp });
+      this.#wallHitAt = wall.hp - wall.maxHp * WALL_HIT_STEP;
     }
-  }
-
-  #nextGap(): void {
-    this.#gap = Math.max(this.#feel.tradeMinSeconds, this.#gap * this.#feel.tradeSpeedup);
-    this.#timer += this.#gap;
+    if (wall.hp === 0) {
+      this.#next++;
+      this.#finish(true, events);
+      return;
+    }
+    this.#timer -= dt;
+    if (this.#timer <= 0) {
+      this.#timer += wall.volleySeconds;
+      const lost = this.squad.lose(wall.perVolley);
+      this.#losses.wall += lost.length;
+      events.push({ type: 'volley', index: this.#next, lost, squad: this.squad.count });
+      if (this.squad.count === 0) this.#finish(false, events, 'wall');
+    }
   }
 
   #finish(won: boolean, events: RunnerEvent[], cause?: LossCause): void {
@@ -441,6 +561,14 @@ export class RunnerSim {
   }
 }
 
+/** Guards still standing in front of a flip gate: each takes `hp / guards` attack points. */
+export function guardsLeft(gate: TrackGate): number {
+  const flip = gate.base.flip;
+  if (!flip || gate.flipped) return 0;
+  const perGuard = flip.hp / flip.guards;
+  return Math.max(0, flip.guards - Math.floor(gate.flipPoints / perGuard + 1e-9));
+}
+
 /** The spears a run starts with, by quality, from the debug sliders. */
 export function spearSupply(
   qualities: readonly string[],
@@ -451,7 +579,7 @@ export function spearSupply(
   return Object.fromEntries(qualities.map((quality, index) => [quality, counts[index] ?? 0]));
 }
 
-/** The War tent's run from game data: its level, unit and spear tiers. */
+/** The War tent's run from game data: its level, unit, enemies and spear tiers. */
 export function runnerConfig(
   data: GameData,
   feel: RunnerFeel,
@@ -461,6 +589,9 @@ export function runnerConfig(
   return {
     level,
     unit: byId(data.units, level.unit),
+    enemies: new Map(
+      data.enemies.map((enemy) => [enemy.id, { enemy, unit: byId(data.units, enemy.unit) }]),
+    ),
     runner: data.runner,
     feel,
     qualities: data.qualities.map((quality) => quality.id),

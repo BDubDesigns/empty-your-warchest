@@ -88,6 +88,9 @@ function checkReferences(data: GameData, ctx: z.RefinementCtx): void {
       if (event.type === 'enemies' && !enemies.has(event.enemy)) {
         issue([...eventPath, 'enemy'], `Unknown enemy "${event.enemy}"`);
       }
+      if (event.type === 'enemies' && event.armed > event.count) {
+        issue([...eventPath, 'armed'], 'More armed enemies than the group has');
+      }
       if (event.type === 'gates') {
         for (const side of ['left', 'right'] as const) {
           const gate = event[side];
@@ -112,8 +115,12 @@ function checkReferences(data: GameData, ctx: z.RefinementCtx): void {
   if (!data.levels.some((level) => level.id === runner.level)) {
     issue(['runner', 'level'], `Unknown level "${runner.level}"`);
   }
-  coversAllQualities(['runner', 'clash', 'doubleChance'], runner.clash.doubleChance);
-  coversAllQualities(['runner', 'clash', 'killChance'], runner.clash.killChance);
+  data.enemies.forEach((enemy, index) => {
+    if (!units.has(enemy.unit)) issue(['enemies', index, 'unit'], `Unknown unit "${enemy.unit}"`);
+    if (!qualities.has(enemy.weaponQuality)) {
+      issue(['enemies', index, 'weaponQuality'], `Unknown quality "${enemy.weaponQuality}"`);
+    }
+  });
   if (data.qualities.length !== 3) {
     // The runner's spear sliders are Poor, Good and Perfect: one per tier.
     issue(['runner', 'feel'], 'The runner spear sliders expect exactly 3 quality tiers');

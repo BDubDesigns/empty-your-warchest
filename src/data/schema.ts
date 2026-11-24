@@ -65,7 +65,11 @@ export const unitSchema = z.object({
   }),
 });
 
-export const enemySchema = z.object({ id, name, hp: positiveInt, damage: nonNegative });
+/**
+ * Enemies fight with a unit's numbers (decided Nov 24, keep it simple): an unarmed bandit is an
+ * unarmed recruit, an armed one fights like that unit with a `weaponQuality` spear.
+ */
+export const enemySchema = z.object({ id, name, unit: id, weaponQuality: id });
 
 const gateOp = z.enum(['add', 'subtract', 'multiply', 'divide']);
 
@@ -73,17 +77,33 @@ const gateSchema = z.object({
   op: gateOp,
   value: positiveInt,
   /**
-   * A flip gate: the squad's attacks fill a bar while it steers toward the gate, and once `hp`
-   * attack points land before the squad reaches it, it turns into `op` and `value`.
+   * A flip gate: `guards` stand in front of it. The squad's attacks land while it steers toward
+   * the gate; every `hp / guards` attack points drops a guard, and once the last one falls before
+   * the squad reaches it, the gate turns into `op` and `value`.
    */
-  flip: z.object({ op: gateOp, value: positiveInt, hp: positive }).optional(),
+  flip: z.object({ op: gateOp, value: positiveInt, hp: positive, guards: positiveInt }).optional(),
 });
 
 /** `at` is how far along the track the event happens, from 0 (start) to 1 (end). */
 const levelEventSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('gates'), at: fraction, left: gateSchema, right: gateSchema }),
-  z.object({ type: z.literal('enemies'), at: fraction, enemy: id, count: positiveInt }),
-  z.object({ type: z.literal('wall'), at: fraction, hp: positiveInt }),
+  z.object({
+    type: z.literal('enemies'),
+    at: fraction,
+    enemy: id,
+    count: positiveInt,
+    /** How many of them carry spears; the rest are unarmed and stand in front. */
+    armed: z.number().int().nonnegative(),
+    /** A group in one lane only blocks a squad on that side; `both` blocks the whole track. */
+    lane: z.enum(['both', 'left', 'right']).default('both'),
+  }),
+  z.object({
+    type: z.literal('wall'),
+    at: fraction,
+    hp: positiveInt,
+    /** Archers on the walkway: every `volleySeconds` a volley drops `perVolley` units. */
+    archers: z.object({ volleySeconds: positive, perVolley: positiveInt }),
+  }),
 ]);
 
 export const levelSchema = z.object({
@@ -324,14 +344,17 @@ const runnerFeelSchema = z.object({
   crowdSpread: positive,
   /** How far edge units trail the centre on turns (0 = rigid). */
   edgeLag: nonNegative,
-  /** Seconds between the first front-line trades of a clash. */
+  /**
+   * Seconds between the first blows of a clash. The front soldier and the front enemy swap blows
+   * until one falls; the next steps up.
+   */
   tradeSeconds: positive,
-  /** Each trade's gap is this share of the last, so big fights speed up. */
+  /** Each blow's gap is this share of the last, so big fights don't drag. */
   tradeSpeedup: z.number().positive().max(1),
-  /** Fastest the trades get (s). */
+  /** Fastest the blows get (s). */
   tradeMinSeconds: positive,
-  /** Seconds between units hitting the wall, first hit (speeds up like trades). */
-  wallHitSeconds: positive,
+  /** Wall damage per second for each point of a unit's damage; the whole squad hits at once. */
+  wallAttackRate: nonNegative,
   /** Attack points each unit lands per second on a flip gate, per point of its damage. */
   flipAttackRate: nonNegative,
   /** How far ahead (m) the squad starts attacking a flip gate. */
@@ -342,6 +365,8 @@ const runnerFeelSchema = z.object({
   cameraAngle: z.number().min(5).max(85),
   /** Camera distance from the squad (m). */
   cameraDistance: positive,
+  /** How far ahead of the squad the camera aims (m): more puts the squad lower on screen. */
+  cameraLookAhead: nonNegative,
   /** Extra camera distance per metre of crowd radius, so big crowds fit. */
   cameraPullback: nonNegative,
   /** Spears in the run by tier: debug sliders until runs use the warchest. */
@@ -357,6 +382,7 @@ const runnerFeelSchema = z.object({
   buzzFlipMs: nonNegative,
   buzzTradeMs: nonNegative,
   buzzWallHitMs: nonNegative,
+  buzzVolleyMs: nonNegative,
   buzzWallBreakMs: nonNegative,
   buzzLoseMs: nonNegative,
 });
@@ -373,17 +399,6 @@ export const runnerSchema = z.object({
   trackMetersPerSecond: positive,
   /** Room to the side of the track the squad's centre can't enter (m). */
   edgeMargin: nonNegative,
-  clash: z.object({
-    /**
-     * Each front-line trade costs the fighting unit; this is the chance it takes its bandit with
-     * it, by spear quality.
-     */
-    killChance: z.record(id, fraction),
-    /** The same for a unit with no spear: unarmed recruits mostly soak up hits. */
-    unarmedKillChance: fraction,
-    /** Chance a winning fighter takes a second bandit, by spear quality. */
-    doubleChance: z.record(id, fraction),
-  }),
   feel: runnerFeelSchema,
 });
 

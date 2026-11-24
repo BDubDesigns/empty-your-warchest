@@ -62,7 +62,7 @@ describe('game data', () => {
       raw.levels[0]?.events.unshift({
         type: 'gates',
         at: 0,
-        left: { op: 'add', value: 5, flip: { op: 'multiply', value: 2, hp: 10 } },
+        left: { op: 'add', value: 5, flip: { op: 'multiply', value: 2, hp: 10, guards: 1 } },
         right: { op: 'subtract', value: 5 },
       });
     }, 'Only negative gates');

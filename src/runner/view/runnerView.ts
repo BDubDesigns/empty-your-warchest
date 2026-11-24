@@ -7,6 +7,7 @@ import { Rng, type EventLogger, type LiveTuning } from '../../core';
 import type { GameData, RunnerFeel } from '../../data';
 import {
   gateLabel,
+  guardsLeft,
   isGoodOp,
   runnerConfig,
   RunnerSim,
@@ -49,12 +50,17 @@ const COLORS = {
   unarmed: 0x8d9099,
   spear: 0xd9c08a,
   bandit: 0xa8433a,
+  banditUnarmed: 0x7d5a50,
   good: 0x2e8be6,
   bad: 0xd8453b,
   log: 0x8b5a2b,
   spark: 0xffe08a,
   sparkBright: 0xffffff,
 };
+/** Spear tips by quality, worst to best: dull iron, bright steel, glowing gold. */
+const TIP_COLORS = [0x4a4440, 0xdfe6ee, 0xffc42e];
+const ARROW_GEOMETRY = new THREE.CylinderGeometry(0.02, 0.02, 0.7, 4).rotateX(Math.PI / 2);
+const ARROW_MATERIAL = new THREE.MeshBasicMaterial({ color: 0x3a2a1a });
 const GOOD_CSS = '#2e8be6';
 const BAD_CSS = '#d8453b';
 
@@ -74,8 +80,8 @@ interface GateVisual {
   label: THREE.Sprite;
   canvas: HTMLCanvasElement;
   texture: THREE.CanvasTexture;
-  bar: THREE.Group | undefined;
-  barFill: THREE.Mesh | undefined;
+  /** A flip gate's guards, standing in front of it until the squad cuts them down. */
+  guards: THREE.InstancedMesh | undefined;
   drawn: string;
 }
 
@@ -93,6 +99,22 @@ interface Particle {
   life: number;
   maxLife: number;
   size: number;
+}
+
+interface Arrow {
+  mesh: THREE.Mesh;
+  from: THREE.Vector3;
+  to: THREE.Vector3;
+  /** Seconds since it was loosed (negative: not yet). */
+  t: number;
+}
+
+interface BanditGroup {
+  mesh: THREE.InstancedMesh;
+  shafts: THREE.InstancedMesh;
+  tips: THREE.InstancedMesh;
+  label: THREE.Sprite;
+  drawn: number;
 }
 
 interface Plank {
@@ -116,15 +138,17 @@ export class RunnerView implements ScreenView {
   readonly #fx = new Rng('runner-view');
   #world = new THREE.Group();
   readonly #units: THREE.InstancedMesh;
-  readonly #spears: THREE.InstancedMesh;
+  readonly #spears: { shafts: THREE.InstancedMesh; tips: THREE.InstancedMesh };
   readonly #sparks: THREE.InstancedMesh;
   readonly #unitX = new Float32Array(MAX_UNITS);
   readonly #particles: Particle[] = [];
   #sim!: RunnerSim;
   #seed = 0;
   #gates = new Map<number, Record<Side, GateVisual>>();
-  #bandits = new Map<number, { mesh: THREE.InstancedMesh; label: THREE.Sprite; drawn: number }>();
-  #wall!: { group: THREE.Group; logs: THREE.Mesh[]; tilts: number[] };
+  #bandits = new Map<number, BanditGroup>();
+  #wall!: { group: THREE.Group; logs: THREE.Mesh[]; tilts: number[]; archers: THREE.Mesh[] };
+  #arrows: Arrow[] = [];
+  #lastAttackSpark = 0;
   #planks: Plank[] = [];
   #started = false;
   #accumulator = 0;
@@ -164,16 +188,8 @@ export class RunnerView implements ScreenView {
     this.#units.frustumCulled = false;
     this.#scene.add(this.#units);
 
-    const spearGeometry = new THREE.CylinderGeometry(0.025, 0.025, 1.7, 5);
-    spearGeometry.translate(0, 0.85, 0);
-    this.#spears = new THREE.InstancedMesh(
-      spearGeometry,
-      new THREE.MeshLambertMaterial({ color: COLORS.spear }),
-      MAX_UNITS,
-    );
-    this.#spears.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-    this.#spears.frustumCulled = false;
-    this.#scene.add(this.#spears);
+    this.#spears = this.#spearMeshes(MAX_UNITS);
+    this.#scene.add(this.#spears.shafts, this.#spears.tips);
 
     this.#sparks = new THREE.InstancedMesh(
       new THREE.OctahedronGeometry(0.12),
@@ -234,6 +250,7 @@ export class RunnerView implements ScreenView {
     this.#cameraX = 0;
     this.#cameraDistance = 0;
     this.#planks = [];
+    this.#arrows = [];
     this.#particles.length = 0;
     this.#unitX.fill(0);
     this.#buildWorld();
@@ -355,27 +372,27 @@ export class RunnerView implements ScreenView {
       label.position.y = 3.8;
       label.renderOrder = 2;
       group.add(label);
-      let bar: THREE.Group | undefined;
-      let barFill: THREE.Mesh | undefined;
-      if (event[side].base.flip) {
-        bar = new THREE.Group();
-        bar.position.y = 5.1;
-        const back = new THREE.Mesh(
-          new THREE.PlaneGeometry(3.2, 0.36),
-          new THREE.MeshBasicMaterial({ color: 0x222222, transparent: true, opacity: 0.7 }),
+      let guards: THREE.InstancedMesh | undefined;
+      const flip = event[side].base.flip;
+      if (flip) {
+        const geometry = new THREE.CapsuleGeometry(UNIT.radius * 1.1, UNIT.length, 4, 8);
+        geometry.translate(0, UNIT.radius + UNIT.length / 2, 0);
+        guards = new THREE.InstancedMesh(
+          geometry,
+          new THREE.MeshLambertMaterial({ color: COLORS.bandit }),
+          flip.guards,
         );
-        barFill = new THREE.Mesh(
-          new THREE.PlaneGeometry(3.1, 0.26),
-          new THREE.MeshBasicMaterial({ color: COLORS.good }),
-        );
-        barFill.geometry.translate(1.55, 0, 0);
-        barFill.position.set(-1.55, 0, 0.01);
-        barFill.scale.x = 0.001;
-        bar.add(back, barFill);
-        group.add(bar);
+        // A row in front of the gate, facing the squad.
+        const matrix = new THREE.Matrix4();
+        for (let i = 0; i < flip.guards; i++) {
+          const spread = half - 1;
+          const gx = flip.guards > 1 ? -spread / 2 + (i / (flip.guards - 1)) * spread : 0;
+          guards.setMatrixAt(i, matrix.makeTranslation(gx, 0, 1.2));
+        }
+        group.add(guards);
       }
       this.#world.add(group);
-      visuals[side] = { panel, label, canvas, texture, bar, barFill, drawn: '' };
+      visuals[side] = { panel, label, canvas, texture, guards, drawn: '' };
       this.#drawGate(visuals[side], event[side]);
     }
     this.#gates.set(index, visuals);
@@ -384,7 +401,8 @@ export class RunnerView implements ScreenView {
   #drawGate(visual: GateVisual, gate: TrackGate): void {
     const active = this.#sim.activeGate(gate);
     const good = isGoodOp(active.op);
-    const flipHint = gate.base.flip && !gate.flipped ? `attack → ${gateLabel(gate.base.flip)}` : '';
+    const flipHint =
+      gate.base.flip && !gate.flipped ? `beat guards → ${gateLabel(gate.base.flip)}` : '';
     const key = `${gateLabel(active)}|${flipHint}`;
     if (visual.drawn === key) return;
     visual.drawn = key;
@@ -417,47 +435,130 @@ export class RunnerView implements ScreenView {
   #buildBandits(event: TrackEnemies, index: number): void {
     const geometry = new THREE.CapsuleGeometry(UNIT.radius * 1.1, UNIT.length, 4, 8);
     geometry.translate(0, UNIT.radius + UNIT.length / 2, 0);
-    const mesh = new THREE.InstancedMesh(
-      geometry,
-      new THREE.MeshLambertMaterial({ color: COLORS.bandit }),
-      event.total,
-    );
+    const mesh = new THREE.InstancedMesh(geometry, new THREE.MeshLambertMaterial(), event.total);
     mesh.frustumCulled = false;
-    this.#world.add(mesh);
+    const spears = this.#spearMeshes(event.total);
+    this.#world.add(mesh, spears.shafts, spears.tips);
     const label = this.#textSprite(String(event.total), BAD_CSS);
-    label.position.set(0, 2.6, -event.at - 1.2);
+    label.position.set(this.#laneX(event.lane), 2.6, -event.at - 1.2);
     this.#world.add(label);
-    this.#bandits.set(index, { mesh, label, drawn: -1 });
+    this.#bandits.set(index, { mesh, ...spears, label, drawn: -1 });
   }
 
-  /** Bandits pack toward the front line as they fall, centre first. */
+  /** Centre of a lane group's half of the track; a full-width group follows the squad. */
+  #laneX(lane: TrackEnemies['lane']): number {
+    if (lane === 'both') return 0;
+    return ((lane === 'left' ? -1 : 1) * this.#sim.halfWidth) / 2;
+  }
+
+  /**
+   * Bandits pack toward the front line as they fall: the unarmed stand in front (they fall first),
+   * the armed carry spears behind them.
+   */
   #layoutBandits(event: TrackEnemies, index: number, time: number): void {
     const entry = this.#bandits.get(index);
     if (!entry) return;
-    const { mesh } = entry;
-    const columns = Math.max(1, Math.floor((this.#sim.halfWidth * 2 - 0.6) / 0.75));
+    const { mesh, shafts, tips } = entry;
+    const alive = event.unarmed + event.armed;
+    const width = event.lane === 'both' ? this.#sim.halfWidth * 2 : this.#sim.halfWidth;
+    const columns = Math.max(1, Math.floor((width - 0.6) / 0.75));
     const matrix = new THREE.Matrix4();
-    const edge = this.#sim.halfWidth - UNIT.radius;
-    const blockHalf = (Math.min(columns, event.left) - 1) * 0.375;
-    const centre = Math.max(-edge + blockHalf, Math.min(edge - blockHalf, this.#sim.x));
-    for (let i = 0; i < event.left; i++) {
+    const edge = (event.lane === 'both' ? this.#sim.halfWidth : this.#sim.halfWidth / 2) - 0.4;
+    const blockHalf = (Math.min(columns, alive) - 1) * 0.375;
+    const laneX = this.#laneX(event.lane);
+    // A full-width block lines up opposite the squad, so the front lines meet.
+    const follow = event.lane === 'both' ? this.#sim.x : laneX;
+    const centre = laneX + Math.max(-edge + blockHalf, Math.min(edge - blockHalf, follow - laneX));
+    const armedColor = new THREE.Color(COLORS.bandit);
+    const unarmedColor = new THREE.Color(COLORS.banditUnarmed);
+    const tipColor = new THREE.Color(
+      this.#tipColor(this.#sim.enemyFront({ ...event, unarmed: 0 })),
+    );
+    let spearCount = 0;
+    for (let i = 0; i < alive; i++) {
       const row = Math.floor(i / columns);
       const slot = i % columns;
       const offset = Math.ceil(slot / 2) * (slot % 2 === 0 ? 1 : -1);
-      // The block lines up opposite the squad, so the front lines meet.
-      const x = Math.max(-edge, Math.min(edge, centre + offset * 0.75));
+      const x = centre + offset * 0.75 + Math.sin(time * 6 + i) * 0.04;
       const z = -event.at - 0.7 - row * 0.75;
-      const sway = Math.sin(time * 6 + i) * 0.04;
-      matrix.makeTranslation(x + sway, Math.abs(Math.sin(time * 9 + i * 1.7)) * 0.05, z);
+      const y = Math.abs(Math.sin(time * 9 + i * 1.7)) * 0.05;
+      matrix.makeTranslation(x, y, z);
       mesh.setMatrixAt(i, matrix);
+      const armed = i >= event.unarmed;
+      mesh.setColorAt(i, armed ? armedColor : unarmedColor);
+      if (armed) {
+        this.#placeSpear(shafts, tips, spearCount, x - 0.18, y, z, 0.35, tipColor);
+        spearCount++;
+      }
     }
-    mesh.count = event.left;
+    mesh.count = alive;
+    shafts.count = tips.count = spearCount;
     mesh.instanceMatrix.needsUpdate = true;
-    if (entry.drawn !== event.left) {
-      entry.drawn = event.left;
-      this.#redrawText(entry.label, String(event.left), BAD_CSS);
-      entry.label.visible = event.left > 0;
+    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+    shafts.instanceMatrix.needsUpdate = true;
+    tips.instanceMatrix.needsUpdate = true;
+    if (tips.instanceColor) tips.instanceColor.needsUpdate = true;
+    if (entry.drawn !== alive) {
+      entry.drawn = alive;
+      this.#redrawText(entry.label, String(alive), BAD_CSS);
+      entry.label.visible = alive > 0;
     }
+  }
+
+  /** Spear shafts and tinted tips for up to `count` holders. */
+  #spearMeshes(count: number): { shafts: THREE.InstancedMesh; tips: THREE.InstancedMesh } {
+    const shaftGeometry = new THREE.CylinderGeometry(0.025, 0.025, 1.6, 5);
+    shaftGeometry.translate(0, 0.8, 0);
+    const shafts = new THREE.InstancedMesh(
+      shaftGeometry,
+      new THREE.MeshLambertMaterial({ color: COLORS.spear }),
+      count,
+    );
+    const tipGeometry = new THREE.ConeGeometry(0.07, 0.3, 6);
+    tipGeometry.translate(0, 1.75, 0);
+    // Unlit, so a Perfect gold tip glows and a Poor one stays dull in any light.
+    const tips = new THREE.InstancedMesh(tipGeometry, new THREE.MeshBasicMaterial(), count);
+    for (const mesh of [shafts, tips]) {
+      mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+      mesh.frustumCulled = false;
+      mesh.count = 0;
+    }
+    return { shafts, tips };
+  }
+
+  #placeSpear(
+    shafts: THREE.InstancedMesh,
+    tips: THREE.InstancedMesh,
+    index: number,
+    x: number,
+    y: number,
+    z: number,
+    lean: number,
+    tipColor: THREE.Color,
+  ): void {
+    const matrix = new THREE.Matrix4().compose(
+      new THREE.Vector3(x, y + 0.35, z),
+      new THREE.Quaternion().setFromEuler(new THREE.Euler(lean, 0, 0)),
+      new THREE.Vector3(1, 1, 1),
+    );
+    shafts.setMatrixAt(index, matrix);
+    tips.setMatrixAt(index, matrix);
+    tips.setColorAt(index, tipColor);
+  }
+
+  /** Where a fighter's spear sits among the tiers. */
+  #tierOf(fighter: string): 'none' | 'worst' | 'middle' | 'best' {
+    const qualities = this.#deps.data.qualities;
+    const tier = qualities.findIndex((entry) => entry.id === fighter);
+    if (tier < 0) return 'none';
+    if (tier === qualities.length - 1) return 'best';
+    return tier === 0 ? 'worst' : 'middle';
+  }
+
+  /** Spear tips by quality, worst to best: dull iron, bright steel, glowing gold. */
+  #tipColor(quality: string): number {
+    const tier = this.#deps.data.qualities.findIndex((entry) => entry.id === quality);
+    return TIP_COLORS[Math.max(0, Math.min(TIP_COLORS.length - 1, tier))] ?? COLORS.spear;
   }
 
   #buildWall(at: number): void {
@@ -479,11 +580,27 @@ export class RunnerView implements ScreenView {
       logs.push(log);
       tilts.push(this.#fx.range(-1, 1));
     }
+    // Archers on a walkway behind the points.
+    const archers: THREE.Mesh[] = [];
+    const archerGeometry = new THREE.CapsuleGeometry(UNIT.radius, UNIT.length, 4, 8);
+    archerGeometry.translate(0, UNIT.radius + UNIT.length / 2, 0);
+    const archerMaterial = new THREE.MeshLambertMaterial({ color: COLORS.bandit });
+    const archerCount = 6;
+    for (let i = 0; i < archerCount; i++) {
+      const archer = new THREE.Mesh(archerGeometry, archerMaterial);
+      archer.position.set(
+        -this.#sim.halfWidth + ((i + 0.5) / archerCount) * this.#sim.halfWidth * 2,
+        2.9,
+        -0.6,
+      );
+      group.add(archer);
+      archers.push(archer);
+    }
     this.#world.add(group);
-    this.#wall = { group, logs, tilts };
+    this.#wall = { group, logs, tilts, archers };
   }
 
-  /** Each hit cracks the palisade more: logs lean and darken as its hit points fall. */
+  /** The palisade cracks as it takes damage: logs lean and darken as its hit points fall. */
   #drawWallDamage(damage: number): void {
     this.#wall.logs.forEach((log, i) => {
       const tilt = this.#wall.tilts[i] ?? 0;
@@ -492,6 +609,48 @@ export class RunnerView implements ScreenView {
       const material = log.material as THREE.MeshLambertMaterial;
       material.color.setHex(COLORS.log).multiplyScalar(1 - damage * 0.45);
     });
+  }
+
+  /** A volley: arrows arc from the archers into the squad. */
+  #fireVolley(arrows: number): void {
+    const sim = this.#sim;
+    const squadZ = -sim.distance + sim.crowdRadius * 0.8;
+    for (let i = 0; i < arrows; i++) {
+      const archer = this.#wall.archers[i % this.#wall.archers.length];
+      if (!archer) continue;
+      const from = new THREE.Vector3();
+      archer.getWorldPosition(from);
+      from.y += 0.8;
+      const to = new THREE.Vector3(
+        sim.x + this.#fx.range(-1, 1) * sim.crowdRadius,
+        0.6,
+        squadZ + this.#fx.range(-1, 1) * sim.crowdRadius * 0.8,
+      );
+      const mesh = new THREE.Mesh(ARROW_GEOMETRY, ARROW_MATERIAL);
+      this.#world.add(mesh);
+      this.#arrows.push({ mesh, from, to, t: -i * 0.04 });
+    }
+  }
+
+  #animateArrows(dt: number): void {
+    const flight = 0.45;
+    for (const arrow of this.#arrows) {
+      arrow.t += dt;
+      const k = Math.max(0, Math.min(1, arrow.t / flight));
+      const position = arrow.from.clone().lerp(arrow.to, k);
+      position.y += Math.sin(k * Math.PI) * 3;
+      const ahead = arrow.from.clone().lerp(arrow.to, Math.min(1, k + 0.05));
+      ahead.y += Math.sin(Math.min(1, k + 0.05) * Math.PI) * 3;
+      arrow.mesh.position.copy(position);
+      arrow.mesh.lookAt(ahead);
+      arrow.mesh.visible = arrow.t >= 0 && k < 1;
+    }
+    const landed = this.#arrows.filter((arrow) => arrow.t >= flight);
+    for (const arrow of landed) {
+      this.#burst(arrow.to, 4, COLORS.bad, 2);
+      this.#world.remove(arrow.mesh);
+    }
+    this.#arrows = this.#arrows.filter((arrow) => arrow.t < flight);
   }
 
   #breakWall(): void {
@@ -724,7 +883,7 @@ export class RunnerView implements ScreenView {
     this.#cameraX += (sim.x * 0.3 - this.#cameraX) * (1 - Math.exp(-dt * 6));
     const angle = THREE.MathUtils.degToRad(feel.cameraAngle);
     // Aim a little ahead of the squad so the next seconds of track show above it.
-    const lookAhead = 5;
+    const lookAhead = feel.cameraLookAhead;
     const shake = this.#shake;
     this.#shake = Math.max(0, this.#shake - dt * 2.5);
     this.#camera.position.set(
@@ -752,6 +911,7 @@ export class RunnerView implements ScreenView {
       plank.mesh.rotation.z += plank.spin.z * dt;
       if (plank.mesh.position.y < -2) plank.mesh.visible = false;
     }
+    this.#animateArrows(dt);
     this.#animateParticles(dt);
   }
 
@@ -784,8 +944,12 @@ export class RunnerView implements ScreenView {
     const pushing = sim.phase === 'clash' || sim.phase === 'wall';
     const lag = sim.feel.edgeLag;
     const matrix = new THREE.Matrix4();
-    const spearMatrix = new THREE.Matrix4();
-    const tilt = new THREE.Quaternion().setFromEuler(new THREE.Euler(-0.35, 0, 0));
+    // Inner slots hold the best spears: tiers from best to worst, then the unarmed outside.
+    const tiers: THREE.Color[] = [];
+    for (const quality of [...squad.qualities].reverse()) {
+      const color = new THREE.Color(this.#tipColor(quality));
+      for (let n = squad.armed(quality); n > 0 && tiers.length < armedShown; n--) tiers.push(color);
+    }
     const armed = new THREE.Color(COLORS.armed);
     const unarmed = new THREE.Color(COLORS.unarmed);
     for (let i = 0; i < shown; i++) {
@@ -808,21 +972,27 @@ export class RunnerView implements ScreenView {
       matrix.makeTranslation(shownX, bob, z);
       this.#units.setMatrixAt(i, matrix);
       this.#units.setColorAt(i, i < armedShown ? armed : unarmed);
-      if (i < armedShown) {
-        spearMatrix.compose(
-          new THREE.Vector3(shownX + 0.18, bob + 0.35, z + 0.1),
-          tilt,
-          new THREE.Vector3(1, 1, 1),
+      const tip = tiers[i];
+      if (tip)
+        this.#placeSpear(
+          this.#spears.shafts,
+          this.#spears.tips,
+          i,
+          shownX + 0.18,
+          bob,
+          z + 0.1,
+          -0.35,
+          tip,
         );
-        this.#spears.setMatrixAt(i, spearMatrix);
-      }
     }
     for (let i = shown; i < MAX_UNITS; i++) this.#unitX[i] = 0;
     this.#units.count = shown;
-    this.#spears.count = armedShown;
+    this.#spears.shafts.count = this.#spears.tips.count = armedShown;
     this.#units.instanceMatrix.needsUpdate = true;
     if (this.#units.instanceColor) this.#units.instanceColor.needsUpdate = true;
-    this.#spears.instanceMatrix.needsUpdate = true;
+    this.#spears.shafts.instanceMatrix.needsUpdate = true;
+    this.#spears.tips.instanceMatrix.needsUpdate = true;
+    if (this.#spears.tips.instanceColor) this.#spears.tips.instanceColor.needsUpdate = true;
   }
 
   #updateGates(event: TrackGates, index: number, squadZ: number): void {
@@ -839,10 +1009,15 @@ export class RunnerView implements ScreenView {
       this.#drawGate(visual, gate);
       visual.label.material.opacity = opacity;
       visual.panel.material.opacity = event.passed ? 0.15 : 0.42;
-      const flip = gate.base.flip;
-      if (visual.bar && visual.barFill && flip) {
-        visual.bar.visible = !gate.flipped && !event.passed;
-        visual.barFill.scale.x = Math.max(0.001, gate.flipPoints / flip.hp);
+      if (visual.guards) {
+        // Guards fall as the squad's attacks land; the last one flips the gate.
+        visual.guards.count = guardsLeft(gate);
+        if (this.#sim.attacking(event, side) && this.#clock - this.#lastAttackSpark > 0.08) {
+          this.#lastAttackSpark = this.#clock;
+          const x = (side === 'left' ? -1 : 1) * (this.#sim.halfWidth / 2);
+          const at = new THREE.Vector3(x + this.#fx.range(-1.5, 1.5), 0.8, -event.at + 1.2);
+          this.#burst(at, 2, COLORS.spark, 2);
+        }
       }
     }
   }
@@ -980,31 +1155,47 @@ export class RunnerView implements ScreenView {
         haptics.pulse(feel.buzzFlipMs);
         break;
       }
+      case 'guardFell': {
+        const gates = sim.track[event.index];
+        if (gates?.kind === 'gates') {
+          const x = (event.side === 'left' ? -1 : 1) * (sim.halfWidth / 2);
+          this.#burst(new THREE.Vector3(x, 0.8, -gates.at + 1.2), 10, COLORS.bandit, 3);
+        }
+        this.#sound(`chop-${1 + this.#fx.int(0, 2)}`, 0.6, 300 + (5 - event.guardsLeft) * 120, 0);
+        haptics.pulse(feel.buzzTradeMs * 2);
+        break;
+      }
       case 'clashStart':
         logger.log('runner.clash', {
           index: event.index,
           enemies: event.enemies,
+          enemiesArmed: event.enemiesArmed,
           squad: event.squad,
           armed: event.armed,
         });
         break;
-      case 'trade': {
+      case 'avoided':
+        logger.log('runner.avoided', { index: event.index });
+        break;
+      case 'blow': {
         const front = new THREE.Vector3(
-          sim.x + this.#fx.range(-1, 1) * Math.min(sim.crowdRadius, sim.halfWidth),
+          sim.x + this.#fx.range(-1, 1) * Math.min(sim.crowdRadius, sim.halfWidth) * 0.6,
           0.9,
           -sim.distance - 0.3,
         );
-        if (event.killed >= 2) {
-          // A Perfect spear's double: brighter spark, heavier hit.
-          this.#burst(front, 16, COLORS.sparkBright, 5, 1.6);
-          this.#sound('chop-perfect', 0.8, 0);
-          this.#shake = Math.max(this.#shake, 0.35);
-          haptics.pulse(feel.buzzTradeMs * 2.5);
+        const bright = event.enemyFell && this.#tierOf(event.fighter) === 'best';
+        if (bright) {
+          // A Perfect spear's kill: brighter spark, heavier hit.
+          this.#burst(front, 14, COLORS.sparkBright, 5, 1.5);
+          this.#sound('chop-perfect', 0.7, 0);
+          this.#shake = Math.max(this.#shake, 0.25);
         } else {
-          this.#burst(front, 6, event.fighter === UNARMED ? COLORS.unarmed : COLORS.spark, 3);
-          this.#sound(`chop-${1 + this.#fx.int(0, 2)}`, 0.45, event.killed ? 200 : -300);
-          haptics.pulse(feel.buzzTradeMs);
+          this.#burst(front, 3, event.fighter === UNARMED ? COLORS.unarmed : COLORS.spark, 2.5);
+          this.#sound(`chop-${1 + this.#fx.int(0, 2)}`, 0.3, event.enemyFell ? 200 : -200);
         }
+        if (event.enemyFell) this.#burst(front, 8, COLORS.bandit, 3);
+        if (event.unitFell) this.#burst(front, 8, COLORS.armed, 3);
+        if (event.enemyFell || event.unitFell) haptics.pulse(feel.buzzTradeMs);
         break;
       }
       case 'clashWon':
@@ -1024,10 +1215,16 @@ export class RunnerView implements ScreenView {
         this.#wallShake = 1;
         const at = new THREE.Vector3(sim.x + this.#fx.range(-1.5, 1.5), 1.4, -sim.distance - 0.6);
         this.#burst(at, 5, COLORS.log, 3);
-        this.#sound(`land-${1 + this.#fx.int(0, 2)}`, 0.55, 300);
+        this.#sound(`land-${1 + this.#fx.int(0, 2)}`, 0.5, 300);
         haptics.pulse(feel.buzzWallHitMs);
         break;
       }
+      case 'volley':
+        logger.log('runner.volley', { lost: event.lost.length, squad: event.squad });
+        this.#fireVolley(Math.max(4, event.lost.length * 3));
+        this.#sound('land-2', 0.6, 600);
+        haptics.pulse(feel.buzzVolleyMs);
+        break;
       case 'won':
         logger.log('runner.result', { seed: this.#seed, ...event.result });
         this.#breakWall();

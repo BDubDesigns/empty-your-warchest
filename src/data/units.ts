@@ -1,16 +1,19 @@
 import type { GameDataInput } from './schema';
 
-// Combat numbers are placeholder guesses, to be tuned in M7–M9.
+// One set of numbers for everyone (decided Nov 24): a Good spear is the baseline, Poor does half
+// its damage and Perfect half again; unarmed recruits mostly soak up hits.
 export const units = [
   {
     id: 'spearman',
     name: 'Spearman',
     hp: 10,
     unarmedDamage: 1,
-    weapon: { item: 'spear', damageByQuality: { poor: 3, good: 4, perfect: 6 } },
+    weapon: { item: 'spear', damageByQuality: { poor: 2, good: 4, perfect: 6 } },
   },
 ] satisfies GameDataInput['units'];
 
+// Bandits fight exactly like recruits: unarmed ones like unarmed recruits, armed ones like a
+// spearman with a Good spear.
 export const enemies = [
-  { id: 'bandit', name: 'Bandit', hp: 10, damage: 3 },
+  { id: 'bandit', name: 'Bandit', unit: 'spearman', weaponQuality: 'good' },
 ] satisfies GameDataInput['enemies'];
