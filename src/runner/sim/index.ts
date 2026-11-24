@@ -1,3 +1,5 @@
-// Pure, deterministic runner simulation. Filled in by M7. Must not import Phaser or three.js.
+// Pure, deterministic runner simulation. Must not import Phaser or three.js.
 
-export {};
+export * from './gates';
+export * from './runner';
+export * from './squad';

@@ -91,8 +91,11 @@ function checkReferences(data: GameData, ctx: z.RefinementCtx): void {
       if (event.type === 'gates') {
         for (const side of ['left', 'right'] as const) {
           const gate = event[side];
-          if (gate.flippable && (gate.op === 'add' || gate.op === 'multiply')) {
+          if (gate.flip && (gate.op === 'add' || gate.op === 'multiply')) {
             issue([...eventPath, side], 'Only negative gates (subtract, divide) can be flippable');
+          }
+          if (gate.flip && (gate.flip.op === 'subtract' || gate.flip.op === 'divide')) {
+            issue([...eventPath, side, 'flip'], 'A flip gate must flip to add or multiply');
           }
         }
       }
@@ -104,6 +107,20 @@ function checkReferences(data: GameData, ctx: z.RefinementCtx): void {
   });
 
   coversAllQualities(['tuning', 'weaponRecoveryOnWin'], data.tuning.weaponRecoveryOnWin);
+
+  const runner = data.runner;
+  if (!data.levels.some((level) => level.id === runner.level)) {
+    issue(['runner', 'level'], `Unknown level "${runner.level}"`);
+  }
+  coversAllQualities(['runner', 'clash', 'doubleChance'], runner.clash.doubleChance);
+  coversAllQualities(['runner', 'clash', 'killChance'], runner.clash.killChance);
+  if (data.qualities.length !== 3) {
+    // The runner's spear sliders are Poor, Good and Perfect: one per tier.
+    issue(['runner', 'feel'], 'The runner spear sliders expect exactly 3 quality tiers');
+  }
+  if (runner.feel.tradeMinSeconds > runner.feel.tradeSeconds) {
+    issue(['runner', 'feel', 'tradeMinSeconds'], 'Must not be more than tradeSeconds');
+  }
 
   const woodcutting = data.woodcutting;
   if (!data.recipes.some((recipe) => recipe.id === woodcutting.recipe)) {

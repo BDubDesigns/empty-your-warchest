@@ -86,11 +86,9 @@ describe('save/load', () => {
   it('discards a save that no longer fits the data', () => {
     const { store, saves } = setup();
     saves.save(state);
+    // Spears become pikes everywhere in data, so the save's spears no longer exist.
     const changed = dataWith((raw) => {
-      raw.items = raw.items.filter((item) => item.id !== 'spear');
-      raw.recipes = raw.recipes.filter((recipe) => recipe.id !== 'harden_spear');
-      raw.units = [];
-      raw.levels = [];
+      Object.assign(raw, JSON.parse(JSON.stringify(raw).replaceAll('"spear"', '"pike"')));
     });
     const withoutSpears = new SaveStore(store, changed, new ManualClock(0));
     expect(discardReason(withoutSpears.load())).toContain('spear');

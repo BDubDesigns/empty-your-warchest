@@ -67,11 +67,16 @@ export const unitSchema = z.object({
 
 export const enemySchema = z.object({ id, name, hp: positiveInt, damage: nonNegative });
 
+const gateOp = z.enum(['add', 'subtract', 'multiply', 'divide']);
+
 const gateSchema = z.object({
-  op: z.enum(['add', 'subtract', 'multiply', 'divide']),
+  op: gateOp,
   value: positiveInt,
-  /** Attack it on approach to turn it from negative to positive. */
-  flippable: z.boolean().default(false),
+  /**
+   * A flip gate: the squad's attacks fill a bar while it steers toward the gate, and once `hp`
+   * attack points land before the squad reaches it, it turns into `op` and `value`.
+   */
+  flip: z.object({ op: gateOp, value: positiveInt, hp: positive }).optional(),
 });
 
 /** `at` is how far along the track the event happens, from 0 (start) to 1 (end). */
@@ -302,6 +307,86 @@ export const woodcuttingSchema = z.object({
   feel: woodcuttingFeelSchema,
 });
 
+/**
+ * The Attack Run's feel: every number here is a debug slider. Distances are metres along the
+ * track; times are seconds.
+ */
+const runnerFeelSchema = z.object({
+  /** Forward speed while nothing blocks the squad (m/s). */
+  runSpeed: positive,
+  /** Fastest the squad can slide sideways (m/s). */
+  steerSpeed: positive,
+  /** How long the squad takes to catch up with the finger (s, time constant). */
+  steerSmoothing: nonNegative,
+  /** Sideways squad travel for a finger slide across the whole screen, in track widths. */
+  dragScale: positive,
+  /** How loose the crowd blob is: its radius is this × √count (m). */
+  crowdSpread: positive,
+  /** How far edge units trail the centre on turns (0 = rigid). */
+  edgeLag: nonNegative,
+  /** Seconds between the first front-line trades of a clash. */
+  tradeSeconds: positive,
+  /** Each trade's gap is this share of the last, so big fights speed up. */
+  tradeSpeedup: z.number().positive().max(1),
+  /** Fastest the trades get (s). */
+  tradeMinSeconds: positive,
+  /** Seconds between units hitting the wall, first hit (speeds up like trades). */
+  wallHitSeconds: positive,
+  /** Attack points each unit lands per second on a flip gate, per point of its damage. */
+  flipAttackRate: nonNegative,
+  /** How far ahead (m) the squad starts attacking a flip gate. */
+  flipRange: positive,
+  /** Gate labels and the result preview show this many seconds ahead. */
+  gateReadSeconds: positive,
+  /** Camera tilt down from level (degrees). */
+  cameraAngle: z.number().min(5).max(85),
+  /** Camera distance from the squad (m). */
+  cameraDistance: positive,
+  /** Extra camera distance per metre of crowd radius, so big crowds fit. */
+  cameraPullback: nonNegative,
+  /** Spears in the run by tier: debug sliders until runs use the warchest. */
+  spearsPoor: z.number().int().nonnegative(),
+  spearsGood: z.number().int().nonnegative(),
+  spearsPerfect: z.number().int().nonnegative(),
+  /** Time runs at this speed for `slowMoSeconds` when the wall breaks. */
+  slowMoScale: z.number().positive().max(1),
+  slowMoSeconds: nonNegative,
+  /** Vibration pulses (ms). */
+  buzzGoodGateMs: nonNegative,
+  buzzBadGateMs: nonNegative,
+  buzzFlipMs: nonNegative,
+  buzzTradeMs: nonNegative,
+  buzzWallHitMs: nonNegative,
+  buzzWallBreakMs: nonNegative,
+  buzzLoseMs: nonNegative,
+});
+
+export const runnerSchema = z.object({
+  /** The skirmish the War tent plays (M7a has one). */
+  level: id,
+  /** Track width (m); a gate pair splits it into halves. */
+  trackWidth: positive,
+  /**
+   * The track's length is the level's `durationSeconds` × this, so `durationSeconds` is the run time
+   * at this speed. The run-speed slider changes how fast you run it, not how long it is.
+   */
+  trackMetersPerSecond: positive,
+  /** Room to the side of the track the squad's centre can't enter (m). */
+  edgeMargin: nonNegative,
+  clash: z.object({
+    /**
+     * Each front-line trade costs the fighting unit; this is the chance it takes its bandit with
+     * it, by spear quality.
+     */
+    killChance: z.record(id, fraction),
+    /** The same for a unit with no spear: unarmed recruits mostly soak up hits. */
+    unarmedKillChance: fraction,
+    /** Chance a winning fighter takes a second bandit, by spear quality. */
+    doubleChance: z.record(id, fraction),
+  }),
+  feel: runnerFeelSchema,
+});
+
 export const warchestSchema = z.object({
   /** Items deposited at a station fly from where they came from into the HUD chest. */
   pour: z.object({
@@ -334,6 +419,7 @@ export const gameDataShape = z.object({
   levels: z.array(levelSchema),
   camp: campSchema,
   woodcutting: woodcuttingSchema,
+  runner: runnerSchema,
   warchest: warchestSchema,
   tuning: tuningSchema,
 });
@@ -355,3 +441,8 @@ export type CampSpot = Camp['chest'];
 export type Clearing = GameData['woodcutting']['clearings'][number];
 export type ClearingTree = Clearing['trees'][number];
 export type WoodcuttingFeel = GameData['woodcutting']['feel'];
+export type Gate = z.output<typeof gateSchema>;
+export type GateOp = Gate['op'];
+export type LevelEvent = Level['events'][number];
+export type RunnerData = GameData['runner'];
+export type RunnerFeel = RunnerData['feel'];
