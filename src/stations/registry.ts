@@ -32,7 +32,6 @@ export const mechanics: Readonly<Record<string, MechanicModule>> = {
   },
   runner: {
     screen: { kind: 'screen', screen: 'runner' },
-    placeholderNote: 'The Attack Run arrives in M7–M8',
   },
 };
 

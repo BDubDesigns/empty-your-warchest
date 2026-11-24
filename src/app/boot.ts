@@ -11,8 +11,9 @@ import {
   type LiveChoice,
   type LiveTuning,
 } from '../core';
-import type { WoodcuttingFeel } from '../data';
+import type { RunnerFeel, WoodcuttingFeel } from '../data';
 import { loadGameData } from '../data';
+import { runnerFeel } from '../runner/feel';
 import { checkMechanics } from '../stations';
 import {
   ClearingPicker,
@@ -29,7 +30,7 @@ export interface Booted {
   clock: Clock;
   logger: EventLogger;
   saves: SaveStore;
-  feel: { woodcutting: LiveTuning<WoodcuttingFeel> };
+  feel: { woodcutting: LiveTuning<WoodcuttingFeel>; runner: LiveTuning<RunnerFeel> };
   /** Picks kept on this phone, shown in the debug menu. */
   choices: { treeStyle: LiveChoice<TreeStyle>; vibration: LiveChoice<Vibration> };
   haptics: Haptics;
@@ -92,7 +93,10 @@ export async function bootGame(buildLabel: string): Promise<Booted> {
     }
   });
 
-  const feel = { woodcutting: woodcuttingFeel(data.woodcutting.feel, localStorageStore()) };
+  const feel = {
+    woodcutting: woodcuttingFeel(data.woodcutting.feel, localStorageStore()),
+    runner: runnerFeel(data.runner.feel, localStorageStore()),
+  };
   const choices = {
     treeStyle: treeStyleChoice(localStorageStore()),
     vibration: vibrationChoice(localStorageStore()),

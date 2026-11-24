@@ -34,7 +34,7 @@ export async function startApp(): Promise<void> {
     booted = await bootGame(__BUILD_LABEL__);
     mountDebugMenu(byId('app'), {
       ...booted,
-      tuning: [booted.feel.woodcutting],
+      tuning: [booted.feel.woodcutting, booted.feel.runner],
       choices: [booted.choices.treeStyle, booted.choices.vibration],
       clearings: booted.clearings,
       buildLabel: __BUILD_LABEL__,
@@ -87,8 +87,13 @@ export async function startApp(): Promise<void> {
         });
       }),
       three: lazyScreen(threeElement, async () => {
-        const { ThreeView } = await import('./threeView');
-        return new ThreeView(threeElement, 'War tent · Attack Run placeholder · drag to spin');
+        const { RunnerView } = await import('../runner/view');
+        return RunnerView.create(threeElement, {
+          data: game.data,
+          logger,
+          feel: feel.runner,
+          haptics,
+        });
       }),
     },
     (id) => {

@@ -3,7 +3,7 @@ import type { GameDataInput } from './schema';
 // The Attack Run (M7a feel prototype). Every number is a first guess, meant to be tuned on a phone.
 export const runner = {
   level: 'skirmish_1',
-  trackWidth: 10,
+  trackWidth: 8,
   trackMetersPerSecond: 10,
   edgeMargin: 0.6,
   clash: {
@@ -27,9 +27,9 @@ export const runner = {
     flipAttackRate: 0.5,
     flipRange: 45,
     gateReadSeconds: 2.2,
-    cameraAngle: 40,
-    cameraDistance: 14,
-    cameraPullback: 1.2,
+    cameraAngle: 48,
+    cameraDistance: 17,
+    cameraPullback: 1.5,
     spearsPoor: 5,
     spearsGood: 15,
     spearsPerfect: 5,
