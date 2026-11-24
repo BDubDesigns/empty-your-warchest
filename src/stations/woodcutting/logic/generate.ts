@@ -100,8 +100,8 @@ export function tutorialPlan(woodcutting: WoodcuttingData): ClearingPlan {
 /**
  * A random clearing from `seed` for a woodcutting `level` (higher levels unlock bigger, more
  * forked clearings): the same seed and level always give the same clearing. Layouts are rerolled
- * until one has a chain of at least `minBestChain` trees (or the attempts run out, and the best
- * one found is used).
+ * until one has a chain of at least `minBestChain` trees and the cabin in reach of enough trees
+ * (or the attempts run out, and the best one found is used).
  */
 export function generateClearing(
   woodcutting: WoodcuttingData,
@@ -112,13 +112,17 @@ export function generateClearing(
   const rng = new Rng(seed);
   const forest = forestAt(woodcutting, level);
   const rules = boulderRules(woodcutting);
-  let chosen: { clearing: Clearing; chain: number } | undefined;
+  let chosen: { clearing: Clearing; score: number } | undefined;
   for (let attempt = 0; attempt < generator.attempts; attempt++) {
     const clearing = layout(woodcutting, forest, rng, `random-${String(seed)}`);
     const all = new Set(clearing.trees.map((tree) => tree.id));
     const chain = bestChain(clearing, all, generator.aimSamples, rules)?.length ?? 0;
-    if (!chosen || chain > chosen.chain) chosen = { clearing, chain };
-    if (chain >= generator.minBestChain) break;
+    const reach = treesReachingCabin(clearing);
+    const good = chain >= generator.minBestChain && reach >= generator.cabin.reachTrees;
+    // Settling for the best found: a cabin in play first, then the longest chain.
+    const score = (reach >= generator.cabin.reachTrees ? 1000 : 0) + chain;
+    if (!chosen || score > chosen.score) chosen = { clearing, score };
+    if (good) break;
   }
   if (!chosen) throw new Error('The clearing generator made no attempts');
   return {
@@ -136,7 +140,7 @@ function tutorialClearing(woodcutting: WoodcuttingData): Clearing {
 }
 
 /**
- * Lays out a clearing on the tutorial clearing's ground: the cabin at one edge, then boulders,
+ * Lays out a clearing on the tutorial clearing's ground: the cabin among the trees, then boulders,
  * then trees, all kept apart and away from the edges.
  */
 function layout(
@@ -195,30 +199,34 @@ function layout(
   return { ...shape, id, trees, boulders, cabin };
 }
 
-/** The cabin, along the top, left or right edge (never the bottom, in front of the camera). */
+/** The cabin, somewhere among the trees, turned either way, kept `fenceGap` from the fence. */
 function placeCabin(
   shape: Clearing,
   cabin: WoodcuttingData['generator']['cabin'],
   rng: Rng,
 ): NonNullable<Clearing['cabin']> {
-  const edge = rng.pick(['top', 'left', 'right'] as const);
-  const { width, depth, height, edgeInset } = cabin;
-  if (edge === 'top') {
-    return {
-      x: Math.round(rng.range(width / 2 + edgeInset, shape.width - width / 2 - edgeInset)),
-      y: depth / 2 + edgeInset,
-      width,
-      depth,
-      height,
-    };
-  }
-  // Long side along the edge.
-  const x = edge === 'left' ? depth / 2 + edgeInset : shape.width - depth / 2 - edgeInset;
+  const turned = rng.chance(0.5);
+  const width = turned ? cabin.depth : cabin.width;
+  const depth = turned ? cabin.width : cabin.depth;
+  const inset = cabin.fenceGap;
   return {
-    x,
-    y: Math.round(rng.range(width / 2 + edgeInset, shape.height - width / 2 - edgeInset)),
-    width: depth,
-    depth: width,
-    height,
+    x: Math.round(rng.range(width / 2 + inset, shape.width - width / 2 - inset)),
+    y: Math.round(rng.range(depth / 2 + inset, shape.height - depth / 2 - inset)),
+    width,
+    depth,
+    height: cabin.height,
   };
+}
+
+/** How many trees could fall onto the cabin: it's within their reach from the stump. */
+function treesReachingCabin(clearing: Clearing): number {
+  const cabin = clearing.cabin;
+  if (!cabin) return 0;
+  return clearing.trees.filter((tree) => {
+    const gap = Math.hypot(
+      Math.max(Math.abs(tree.x - cabin.x) - cabin.width / 2, 0),
+      Math.max(Math.abs(tree.y - cabin.y) - cabin.depth / 2, 0),
+    );
+    return gap <= tree.height + clearing.canopyRadius;
+  }).length;
 }

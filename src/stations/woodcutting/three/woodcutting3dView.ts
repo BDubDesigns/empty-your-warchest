@@ -291,6 +291,9 @@ export class Woodcutting3DView implements ScreenView {
   #hazardHint = false;
   /** Round time before which the summary waits (after a cabin crash, so its callout shows). */
   #summaryNotBefore = 0;
+  /** Logs landed in the chest this round, for the live stars, and the most stars shown so far. */
+  #starLogs = 0;
+  #starsShown = 0;
 
   private constructor(
     element: HTMLElement,
@@ -398,6 +401,9 @@ export class Woodcutting3DView implements ScreenView {
     this.#levelUpPending = undefined;
     this.#summaryPending = undefined;
     this.#summaryNotBefore = 0;
+    this.#starLogs = 0;
+    this.#starsShown = 0;
+    this.#showLiveStars();
     this.#showEndRound();
     this.#frameTimes = [];
     this.#cameraPose = this.#overview;
@@ -1542,6 +1548,7 @@ export class Woodcutting3DView implements ScreenView {
         30,
       );
       this.#summaryNotBefore = this.#round.now + CRASH_SUMMARY_DELAY;
+      this.#showLiveStars();
       this.#deps.clearings.finished();
       this.#summaryPending = 'crashed';
     } else if (event.type === 'banked') {
@@ -1550,7 +1557,10 @@ export class Woodcutting3DView implements ScreenView {
       const trees = [...this.#trees.values()]
         .filter((visual) => visual.fallen && visual.fallen.sinkAt === undefined)
         .map((visual) => visual.tree.id);
-      this.#pendingPour = { deposit: this.#hud.hold(event.logs, this.#takeBankedXp()), trees };
+      this.#pendingPour = {
+        deposit: this.#hud.hold(event.logs, this.#landChain(event.logs)),
+        trees,
+      };
       this.#bestChain = Math.max(this.#bestChain, event.trees);
     } else {
       this.#deps.clearings.finished();
@@ -1563,6 +1573,64 @@ export class Woodcutting3DView implements ScreenView {
     const xp = this.#bankedXp;
     this.#bankedXp = undefined;
     return (share) => xp?.arrive(share);
+  }
+
+  /**
+   * A banked chain's logs landing in the chest: the XP ticks in, and so do the live stars (star
+   * bonus logs don't count toward stars, so they don't come through here).
+   */
+  #landChain(logs: number): (share: number) => void {
+    const xp = this.#takeBankedXp();
+    return (share) => {
+      xp(share);
+      this.#starLogs = Math.min(this.#starLogs + logs * share, this.#round.logs);
+      this.#showLiveStars();
+    };
+  }
+
+  /**
+   * The live stars: lit for each star the logs landed so far have earned, and a bar filling toward
+   * the next. A star popping in rings and buzzes like the summary's. After a cabin hit they drop to
+   * the cap.
+   */
+  #showLiveStars(): void {
+    const round = this.#round;
+    const { liveStars, liveStarIcons, liveStarFill, liveStarText } = this.#ui;
+    const par = round.par;
+    liveStars.hidden = par === undefined;
+    if (par === undefined) return;
+    const { stars } = this.#deps.game.data.woodcutting;
+    const logs = this.#starLogs;
+    const steps = [Number.MIN_VALUE, stars.two * par, stars.three * par];
+    let earned = steps.filter((needed) => logs >= needed).length;
+    if (round.crashed) earned = Math.min(earned, stars.cabinCap);
+    liveStars.classList.toggle('w3d-live-crashed', round.crashed);
+    liveStarIcons.forEach((icon, index) => {
+      const on = index < earned;
+      if (on && !icon.classList.contains('w3d-live-star-on')) {
+        icon.classList.add('w3d-live-star-on', 'w3d-live-star-pop');
+        window.setTimeout(() => {
+          icon.classList.remove('w3d-live-star-pop');
+        }, 600);
+        if (this.#starsShown <= index) {
+          this.#sfx.play('star', 0.5, index * 300);
+          this.#deps.haptics.pulse(round.feel.buzzChopMs + index * 6);
+        }
+      }
+      if (!on) icon.classList.remove('w3d-live-star-on');
+    });
+    this.#starsShown = Math.max(this.#starsShown, earned);
+    const from = earned === 0 ? 0 : (steps[earned - 1] ?? 0);
+    const to = steps[earned];
+    const share =
+      to === undefined || round.crashed ? 1 : Math.min(Math.max((logs - from) / (to - from), 0), 1);
+    liveStarFill.style.width = `${String(Math.round(share * 1000) / 10)}%`;
+    // Logs so far, and what the next star needs (whole logs).
+    const shown = Math.round(logs);
+    liveStarText.textContent =
+      to === undefined || round.crashed
+        ? `${String(shown)} logs`
+        : `${String(shown)} / ${String(Math.max(Math.ceil(to), 1))} logs`;
   }
 
   /** The feel numbers (with live tuning), at fast-fall speeds when that switch is on. */
@@ -1696,7 +1764,15 @@ export class Woodcutting3DView implements ScreenView {
     const bonus = round.starBonus;
     // Cleared: the bonus is earned now. Ended early: it lands if they leave, not if they keep going.
     ui.summaryBonus.textContent =
-      bonus <= 0 ? '' : paused ? `End the round for a star bonus: +${String(bonus)} logs` : '';
+      kind === 'crashed'
+        ? round.stars > 0
+          ? `Hitting the cabin makes it a ${String(round.stars)}-star round: no star bonus`
+          : 'Hitting the cabin ends the round: no star bonus'
+        : bonus <= 0
+          ? ''
+          : paused
+            ? `End the round for a star bonus: +${String(bonus)} logs`
+            : '';
     ui.summaryBonus.className = 'w3d-summary-bonus';
     ui.summary.hidden = false;
     const feel = round.feel;
@@ -2157,9 +2233,23 @@ export class Woodcutting3DView implements ScreenView {
       summaryButtons,
     );
     summary.hidden = true;
-    root.append(perf, hint, panel, fast, flashes, counter, levelUp, summary);
+    // The round's stars so far, under the level bar: three stars and a bar to the next one.
+    const liveStars = el('div', 'w3d-live-stars');
+    const liveStarRow = el('div', 'w3d-live-star-row');
+    const liveStarIcons = [0, 1, 2].map(() => el('span', 'w3d-live-star', '★'));
+    liveStarRow.append(...liveStarIcons);
+    const liveStarBar = el('div', 'w3d-live-star-bar');
+    const liveStarFill = el('div', 'w3d-live-star-fill');
+    liveStarBar.append(liveStarFill);
+    const liveStarText = el('div', 'w3d-live-star-text');
+    liveStars.append(liveStarRow, liveStarBar, liveStarText);
+    root.append(perf, hint, panel, fast, flashes, counter, levelUp, summary, liveStars);
     this.#element.append(root);
     return {
+      liveStars,
+      liveStarIcons,
+      liveStarFill,
+      liveStarText,
       perf,
       hint,
       aim,

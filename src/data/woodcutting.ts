@@ -54,14 +54,15 @@ export const woodcutting = {
     minBestChain: 3,
     attempts: 40,
     aimSamples: 120,
-    // About two trees wide, at an edge.
-    cabin: { width: 96, depth: 64, height: 60, gap: 24, edgeInset: 8 },
+    // About two trees wide, among the trees, where at least 4 can fall on it.
+    cabin: { width: 96, depth: 64, height: 60, gap: 24, fenceGap: 50, reachTrees: 4 },
     // Big enough to read beside a tree: a little smaller than a canopy.
     boulders: { count: { min: 1, max: 3 }, radius: 20, gap: 26 },
   },
   // Par comes from trying every fall direction, so it finds chains people often miss: stars are
   // given well short of it.
-  stars: { two: 0.4, three: 0.7 },
+  // A cabin hit makes it a 1-star round (no star bonus), however well it was going.
+  stars: { two: 0.4, three: 0.7, cabinCap: 1 },
   starBonus: { two: 0.1, three: 0.25 },
   unlocks: [
     { level: 10, text: 'Bigger clearings: up to 20 trees', trees: { min: 16, max: 20 } },

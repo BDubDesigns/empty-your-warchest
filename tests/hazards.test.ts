@@ -226,6 +226,54 @@ describe('the cabin', () => {
   });
 });
 
+describe('a cabin hit and the stars', () => {
+  it('caps the round at 1 star, with no star bonus, however well it was going', () => {
+    const c = clearing(
+      [
+        { id: 'a', x: 0, y: 100, height: 100 },
+        { id: 'b', x: 300, y: 400, height: 60 },
+      ],
+      { cabin: { x: 80, y: 100, width: 20, depth: 40, height: 30 } },
+    );
+    const { logger } = testLogger();
+    const feel = data.woodcutting.feel;
+    const round = new WoodcuttingRound(
+      c,
+      {
+        logger,
+        feel: () => feel,
+        chainExponent: 2,
+        bank: (n) => n,
+        view: 'test',
+        stars: { par: 1, ...data.woodcutting.stars, bonus: { two: 0.1, three: 0.25 } },
+      },
+      1,
+    );
+    const fell = (tree: string, angle: number) => {
+      round.touchTree(tree);
+      round.aimTo(angle);
+      round.tick(0.5);
+      round.releaseAim();
+      round.chop();
+      while (round.phase.kind === 'chop') {
+        const phase = round.phase;
+        round.grab();
+        round.setPull(1);
+        round.tick(phase.target / feel.meterSpeed);
+        round.releaseAxe();
+        round.tick(feel.swingSeconds);
+      }
+      for (let i = 0; i < 200 && round.phase.kind === 'falling'; i++) round.tick(0.05);
+    };
+    fell('b', DOWN);
+    expect(round.stars).toBe(3);
+    fell('a', RIGHT);
+    expect(round.phase.kind).toBe('crashed');
+    expect(round.stars).toBe(data.woodcutting.stars.cabinCap);
+    expect(round.starBonus).toBe(0);
+  });
+});
+
 describe('a round with a boulder', () => {
   it('waits for the boulder to stop, banks the trees it knocked, and leaves it where it stopped', () => {
     const c = clearing(
@@ -274,18 +322,26 @@ describe('a round with a boulder', () => {
 });
 
 describe('random clearings with hazards', () => {
-  it('always have a cabin at the top, left or right edge, boulders, and trees clear of both', () => {
+  it('always have a cabin among the trees, in reach of several, boulders, and trees clear of both', () => {
     const { generator } = data.woodcutting;
     for (let seed = 1; seed <= 15; seed++) {
       const { clearing: c } = generateClearing(data.woodcutting, seed);
       const cabin = c.cabin;
       if (!cabin) throw new Error('No cabin');
-      const nearEdge =
-        cabin.y - cabin.depth / 2 <= generator.cabin.edgeInset ||
-        cabin.x - cabin.width / 2 <= generator.cabin.edgeInset ||
-        cabin.x + cabin.width / 2 >= c.width - generator.cabin.edgeInset;
-      expect(nearEdge).toBe(true);
-      expect(cabin.y + cabin.depth / 2).toBeLessThan(c.height - generator.cabin.edgeInset);
+      const gap = generator.cabin.fenceGap - 1;
+      expect(cabin.x - cabin.width / 2).toBeGreaterThanOrEqual(gap);
+      expect(cabin.y - cabin.depth / 2).toBeGreaterThanOrEqual(gap);
+      expect(cabin.x + cabin.width / 2).toBeLessThanOrEqual(c.width - gap);
+      expect(cabin.y + cabin.depth / 2).toBeLessThanOrEqual(c.height - gap);
+      const reaching = c.trees.filter(
+        (tree) =>
+          Math.hypot(
+            Math.max(Math.abs(tree.x - cabin.x) - cabin.width / 2, 0),
+            Math.max(Math.abs(tree.y - cabin.y) - cabin.depth / 2, 0),
+          ) <=
+          tree.height + c.canopyRadius,
+      );
+      expect(reaching.length).toBeGreaterThanOrEqual(generator.cabin.reachTrees);
       expect(c.boulders.length).toBeGreaterThanOrEqual(generator.boulders.count.min);
       expect(c.boulders.length).toBeLessThanOrEqual(generator.boulders.count.max);
       for (const tree of c.trees) {

@@ -252,15 +252,17 @@ export const woodcuttingSchema = z.object({
     /** Fall directions tried per tree when looking for chains (for the check and for par). */
     aimSamples: positiveInt,
     /**
-     * Every random clearing has a cabin at one edge (top, left or right: never the bottom, in
-     * front of the camera), `gap` clear of the trees, set in `edgeInset` from the edge.
+     * Every random clearing has a cabin among the trees: at least `fenceGap` from the fence, `gap`
+     * clear of every trunk, turned either way, and within falling reach of at least `reachTrees`
+     * trees (a layout without that is rerolled), so it's always in play.
      */
     cabin: z.object({
       width: positive,
       depth: positive,
       height: positive,
       gap: nonNegative,
-      edgeInset: nonNegative,
+      fenceGap: nonNegative,
+      reachTrees: z.number().int().min(0),
     }),
     /** Boulders among the trees, at least `gap` from any trunk, the cabin and each other. */
     boulders: z.object({
@@ -272,8 +274,9 @@ export const woodcuttingSchema = z.object({
   /**
    * Stars for a finished round, from its logs against the clearing's par (what a solid player
    * would bank, taking the biggest chain they can find each time). 1 star for any banked chain.
+   * Hitting the cabin caps the round at `cabinCap` stars, whatever was earned before.
    */
-  stars: z.object({ two: fraction, three: fraction }),
+  stars: z.object({ two: fraction, three: fraction, cabinCap: z.number().int().min(0).max(3) }),
   /**
    * Bonus logs when the round ends, as a share of its logs: none for 1 star, then these for 2 and
    * 3 stars. Small, because logs already reward long chains (N × N).

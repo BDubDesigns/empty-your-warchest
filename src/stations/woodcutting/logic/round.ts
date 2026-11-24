@@ -123,7 +123,8 @@ export interface RoundHooks {
   /** Which view is playing, for the logs (e.g. '3d'). */
   view: string;
   /** The clearing's par, the star thresholds and the star bonus, for the round's stars. */
-  stars?: StarThresholds & { par: number; bonus: StarBonus };
+  /** `cabinCap`: the most stars a round that hit the cabin can have. */
+  stars?: StarThresholds & { par: number; bonus: StarBonus; cabinCap: number };
 }
 
 /**
@@ -174,10 +175,20 @@ export class WoodcuttingRound {
     return { roll: feel.boulderRoll, bounce: feel.boulderBounce };
   }
 
-  /** 0–3 stars for the logs banked so far against par (0 without a par). */
+  /**
+   * 0–3 stars for the logs banked so far against par (0 without a par), capped once the round
+   * has hit the cabin.
+   */
   get stars(): number {
     const stars = this.#hooks.stars;
-    return stars ? starsFor(this.logs, stars.par, stars) : 0;
+    if (!stars) return 0;
+    const earned = starsFor(this.logs, stars.par, stars);
+    return this.crashed ? Math.min(earned, stars.cabinCap) : earned;
+  }
+
+  /** The round hit the cabin. */
+  get crashed(): boolean {
+    return this.phase.kind === 'crashed';
   }
 
   get par(): number | undefined {
