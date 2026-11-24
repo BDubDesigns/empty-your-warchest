@@ -324,45 +324,55 @@ export const warchestSchema = z.object({
 
 /** Feel numbers for riving. The debug menu can override them live. */
 export const rivingFeelSchema = z.object({
-  /** Degrees each ↺ ↻ tap turns the froe. */
+  /** Degrees each ↺ ↻ tap turns the cuts. */
   fineAimStep: positive,
-  /** Seconds the mallet takes to come down on the froe, and the freeze when it lands (ms). */
+  /** Seconds the splitting head takes to drop onto the log, and the freeze when it lands (ms). */
   strikeSeconds: positive,
   hitStopMs: nonNegative,
   shakeStrength: nonNegative,
-  /** Screen pixels of handle drag that run the crack all the way down the log. */
+  /** Screen pixels of lever drag from the top of the log to the bottom. */
   leverTravel: positive,
-  /** Seconds the crack's speed is averaged over, so a jittery finger isn't punished. */
-  speedWindow: positive,
   /**
-   * The crack's drift (bubble widths per second) toward the thin side, per unit of unevenness
-   * (|thin − thick| ÷ the piece), and how much more it pulls per log length a second of speed.
+   * Pulling the lever ahead of the head builds pressure, full at `pressureAt` of the log ahead.
+   * Gentle pressure drives the head through in `slowDriveSeconds`, full pressure in
+   * `driveSeconds`, and full pressure makes the bubble wander `pressurePull` times more again.
    */
-  pullPerUnevenness: nonNegative,
-  speedPull: nonNegative,
+  pressureAt: fraction,
+  driveSeconds: positive,
+  slowDriveSeconds: positive,
+  pressurePull: nonNegative,
   /**
-   * Narrow pieces wobble: a crack wanders either way, up to this much (bubble widths per second)
-   * for each step narrower than `wobbleFrom` degrees (a piece half that wide wobbles 1 step). The
-   * wander changes direction every `wobbleSeconds`.
+   * The bubble wanders while the head is moving: up to `wobble` (bubble widths per second) for
+   * any head, plus `wobblePerStave` for each piece over `wobbleFrom`. It changes direction every
+   * `wobbleSeconds`.
    */
-  wobblePerThinness: nonNegative,
-  wobbleFrom: positive,
+  wobble: nonNegative,
+  wobbleFrom: positiveInt,
+  wobblePerStave: nonNegative,
   wobbleSeconds: positive,
   /** Leaning: a sideways drag of `leanTravel` pixels pushes the bubble back at `leanRate`. */
   leanRate: positive,
   leanTravel: positive,
-  /** A crack through a knot pulls harder (×) and wanders more (bubble widths per second). */
-  knotPull: positive,
+  /** Extra wander (bubble widths per second) for each line through a knot. */
   knotJitter: nonNegative,
-  /** A split along a check pulls and wanders less (×). */
+  /** Lines along checks calm the wander: all of them along checks multiplies it by this. */
   checkEase: fraction,
-  /** Seconds the halves take to come apart after a split. */
+  /** Seconds a lost piece takes to fall off, and the staves take to burst out and land. */
   pieceSeconds: positive,
-  /** Vibration (ms): the mallet strike, each tick of a drifting crack, a clean split, a runout. */
+  burstSeconds: positive,
+  /** Seconds the heap of staves sits before it pours into the chest. */
+  heapSeconds: nonNegative,
+  /**
+   * Vibration (ms): the head landing, each pulse of pressure while pulling (pulses come every
+   * `pressPulseSlow` seconds at no pressure, down to `pressPulseFast` at full pressure near the
+   * end), a piece lost, and the burst.
+   */
   buzzStrikeMs: nonNegative,
-  buzzCrackMs: nonNegative,
-  buzzCleanMs: nonNegative,
-  buzzRunoutMs: nonNegative,
+  buzzPressMs: nonNegative,
+  pressPulseSlow: positive,
+  pressPulseFast: positive,
+  buzzLostMs: nonNegative,
+  buzzBurstMs: nonNegative,
 });
 
 /** A log to rive: its size, end grain, and the grains on its end face. */
@@ -381,24 +391,30 @@ const rivingLogSchema = z.object({
 });
 
 /**
- * Riving a log into staves with a froe. Every split runs along a radius through the pith (the
- * first one across the whole log), anywhere you aim it. A piece `stave.min`–`stave.max` degrees
- * wide is a stave; narrower is kindling; wider has to be split again. A split pulls toward its
- * thin side, the harder the more uneven it is (and narrow pieces wobble): lean against it, or it
- * runs out and a side is lost. Grains multiply the whole log's staves if they end up in a stave
- * you keep, and a split line through a grain cancels it. Knots spoil any stave they touch (only
- * trimming them off into kindling gets rid of them), and a crack through a knot wobbles hard.
+ * Riving a log into staves with a splitting head: a star of blades that splits the whole log
+ * into `count` equal wedges at once, each one a stave. You pick a head (more open up with
+ * levels) and turn the cuts, then pull the lever down to drive it through. Grains multiply the
+ * whole log's staves if they end up whole in a stave; a cut line through a grain cancels it, good
+ * or bad. Knots spoil the staves they touch, and the wander of the pull grows with the count, so
+ * a greedy head can lose pieces.
  */
 const rivingSchema = z.object({
   /** The recipe a riven log runs: its yield is the staves it's worth. */
   recipe: id,
-  stave: z.object({ min: positive, max: positive }),
   multiplierCap: positive,
-  /** A split line within this many degrees of a check runs along it, and splits more easily. */
+  /** A cut line within this many degrees of a check runs along it, and splits more easily. */
   checkTolerance: nonNegative,
+  /** The splitting heads: how many staves each makes, and the Fletching level it opens up at. */
+  cutters: z.array(z.object({ count: z.number().int().min(2), level: positiveInt })).min(1),
   /**
-   * The kinds of grain: what each multiplies the whole log's staves by when it ends up in a stave
-   * you keep (they multiply together, up to `multiplierCap`), and how often each turns up.
+   * Stars, by the share of the best a log could make with the heads you have (every head at
+   * every turn, pulled perfectly), and the bonus staves for 2 and 3 stars, as a share of the log.
+   */
+  stars: z.object({ one: fraction, two: fraction, three: fraction }),
+  starBonus: z.object({ two: nonNegative, three: nonNegative }),
+  /**
+   * The kinds of grain: what each multiplies the whole log's staves by when it ends up whole in
+   * a stave (they multiply together, up to `multiplierCap`), and how often each turns up.
    */
   grainKinds: z
     .array(
@@ -410,7 +426,7 @@ const rivingSchema = z.object({
       }),
     )
     .min(1),
-  /** The first log ever: to learn the controls on, with one knot to trim off and one grain. */
+  /** The first log ever: to learn the controls on, with a grain to keep and one to cut. */
   tutorialLog: rivingLogSchema,
   /** Random logs: sizes, rings, checks and grains, from a seed. */
   generator: z.object({

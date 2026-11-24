@@ -1,6 +1,6 @@
-// Fletching: riving logs into staves with a froe (M4).
+// Fletching: riving logs into staves with a splitting head (M4).
 export * from './feel';
 export * from './logic/generate';
-export * from './logic/pieces';
-export * from './logic/lever';
+export * from './logic/pattern';
+export * from './logic/press';
 export * from './logic/round';

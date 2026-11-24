@@ -7,17 +7,8 @@ import { WarchestHud, type ScreenPoint } from '../../../app/warchestHud';
 import type { EventLogger, Game, LiveTuning } from '../../../core';
 import type { RivingFeel, RivingLog } from '../../../data';
 import { generateLog } from '../logic/generate';
-import {
-  DEG,
-  isWhole,
-  normalize,
-  splitLines,
-  splitPiece,
-  thinSide,
-  type Fate,
-  type Piece,
-} from '../logic/pieces';
-import { RivingRound, type AimPreview, type RivingEvent } from '../logic/round';
+import { DEG, inArc, markArc, normalize, openHeads, starsFor, type Plan } from '../logic/pattern';
+import { RivingRound, type RivingEvent } from '../logic/round';
 
 export interface Rive3DDeps {
   game: Game;
@@ -28,24 +19,25 @@ export interface Rive3DDeps {
   onLeave: () => void;
 }
 
-/** One-time flag: the practice log (no grains) has been riven. */
+const TAU = Math.PI * 2;
+/** One-time flag: the practice log has been riven. */
 const TUTORIAL = 'tutorial.riving';
 /** The chopping block the log stands on: its height, and how much wider than the log it is. */
 const BLOCK_HEIGHT = 0.55;
 const BLOCK_SPREAD = 1.25;
-/** How far apart pieces stand after each split (world units per split), so the cracks show. */
-const PIECE_GAP = 0.07;
-/** Finished pieces shrink as they go to the pile, so it stays out of the way. */
-const PILE_SCALE = 0.4;
-/** How high the piece being worked on is lifted, so it stands out. */
-const LIFT = 0.06;
+/** How far the wedges open while the head is driven through (world units, at the end). */
+const STRAIN_GAP = 0.06;
 /** The camera: how far it looks down (radians) and how far back it sits. */
 const CAMERA_ELEVATION = 58 * DEG;
 const CAMERA_DISTANCE = 9;
-/** While the crack drifts: how often it creaks and buzzes (seconds). */
-const STRAIN_TICK = 0.11;
-/** How far the froe's handle tips over by the end of a lever (radians). */
-const LEVER_TIP = 70 * DEG;
+/** The splitting head: how high it starts its drop, and how far it sinks into the log. */
+const HEAD_DROP = 1.5;
+const HEAD_SINK = 0.5;
+/** How far the lever's arm swings down by the end of the pull (radians). */
+const LEVER_SWING = 55 * DEG;
+/** Staves drawn in the burst (past this many, the count says the rest), stacked this many wide. */
+const MAX_STAVES_SHOWN = 64;
+const HEAP_COLUMNS = 8;
 const SOUNDS: Record<string, string> = Object.fromEntries(
   [
     'chop-1',
@@ -69,34 +61,40 @@ const COLORS = {
   blockTop: 0x8a6440,
   bark: 0x5b3e27,
   wood: 0xd9b98a,
+  stave: 0xe0c08e,
   ringDark: '#c99d64',
   ringLight: '#e2c08c',
   pith: '#8a5d32',
   check: '#3b2415',
-  grain: { silver: '#cfd8dc', gold: '#f2c037' } as Record<string, string>,
-  grainEdge: { silver: '#8fa0a8', gold: '#a87a12' } as Record<string, string>,
+  grain: { rot: '#5a4325', silver: '#cfd8dc', gold: '#f2c037' } as Record<string, string>,
+  grainEdge: { rot: '#33240f', silver: '#8fa0a8', gold: '#a87a12' } as Record<string, string>,
   knot: '#3b2413',
-  knotRing: '#86532c',
   cancelled: '#9b9284',
   glowGood: '#7fd65a',
   glowBad: '#ff4a3a',
-  froe: 0x9aa3a8,
+  steel: 0x9aa3a8,
+  steelDark: 0x5d666b,
   handle: 0x8b5a2b,
-  mallet: 0x7a5232,
   guide: 0xf2ead3,
   danger: 0xe0503c,
   gold: 0xf0cd5c,
+  good: 0x7fd65a,
   crack: 0x1d120a,
   strain: 0xe0503c,
-  pull: [0xf2ead3, 0xf0cd5c, 0xf09a3c, 0xe0503c],
-  good: 0x7fd65a,
   spoiled: 0x7c7468,
 };
 
+/** A part of the log seen on its end: the arc of the end face it covers. */
+interface Arc {
+  id: string;
+  start: number;
+  width: number;
+}
+
 interface PieceVisual {
-  piece: Piece;
+  arc: Arc;
   mesh: THREE.Group;
-  /** Where it's easing from and to, and when it set off. */
+  /** Where it's easing from and to, and when it set off (and for how long). */
   from: THREE.Vector3;
   to: THREE.Vector3;
   fromTilt: number;
@@ -104,14 +102,27 @@ interface PieceVisual {
   fromScale: number;
   toScale: number;
   movedAt: number;
-  fate?: Fate;
+  seconds: number;
+  /** Lost pieces and burst ones hop on their way; lost ones also grey out. */
+  hop: number;
+}
+
+/** A stave in the burst: flying from the log to where it lands in the heap. */
+interface StaveFlight {
+  from: THREE.Vector3;
+  to: THREE.Vector3;
+  launchAt: number;
+  seconds: number;
+  height: number;
+  spin: THREE.Vector3;
+  yaw: number;
 }
 
 /**
- * Riving in 3D: a log stood on end on a chopping block, seen from above, split with a froe and a
- * mallet into staves. The rules (RivingRound) decide everything; this draws them and feeds them
- * touches. Each piece is a wedge of the log whose top shows its part of the end grain (rings,
- * checks, grains), drawn from the same data the rules use.
+ * Riving in 3D: a log stood on end on a chopping block, seen from above, split by a splitting
+ * head (a star of blades) into staves. Pick a head and turn the cuts, strike to drop the head on,
+ * pull the lever down to drive it through, and the log bursts into its staves (times its grains).
+ * The rules (RivingRound) decide everything; this draws them and feeds them touches.
  */
 export class Rive3DView implements ScreenView {
   readonly #element: HTMLElement;
@@ -132,25 +143,36 @@ export class Rive3DView implements ScreenView {
   #pieces = new Map<string, PieceVisual>();
   #faceTexture: THREE.CanvasTexture | undefined;
   #faceCanvas: HTMLCanvasElement | undefined;
-  /** The grains the aim would cut, as last drawn (glowing) and shown as chips. */
-  #aimedKey = '';
-  #froe!: { root: THREE.Group; blade: THREE.Mesh; handle: THREE.Group };
-  #mallet!: THREE.Group;
-  #guide!: { lines: THREE.Mesh[] };
+  /** The head chosen last, kept for the next log. */
+  #lastHead: number | undefined;
+  /** What the plan last drew (face glow, lines, equation), so it redraws only on change. */
+  #planKey = '';
+  #head: { root: THREE.Group; yaw: THREE.Group; arm: THREE.Group; count: number } | undefined;
+  #guideLines: THREE.Mesh[] = [];
   #cracks: THREE.Mesh[] = [];
+  #staves!: THREE.InstancedMesh;
+  #flights: StaveFlight[] = [];
   #pointer:
-    { id: number; startX: number; startY: number; base: number; aiming: boolean } | undefined;
-  /** Total handle drag (pixels) this lever, carried across finger lifts. */
+    | {
+        id: number;
+        startX: number;
+        startY: number;
+        base: number;
+        turn: { from: number; at: number } | undefined;
+      }
+    | undefined;
+  /** Total lever drag (pixels) this pull, carried across finger lifts. */
   #leverPixels = 0;
-  #strainTickAt = 0;
-  /** Which way the thin side looks on screen this lever: +1 right, −1 left (for leaning). */
-  #thinSign = 1;
-  #sideLabels: HTMLElement[] = [];
+  #pulseAt = 0;
   #shake = 0;
   #frozenUntil = 0;
   #bankedXp: XpDeposit | undefined;
   #lastPhase = '';
-  #stavesShown = 0;
+  #starsShown = 0;
+  /** The staves the chest is holding back until they pour in from the heap. */
+  #deposit: ReturnType<WarchestHud['hold']> | undefined;
+  /** The finished log, waiting in its heap until it's time to show the card and pour. */
+  #heap: { event: Extract<RivingEvent, { type: 'done' }>; at: number } | undefined;
 
   private constructor(element: HTMLElement, deps: Rive3DDeps, hud: WarchestHud) {
     this.#element = element;
@@ -201,29 +223,33 @@ export class Rive3DView implements ScreenView {
     this.#hud.settle();
     this.#skillBar.settle();
     this.#bankedXp = undefined;
+    this.#heap = undefined;
+    this.#deposit = undefined;
     delete document.body.dataset.riving;
     this.#lastPhase = '';
   }
 
   // Logs
 
-  /** The next hand-made log in turn, if there's a log in the warchest to rive. */
+  /** A new log, if there's one in the warchest to rive: the practice log first, then random. */
   #startLog(): void {
     const { game } = this.#deps;
     const rules = game.data.riving;
     const recipe = game.data.recipes.find((entry) => entry.id === rules.recipe);
     const input = recipe?.inputs[0];
     this.#ui.card.hidden = true;
+    this.#clearBurst();
     if (input && !game.inventory.has(input.item, input.count)) {
       this.#round = undefined;
       this.#clearLog();
       this.#showNoLogs();
       return;
     }
-    // The first log ever is the practice one; after that every log is new.
     const tutorial = !game.hasDone(TUTORIAL);
     const seed = Date.now() >>> 0;
     const log = tutorial ? rules.tutorialLog : generateLog(rules, seed);
+    const level = game.level(this.#skill);
+    const heads = openHeads(rules, level);
     this.#log = log;
     this.#round = new RivingRound(
       log,
@@ -231,9 +257,10 @@ export class Rive3DView implements ScreenView {
         logger: this.#deps.logger,
         feel: () => this.#deps.feel.values,
         rules,
+        heads,
         bank: (worth, staves) => {
           const before = game.xp(this.#skill);
-          // XP on the staves split; the grains multiply what goes into the warchest.
+          // XP on the staves split; the grains and stars multiply what goes into the warchest.
           const result = game.craft(rules.recipe, { yield: worth, xpYield: staves });
           this.#bankedXp = this.#skillBar.hold(game.xp(this.#skill) - before);
           if (tutorial) game.markDone(TUTORIAL);
@@ -244,11 +271,13 @@ export class Rive3DView implements ScreenView {
         },
       },
       seed,
+      this.#lastHead ?? heads[heads.length - 1],
     );
-    this.#stavesShown = 0;
     this.#leverPixels = 0;
-    this.#aimedKey = '';
+    this.#planKey = '';
+    this.#starsShown = 0;
     this.#buildLog(log);
+    this.#buildPicker(level);
     this.#ui.logName.textContent = tutorial ? 'Practice log' : this.#grainNames(log);
   }
 
@@ -257,6 +286,7 @@ export class Rive3DView implements ScreenView {
     this.#pieces.clear();
     this.#faceTexture?.dispose();
     this.#faceTexture = undefined;
+    if (this.#head) this.#head.root.visible = false;
   }
 
   // World
@@ -289,98 +319,121 @@ export class Rive3DView implements ScreenView {
     this.#scene.add(block);
     this.#logRoot.position.y = BLOCK_HEIGHT;
     this.#scene.add(this.#logRoot);
-    this.#froe = this.#buildFroe();
-    this.#mallet = this.#buildMallet();
-    this.#guide = this.#buildGuide();
+    // The burst's staves: one mesh drawn many times, so a big log stays smooth on a phone.
+    const stave = new THREE.BoxGeometry(0.09, 0.06, 0.85);
+    this.#staves = new THREE.InstancedMesh(
+      stave,
+      new THREE.MeshLambertMaterial({ color: COLORS.stave }),
+      MAX_STAVES_SHOWN,
+    );
+    this.#staves.castShadow = true;
+    this.#staves.count = 0;
+    this.#staves.frustumCulled = false;
+    this.#scene.add(this.#staves);
   }
 
-  /** The froe: a flat blade laid along the split line, its handle standing up from the outer end. */
-  #buildFroe() {
+  /**
+   * The splitting head for a `count`-way split: a steel blade along each cut line from a hub at
+   * the pith, a post up from the hub, and a lever arm reaching toward you that swings down as
+   * you pull.
+   */
+  #buildHead(count: number, radius: number) {
+    if (this.#head) this.#logRoot.remove(this.#head.root);
     const root = new THREE.Group();
-    const blade = new THREE.Mesh(
-      new THREE.BoxGeometry(1, 0.07, 0.05),
-      new THREE.MeshLambertMaterial({ color: COLORS.froe }),
-    );
-    blade.castShadow = true;
-    root.add(blade);
-    const handle = new THREE.Group();
+    const steel = new THREE.MeshLambertMaterial({ color: COLORS.steel });
+    const dark = new THREE.MeshLambertMaterial({ color: COLORS.steelDark });
+    const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.17, 0.2, 0.22, 16), dark);
+    hub.position.y = 0.11;
+    root.add(hub);
+    // Blades sit along the face's angles; their outline runs from the hub to just past the bark.
+    for (let index = 0; index < count; index++) {
+      const geometry = new THREE.BoxGeometry(radius * 1.02, 0.24, 0.04);
+      geometry.translate((radius * 1.02) / 2, 0.12, 0);
+      const blade = new THREE.Mesh(geometry, steel);
+      blade.rotation.y = (index * TAU) / count;
+      root.add(blade);
+    }
+    const post = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.06, 0.7, 10), dark);
+    post.position.y = 0.22 + 0.35;
+    root.add(post);
+    // The arm always reaches out to the right, however the blades are turned, so you see it
+    // swing down as you pull.
+    const yaw = new THREE.Group();
+    yaw.position.y = 0.22 + 0.7;
+    const arm = new THREE.Group();
+    yaw.add(arm);
+    const bar = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 1.5, 8), dark);
+    bar.rotation.x = Math.PI / 2;
+    bar.position.z = 0.75;
     const grip = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.05, 0.055, 0.9, 10),
+      new THREE.CylinderGeometry(0.07, 0.07, 0.32, 10),
       new THREE.MeshLambertMaterial({ color: COLORS.handle }),
     );
-    grip.position.y = 0.45;
-    grip.castShadow = true;
-    handle.add(grip);
-    root.add(handle);
+    grip.position.set(0, -0.04, 1.5);
+    arm.add(bar, grip);
+    root.add(yaw);
+    root.traverse((child) => {
+      if (child instanceof THREE.Mesh) child.castShadow = true;
+    });
     root.visible = false;
     this.#logRoot.add(root);
-    return { root, blade, handle };
+    this.#head = { root, yaw, arm, count };
+    return this.#head;
   }
 
-  /** The mallet: a short club that comes down on the froe's back. */
-  #buildMallet(): THREE.Group {
-    const mallet = new THREE.Group();
-    const head = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.11, 0.11, 0.32, 14),
-      new THREE.MeshLambertMaterial({ color: COLORS.mallet }),
+  /** A cut line on the end face, drawn over everything (one per line, made as needed). */
+  #guideLine(index: number): THREE.Mesh {
+    const existing = this.#guideLines[index];
+    if (existing) return existing;
+    const geometry = new THREE.PlaneGeometry(1, 1);
+    geometry.translate(0.5, 0, 0);
+    geometry.rotateX(-Math.PI / 2);
+    const mesh = new THREE.Mesh(
+      geometry,
+      new THREE.MeshBasicMaterial({
+        color: COLORS.guide,
+        transparent: true,
+        opacity: 0.9,
+        depthTest: false,
+        depthWrite: false,
+      }),
     );
-    head.rotation.z = Math.PI / 2;
-    head.position.set(0, 0.62, 0);
-    const shaft = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.03, 0.035, 0.62, 8),
-      new THREE.MeshLambertMaterial({ color: COLORS.handle }),
-    );
-    shaft.position.y = 0.31;
-    for (const part of [head, shaft]) part.castShadow = true;
-    mallet.add(head, shaft);
-    mallet.visible = false;
-    this.#logRoot.add(mallet);
-    return mallet;
+    mesh.renderOrder = 10;
+    this.#guideLines[index] = mesh;
+    this.#logRoot.add(mesh);
+    return mesh;
   }
 
-  /** The aim guide: a line along each end of the split, drawn over everything. */
-  #buildGuide() {
-    const lines = [0, 1].map(() => {
-      const geometry = new THREE.PlaneGeometry(1, 1);
-      geometry.translate(0.5, 0, 0);
-      geometry.rotateX(-Math.PI / 2);
-      const mesh = new THREE.Mesh(
-        geometry,
-        new THREE.MeshBasicMaterial({
-          color: COLORS.guide,
-          transparent: true,
-          opacity: 0.85,
-          depthTest: false,
-          depthWrite: false,
-        }),
-      );
-      mesh.renderOrder = 10;
-      mesh.visible = false;
-      this.#logRoot.add(mesh);
-      return mesh;
-    });
-    return { lines };
+  /** A crack racing down the bark at the end of a cut line (one per line, made as needed). */
+  #crack(index: number): THREE.Mesh {
+    const existing = this.#cracks[index];
+    if (existing) return existing;
+    const crack = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.05, 1),
+      new THREE.MeshBasicMaterial({ color: COLORS.crack, side: THREE.DoubleSide }),
+    );
+    this.#cracks[index] = crack;
+    this.#logRoot.add(crack);
+    return crack;
   }
 
   /** The log as one piece (the whole end face), its end grain drawn from data. */
   #buildLog(log: RivingLog): void {
     this.#clearLog();
-    const round = this.#round;
-    if (!round) return;
-    this.#faceTexture = this.#drawFace(log, round.live);
-    for (const piece of round.pieces) this.#addPiece(piece, new THREE.Vector3(), 0);
+    this.#faceTexture = this.#drawFace(log, [], []);
+    this.#addPiece({ id: 'log', start: 0, width: TAU }, new THREE.Vector3(), 0);
   }
 
   /**
-   * The end grain: growth rings round the pith, checks as dark cracks, and each grain as a
-   * coloured patch over the arc of the face it covers (the arc the rules use), marked with what
-   * it's worth. A grain a split has cut through is drawn faded and crossed out.
+   * The end grain: growth rings round the pith, checks as dark cracks, knots as dark patches,
+   * and each grain as a coloured patch over the arc of the face it covers (the arc the rules
+   * use), marked with what it's worth. Grains the cuts would run through glow (red for a good
+   * one, green for rot); ones a struck head has cut are drawn faded and crossed out.
    */
   #drawFace(
     log: RivingLog,
-    live: ReadonlySet<number>,
-    /** Grains the current aim would cut: they glow red. */
-    aimed: readonly number[] = [],
+    aimed: readonly number[],
+    cancelled: readonly number[],
   ): THREE.CanvasTexture {
     const size = 512;
     const canvas = this.#faceCanvas ?? document.createElement('canvas');
@@ -406,38 +459,23 @@ export class Rive3DView implements ScreenView {
     context.fillStyle = COLORS.pith;
     context.fill();
     const kinds = this.#deps.game.data.riving.grainKinds;
-    // Knots: dark wedges of the end face with their own rings, spoiling any stave they touch.
-    for (const knot of log.knots) {
-      const from = -(knot.angle + knot.width / 2) * DEG;
-      const to = -(knot.angle - knot.width / 2) * DEG;
+    const wedgePath = (mark: { angle: number; width: number }) => {
+      // Canvas angles run clockwise, so the face's angles are negated.
+      const from = -(mark.angle + mark.width / 2) * DEG;
+      const to = -(mark.angle - mark.width / 2) * DEG;
       context.beginPath();
       context.arc(middle, middle, radius * 0.93, from, to);
       context.arc(middle, middle, radius * 0.16, to, from, true);
       context.closePath();
+    };
+    for (const knot of log.knots) {
+      wedgePath(knot);
       context.fillStyle = COLORS.knot;
       context.fill();
-      const centre = at(knot.angle * DEG, 0.6);
-      const across = Math.tan((knot.width * DEG) / 2) * radius * 0.6;
-      context.save();
-      context.translate(centre.x, centre.y);
-      context.rotate(-knot.angle * DEG);
-      for (let ring = 3; ring >= 1; ring--) {
-        context.beginPath();
-        context.ellipse(0, 0, radius * 0.22 * (ring / 3), across * (ring / 3), 0, 0, Math.PI * 2);
-        context.fillStyle = ring % 2 === 0 ? COLORS.knotRing : COLORS.knot;
-        context.fill();
-      }
-      context.restore();
     }
     log.grains.forEach((grain, index) => {
-      const alive = live.has(index);
-      // Canvas angles run clockwise, so the face's angles are negated.
-      const from = -(grain.angle + grain.width / 2) * DEG;
-      const to = -(grain.angle - grain.width / 2) * DEG;
-      context.beginPath();
-      context.arc(middle, middle, radius * 0.93, from, to);
-      context.arc(middle, middle, radius * 0.16, to, from, true);
-      context.closePath();
+      const alive = !cancelled.includes(index);
+      wedgePath(grain);
       context.globalAlpha = alive ? 0.92 : 0.35;
       context.fillStyle = alive ? (COLORS.grain[grain.kind] ?? '#888') : COLORS.cancelled;
       context.fill();
@@ -490,7 +528,7 @@ export class Rive3DView implements ScreenView {
     return texture;
   }
 
-  /** The log's grains and knots, for its name: "Gold ×3 · Silver ×2 · 2 knots". */
+  /** The log's grains, for its name: "Gold ×3 · Rot ×½". */
   #grainNames(log: RivingLog): string {
     const kinds = this.#deps.game.data.riving.grainKinds;
     const names = log.grains.map((grain) => {
@@ -504,21 +542,22 @@ export class Rive3DView implements ScreenView {
 
   /**
    * A piece as a solid wedge standing on the block: bark round the outside, fresh wood on the
-   * faces a split opened, and its top showing its part of the end grain.
+   * split faces, and its top showing its part of the end grain.
    */
-  #addPiece(piece: Piece, at: THREE.Vector3, movedAt: number): PieceVisual {
+  #addPiece(arc: Arc, at: THREE.Vector3, movedAt: number): PieceVisual {
     const log = this.#log;
     if (!log) throw new Error('No log');
     const { radius, height } = log;
+    const whole = arc.width >= TAU - 1e-9;
     const root = new THREE.Group();
-    const segments = Math.max(4, Math.ceil((piece.width / (Math.PI * 2)) * 48));
+    const segments = Math.max(4, Math.ceil((arc.width / TAU) * 48));
     // The top: the piece's outline, its UVs in world units to show its part of the end face.
     const shape = new THREE.Shape();
-    if (isWhole(piece)) {
-      shape.absarc(0, 0, radius, 0, Math.PI * 2, false);
+    if (whole) {
+      shape.absarc(0, 0, radius, 0, TAU, false);
     } else {
       shape.moveTo(0, 0);
-      shape.absarc(0, 0, radius, piece.start, piece.start + piece.width, false);
+      shape.absarc(0, 0, radius, arc.start, arc.start + arc.width, false);
       shape.lineTo(0, 0);
     }
     const topGeometry = new THREE.ShapeGeometry(shape, segments);
@@ -537,16 +576,15 @@ export class Rive3DView implements ScreenView {
         segments,
         1,
         true,
-        piece.start + Math.PI / 2,
-        piece.width,
+        arc.start + Math.PI / 2,
+        arc.width,
       ),
       new THREE.MeshLambertMaterial({ color: COLORS.bark, side: THREE.DoubleSide }),
     );
     bark.position.y = height / 2;
     root.add(top, bark);
-    // The split faces, from the pith out along each edge.
-    if (!isWhole(piece)) {
-      for (const edge of [piece.start, piece.start + piece.width]) {
+    if (!whole) {
+      for (const edge of [arc.start, arc.start + arc.width]) {
         const geometry = new THREE.PlaneGeometry(radius, height);
         geometry.translate(radius / 2, height / 2, 0);
         const face = new THREE.Mesh(
@@ -558,15 +596,12 @@ export class Rive3DView implements ScreenView {
       }
     }
     root.traverse((child) => {
-      if (child instanceof THREE.Mesh) {
-        child.castShadow = child.receiveShadow = true;
-        child.userData.piece = piece.id;
-      }
+      if (child instanceof THREE.Mesh) child.castShadow = child.receiveShadow = true;
     });
     root.position.copy(at);
     this.#logRoot.add(root);
     const visual: PieceVisual = {
-      piece,
+      arc,
       mesh: root,
       from: at.clone(),
       to: at.clone(),
@@ -575,16 +610,11 @@ export class Rive3DView implements ScreenView {
       fromScale: 1,
       toScale: 1,
       movedAt,
+      seconds: 0,
+      hop: 0,
     };
-    this.#pieces.set(piece.id, visual);
+    this.#pieces.set(arc.id, visual);
     return visual;
-  }
-
-  /** Where a piece stands: pushed out from the pith along its middle, more the more it's split. */
-  #restingPlace(piece: Piece): THREE.Vector3 {
-    if (isWhole(piece)) return new THREE.Vector3();
-    const angle = piece.start + piece.width / 2;
-    return this.#direction(angle).multiplyScalar(PIECE_GAP * piece.depth);
   }
 
   /** The face's angle as a direction on the block (the face's y runs away from the camera). */
@@ -592,24 +622,20 @@ export class Rive3DView implements ScreenView {
     return new THREE.Vector3(Math.cos(angle), 0, -Math.sin(angle));
   }
 
-  /**
-   * Where a finished piece goes: staves lie in a row in front of the block, spoiled and wasted
-   * pieces to the back, out of the way.
-   */
-  #finishedPlace(fate: Fate, index: number): THREE.Vector3 {
-    if (fate === 'stave') return new THREE.Vector3(-1.3 + index * 0.17, -BLOCK_HEIGHT, 1.5);
-    return new THREE.Vector3(-1.5 + index * 0.25, -BLOCK_HEIGHT, -1.6);
-  }
-
-  #move(visual: PieceVisual, to: THREE.Vector3, tilt: number, scale = 1): void {
-    const round = this.#round;
+  #move(
+    visual: PieceVisual,
+    to: THREE.Vector3,
+    options: { tilt?: number; scale?: number; seconds: number; hop?: number },
+  ): void {
     visual.from.copy(visual.mesh.position);
     visual.fromTilt = visual.mesh.rotation.z;
     visual.fromScale = visual.mesh.scale.x;
     visual.to.copy(to);
-    visual.toTilt = tilt;
-    visual.toScale = scale;
-    visual.movedAt = round?.now ?? 0;
+    visual.toTilt = options.tilt ?? 0;
+    visual.toScale = options.scale ?? 1;
+    visual.movedAt = this.#round?.now ?? 0;
+    visual.seconds = options.seconds;
+    visual.hop = options.hop ?? 0;
   }
 
   // Events
@@ -617,97 +643,142 @@ export class Rive3DView implements ScreenView {
   #onEvent(event: RivingEvent): void {
     const feel = this.#deps.feel.values;
     const round = this.#round;
-    if (!round) return;
+    const log = this.#log;
+    if (!round || !log) return;
     if (event.type === 'strike') {
-      // The mallet lands as the swing ends; the thock plays then (see the loop).
-      this.#mallet.visible = true;
-    } else if (event.type === 'split') {
-      const parent = this.#pieces.get(event.piece.id);
-      if (parent) {
-        this.#logRoot.remove(parent.mesh);
-        this.#pieces.delete(event.piece.id);
-      }
-      for (const child of event.children) {
-        const visual = this.#addPiece(
-          child,
-          parent?.mesh.position.clone() ?? new THREE.Vector3(),
+      const head = this.#buildHead(round.count, log.radius);
+      head.root.rotation.y = round.rotation;
+      head.yaw.rotation.y = Math.PI / 2 - round.rotation;
+      head.root.visible = true;
+      // The struck plan's cut grains are gone for good.
+      this.#drawFace(log, [], round.plan.cut);
+      this.#play('creak-1', 0.35, 500);
+    } else if (event.type === 'landed') {
+      this.#play('chop-perfect', 0.9, -250);
+      this.#play(`chop-${1 + Math.floor(Math.random() * 3)}`, 0.6);
+      this.#deps.haptics.pulse(feel.buzzStrikeMs);
+      this.#shake = 0.07 * feel.shakeStrength;
+      this.#frozenUntil = performance.now() + feel.hitStopMs;
+      this.#leverPixels = 0;
+      // The log becomes its wedges, standing together until the head drives them apart.
+      const whole = this.#pieces.get('log');
+      if (whole) this.#logRoot.remove(whole.mesh);
+      this.#pieces.delete('log');
+      for (const wedge of round.plan.wedges) {
+        this.#addPiece(
+          { id: String(wedge.index), start: wedge.start, width: wedge.width },
+          new THREE.Vector3(),
           round.now,
         );
-        this.#move(visual, this.#restingPlace(child), 0);
       }
-      const log = this.#log;
-      if (log && event.cut.length > 0) this.#drawFace(log, round.live);
-      // The next aim redraws its glow and chips.
-      this.#aimedKey = '';
-      if (event.result !== 'clean') {
-        this.#play('crash-wood', 0.8, -300);
-        this.#play(`creak-${1 + Math.floor(Math.random() * 3)}`, 0.7, -500);
-        this.#deps.haptics.pulse(feel.buzzRunoutMs);
-        this.#shake = 0.12 * feel.shakeStrength;
-        const degrees = Math.round((event.lost?.width ?? 0) / DEG);
-        this.#flash(
-          `${event.result === 'thin' ? 'Ran out to the thin side' : 'Leaned too far'}! −${String(degrees)}°`,
-          'bad',
-        );
-      } else {
-        this.#play('chop-perfect', 0.8, 200);
-        this.#play(`land-${1 + Math.floor(Math.random() * 3)}`, 0.5, 300);
-        this.#deps.haptics.pulse(feel.buzzCleanMs);
-        this.#flash('Clean split!', 'good');
-      }
-      const kinds = this.#deps.game.data.riving.grainKinds;
-      for (const index of event.cut) {
-        const kind = kinds.find((entry) => entry.id === log?.grains[index]?.kind);
-        if (!kind) continue;
-        const bad = kind.multiplier < 1;
-        window.setTimeout(() => {
-          this.#flash(
-            bad ? `${kind.name} cut out!` : `${kind.name} cut: ×${times(kind.multiplier)} gone`,
-            bad ? 'good' : 'warn',
-          );
-        }, 450);
-      }
-    } else if (event.type === 'finished') {
-      const visual = this.#pieces.get(event.piece.id);
-      if (!visual) return;
-      visual.fate = event.fate;
-      const done = round.finished.filter(
-        (entry) => (entry.fate === 'stave') === (event.fate === 'stave'),
-      );
-      const place = this.#finishedPlace(event.fate, done.length - 1);
-      this.#move(visual, place, event.fate === 'stave' ? Math.PI / 2 : Math.PI / 2.4, PILE_SCALE);
-      if (event.fate !== 'stave') {
+    } else if (event.type === 'lost') {
+      const visual = this.#pieces.get(String(event.wedge));
+      if (visual) {
+        // It pops off its side and lands behind the block, out of the way.
+        const out = this.#direction(visual.arc.start + visual.arc.width / 2);
+        const behind = new THREE.Vector3(out.x * 1.6, -BLOCK_HEIGHT, -1.5 - Math.random() * 0.4);
+        this.#move(visual, behind, {
+          tilt: Math.PI / 2.3,
+          scale: 0.5,
+          seconds: feel.pieceSeconds,
+          hop: 0.7,
+        });
         visual.mesh.traverse((child) => {
           if (child instanceof THREE.Mesh && child.material instanceof THREE.MeshLambertMaterial) {
             child.material.color.setHex(COLORS.spoiled);
             child.material.map = null;
           }
         });
-      } else {
-        this.#stavesShown += 1;
-        this.#sfx.play('star', 0.35, 300 + this.#stavesShown * 120);
       }
+      this.#play('crash-wood', 0.75, -200);
+      this.#deps.haptics.pulse(feel.buzzLostMs);
+      this.#shake = 0.12 * feel.shakeStrength;
+      this.#flash('A piece split off! −1', 'bad');
     } else {
-      this.#showCard(event.staves, event.kept, event.multiplier, event.worth);
-      window.setTimeout(() => {
-        this.#pourStaves(event.banked);
-      }, 450);
+      this.#burst(event);
     }
   }
 
-  /** The finished log's staves fly from the pile into the chest, and its XP ticks in with them. */
-  #pourStaves(staves: number): void {
+  /**
+   * Through: a big hit, the wedges fly apart, and the log's worth of staves bursts out and lands
+   * in a heap in front of the block, then pours into the chest.
+   */
+  #burst(event: Extract<RivingEvent, { type: 'done' }>): void {
+    const feel = this.#deps.feel.values;
+    const round = this.#round;
+    const log = this.#log;
+    if (!round || !log) return;
+    this.#play('crash-wood', 0.9, 100);
+    this.#play('chop-perfect', 1, -400);
+    this.#play(`land-${1 + Math.floor(Math.random() * 3)}`, 0.7);
+    this.#deps.haptics.pulse(feel.buzzBurstMs);
+    this.#shake = 0.18 * feel.shakeStrength;
+    this.#frozenUntil = performance.now() + feel.hitStopMs * 1.5;
+    if (this.#head) this.#head.root.visible = false;
+    for (const visual of this.#pieces.values()) {
+      if (event.lost.includes(Number(visual.arc.id))) continue;
+      const out = this.#direction(visual.arc.start + visual.arc.width / 2);
+      this.#move(visual, out.multiplyScalar(1.3).setY(0.2), {
+        tilt: Math.PI / 3,
+        scale: 0,
+        seconds: feel.burstSeconds * 0.5,
+        hop: 0.8,
+      });
+    }
+    // The chest holds the staves back until they pour in from the heap.
     const xp = this.#bankedXp;
     this.#bankedXp = undefined;
-    if (staves <= 0) return;
+    this.#deposit =
+      event.banked > 0 ? this.#hud.hold(event.banked, (share) => xp?.arrive(share)) : undefined;
+    // The staves fly from the log into a neat stack in front of the block, a few at a time.
+    const shown = Math.min(event.banked, MAX_STAVES_SHOWN);
+    const start = new THREE.Vector3(0, BLOCK_HEIGHT + log.height * 0.8, 0);
+    this.#flights = Array.from({ length: shown }, (_, index) => {
+      const column = index % HEAP_COLUMNS;
+      const layer = Math.floor(index / HEAP_COLUMNS);
+      // Each layer sits in the gaps of the one under it.
+      const to = new THREE.Vector3(
+        (column - (HEAP_COLUMNS - 1) / 2 + (layer % 2) * 0.5) * 0.1 + (Math.random() - 0.5) * 0.02,
+        0.035 + layer * 0.055,
+        1.75 + (Math.random() - 0.5) * 0.12,
+      );
+      return {
+        from: start.clone().add(new THREE.Vector3((Math.random() - 0.5) * 0.4, 0, 0)),
+        to,
+        launchAt: round.now + Math.random() * feel.burstSeconds * 0.25,
+        seconds: feel.burstSeconds * (0.5 + Math.random() * 0.25),
+        height: 1 + Math.random() * 1.2,
+        spin: new THREE.Vector3(
+          (Math.random() - 0.5) * 14,
+          (Math.random() - 0.5) * 8,
+          (Math.random() - 0.5) * 14,
+        ),
+        yaw: (Math.random() - 0.5) * 0.16,
+      };
+    });
+    this.#staves.count = shown;
+    // Let the heap sit a moment before it pours in (on the round's clock, so hit-stop counts).
+    this.#heap = { event, at: round.now + feel.burstSeconds + feel.heapSeconds };
+  }
+
+  /** The heap's staves fly into the chest, and the log's XP ticks in with them. */
+  #pourStaves(): void {
+    const deposit = this.#deposit;
+    this.#deposit = undefined;
+    if (!deposit) return;
     const { clientWidth: width, clientHeight: height } = this.#element;
-    const points: ScreenPoint[] = [...this.#pieces.values()]
-      .filter((visual) => visual.fate === 'stave')
-      .map((visual) => {
-        const projected = visual.mesh.getWorldPosition(new THREE.Vector3()).project(this.#camera);
-        return { x: ((projected.x + 1) / 2) * width, y: ((1 - projected.y) / 2) * height };
-      });
-    this.#hud.hold(staves, (share) => xp?.arrive(share)).pour(points);
+    const points: ScreenPoint[] = this.#flights.map((flight) => {
+      const projected = flight.to.clone().project(this.#camera);
+      return { x: ((projected.x + 1) / 2) * width, y: ((1 - projected.y) / 2) * height };
+    });
+    deposit.pour(points);
+    this.#clearBurst();
+  }
+
+  #clearBurst(): void {
+    this.#heap = undefined;
+    this.#flights = [];
+    this.#staves.count = 0;
   }
 
   // Loop
@@ -716,179 +787,163 @@ export class Rive3DView implements ScreenView {
     this.#timer.update(time);
     const realDt = Math.min(this.#timer.getDelta(), 0.05);
     const round = this.#round;
-    const frozen = performance.now() < this.#frozenUntil;
-    if (round && !frozen) {
-      const before = round.phase.kind;
-      round.tick(realDt);
-      // Read again: the tick moves the round on.
-      const after: string = round.phase.kind;
-      if (before === 'swing' && after === 'lever') {
-        this.#strikeLanded();
-        this.#findThinSide();
-      }
+    if (round && performance.now() >= this.#frozenUntil) round.tick(realDt);
+    const heap = this.#heap;
+    if (heap && round && round.now >= heap.at) {
+      this.#heap = undefined;
+      this.#showCard(heap.event);
+      this.#pourStaves();
     }
     this.#updatePieces();
     this.#updateTools();
+    this.#updateStaves();
     this.#updateUi();
     this.#updateCamera(realDt);
     this.#renderer.render(this.#scene, this.#camera);
   }
 
-  #strikeLanded(): void {
-    const feel = this.#deps.feel.values;
-    this.#play('chop-perfect', 0.9, -200);
-    this.#play(`chop-${1 + Math.floor(Math.random() * 3)}`, 0.5);
-    this.#deps.haptics.pulse(feel.buzzStrikeMs);
-    this.#shake = 0.06 * feel.shakeStrength;
-    this.#frozenUntil = performance.now() + feel.hitStopMs;
-    this.#leverPixels = 0;
-  }
-
   #updatePieces(): void {
     const round = this.#round;
     if (!round) return;
-    const seconds = this.#deps.feel.values.pieceSeconds;
-    const current = round.current;
+    const phase = round.phase;
+    const strain = phase.kind === 'press' ? phase.press.progress : 0;
     for (const visual of this.#pieces.values()) {
-      const t = Math.min(Math.max((round.now - visual.movedAt) / seconds, 0), 1);
+      // Standing wedges open a little as the head drives in.
+      if (visual.seconds === 0 && visual.arc.id !== 'log') {
+        const out = this.#direction(visual.arc.start + visual.arc.width / 2);
+        visual.mesh.position.copy(out.multiplyScalar(STRAIN_GAP * strain));
+        continue;
+      }
+      if (visual.seconds === 0) continue;
+      const t = Math.min(Math.max((round.now - visual.movedAt) / visual.seconds, 0), 1);
       const eased = 1 - (1 - t) ** 3;
       const position = visual.from.clone().lerp(visual.to, eased);
-      // Finished pieces hop as they go to the pile.
-      if (visual.fate) position.y += Math.sin(eased * Math.PI) * 0.5;
-      if (!visual.fate && current?.id === visual.piece.id && round.phase.kind === 'aim') {
-        position.y += LIFT;
-      }
+      position.y += Math.sin(eased * Math.PI) * visual.hop;
       visual.mesh.position.copy(position);
       visual.mesh.rotation.z = visual.fromTilt + (visual.toTilt - visual.fromTilt) * eased;
-      visual.mesh.scale.setScalar(visual.fromScale + (visual.toScale - visual.fromScale) * eased);
+      visual.mesh.scale.setScalar(
+        Math.max(visual.fromScale + (visual.toScale - visual.fromScale) * eased, 0.0001),
+      );
     }
   }
 
-  /** The froe on the aim line, the mallet coming down on it, the guide and the crack. */
+  /** The cut lines while planning; the head dropping and driving in, and the cracks, after. */
   #updateTools(): void {
     const round = this.#round;
     const log = this.#log;
     const phase = round?.phase;
-    const piece = round?.current;
-    const { root, blade, handle } = this.#froe;
-    for (const line of this.#guide.lines) line.visible = false;
+    for (const line of this.#guideLines) line.visible = false;
     for (const crack of this.#cracks) crack.visible = false;
-    if (!round || !log || !phase || phase.kind === 'done' || !piece) {
-      root.visible = this.#mallet.visible = false;
+    if (!round || !log || !phase) return;
+    const plan = round.plan;
+    if (phase.kind === 'plan') {
+      plan.lines.forEach((angle, index) => {
+        const mesh = this.#guideLine(index);
+        mesh.visible = true;
+        mesh.position.set(0, log.height + 0.01, 0);
+        mesh.rotation.set(0, angle, 0);
+        mesh.scale.set(log.radius, 1, 0.04);
+        (mesh.material as THREE.MeshBasicMaterial).color.setHex(this.#lineColor(plan, angle));
+      });
       return;
     }
-    const whole = isWhole(piece);
-    const lines = splitLines(piece, phase.angle);
-    const base = this.#restingPlace(piece).setY(log.height + (phase.kind === 'aim' ? LIFT : 0));
-    // The froe: along the line, from the pith out (across the log for the first split).
-    const along = this.#direction(phase.angle);
-    const length = whole ? log.radius * 2 : log.radius;
-    const middle = whole ? base.clone() : base.clone().addScaledVector(along, log.radius / 2);
-    root.visible = true;
-    root.position.copy(middle);
-    root.rotation.set(0, Math.atan2(-along.z, along.x), 0);
-    blade.scale.set(length * 0.98, 1, 1);
-    handle.position.set((length * 0.98) / 2, 0, 0);
-    const lever = phase.kind === 'lever' ? phase.lever : undefined;
-    const progress = lever?.progress ?? 0;
-    // Driven in by the strike, deeper as it levers; the handle tips over as the crack opens.
-    blade.position.y =
-      phase.kind === 'aim' || phase.kind === 'swing' ? 0.03 : -0.02 - progress * 0.06;
-    handle.rotation.set(progress * LEVER_TIP, 0, 0);
-    handle.position.y = blade.position.y;
-    // The mallet: raised over the blade, swinging down during the strike.
-    const swing =
-      phase.kind === 'swing' ? Math.min((round.now - phase.at) / round.feel.strikeSeconds, 1) : 1;
-    this.#mallet.visible = phase.kind === 'swing';
-    this.#mallet.position.copy(middle).add(new THREE.Vector3(0, 0, 0.55));
-    this.#mallet.rotation.set(-(1 - swing ** 2) * 1.3 - 0.25, Math.atan2(-along.z, along.x), 0);
-    // The guide: each line along the end face, warming from white to red the harder it'll pull.
-    if (phase.kind === 'aim') {
-      const preview = round.aimPreview;
-      // Red through gold or silver, orange through a knot; else by how hard it'll pull.
-      const color =
-        (preview?.cut.length ?? 0) > 0
-          ? COLORS.danger
-          : preview?.throughKnot
-            ? (COLORS.pull[2] ?? COLORS.danger)
-            : (COLORS.pull[pullLevel(preview?.unevenness ?? 0)] ?? COLORS.guide);
-      lines.forEach((angle, index) => {
-        const mesh = this.#guide.lines[index];
-        if (!mesh) return;
-        mesh.visible = true;
-        mesh.position.copy(base).setY(log.height + LIFT + 0.01);
-        mesh.rotation.set(0, Math.atan2(-this.#direction(angle).z, this.#direction(angle).x), 0);
-        mesh.scale.set(log.radius, 1, 0.035);
-        (mesh.material as THREE.MeshBasicMaterial).color.setHex(color);
-      });
+    const head = this.#head;
+    if (!head) return;
+    const press = phase.kind === 'press' ? phase.press : undefined;
+    const progress = press?.progress ?? (phase.kind === 'done' ? 1 : 0);
+    if (phase.kind === 'swing') {
+      // The head drops, speeding up, and bites in as it lands.
+      const t = Math.min((round.now - phase.at) / round.feel.strikeSeconds, 1);
+      head.root.position.y = log.height - 0.03 + HEAD_DROP * (1 - t * t);
+    } else {
+      head.root.position.y = log.height - 0.03 - progress * HEAD_SINK;
     }
-    // The crack racing down the bark at each end of the line, reddening as the bubble drifts.
-    if (lever) {
-      lines.forEach((angle, index) => {
-        const crack = this.#crack(index);
-        const out = this.#direction(angle);
-        crack.visible = true;
-        const depth = log.height * Math.max(progress, 0.04);
-        crack.scale.set(1, depth, 1);
-        crack.position.copy(this.#restingPlace(piece)).addScaledVector(out, log.radius + 0.005);
-        crack.position.y = log.height - depth / 2;
-        crack.rotation.set(0, Math.atan2(-out.z, out.x) + Math.PI / 2, 0);
-        (crack.material as THREE.MeshBasicMaterial).color
-          .setHex(COLORS.crack)
-          .lerp(new THREE.Color(COLORS.strain), Math.min(Math.abs(lever.offset), 1));
-      });
-      this.#driftFeedback();
-    }
+    head.arm.rotation.x = progress * LEVER_SWING;
+    if (!press) return;
+    // A crack runs down the bark at the end of every line, reddening as the bubble strays.
+    plan.lines.forEach((angle, index) => {
+      const crack = this.#crack(index);
+      const out = this.#direction(angle);
+      crack.visible = true;
+      const depth = log.height * Math.max(progress, 0.04);
+      crack.scale.set(1, depth, 1);
+      crack.position.copy(out).multiplyScalar(log.radius + 0.01);
+      crack.position.y = log.height - depth / 2;
+      crack.rotation.set(0, angle + Math.PI / 2, 0);
+      (crack.material as THREE.MeshBasicMaterial).color
+        .setHex(COLORS.crack)
+        .lerp(new THREE.Color(COLORS.strain), Math.min(Math.abs(press.offset), 1));
+    });
+    this.#pressureFeedback();
   }
 
-  #crack(index: number): THREE.Mesh {
-    const existing = this.#cracks[index];
-    if (existing) return existing;
-    const crack = new THREE.Mesh(
-      new THREE.PlaneGeometry(0.05, 1),
-      new THREE.MeshBasicMaterial({ color: COLORS.crack, side: THREE.DoubleSide }),
-    );
-    this.#cracks[index] = crack;
-    this.#logRoot.add(crack);
-    return crack;
-  }
-
-  /** While the crack drifts off straight: a creak and buzz ticks, stronger the further it's gone. */
-  #driftFeedback(): void {
-    const round = this.#round;
-    const phase = round?.phase;
-    if (!round || phase?.kind !== 'lever') return;
-    const drift = Math.abs(phase.lever.offset);
-    if (drift < 0.3 || round.now < this.#strainTickAt) return;
-    this.#strainTickAt = round.now + STRAIN_TICK;
-    const feel = this.#deps.feel.values;
-    this.#play(`creak-${1 + Math.floor(Math.random() * 3)}`, 0.3 + drift * 0.45, drift * 900);
-    this.#deps.haptics.pulse(feel.buzzCrackMs + Math.round(drift * 14));
+  /** Red through a good grain, green through rot, gold along a check; else plain. */
+  #lineColor(plan: Plan, angle: number): number {
+    const log = this.#log;
+    if (!log) return COLORS.guide;
+    const rules = this.#deps.game.data.riving;
+    const through = log.grains.filter((grain) => {
+      const arc = markArc(grain);
+      return inArc(angle, arc.start, arc.width);
+    });
+    const value = (kind: string) =>
+      rules.grainKinds.find((entry) => entry.id === kind)?.multiplier ?? 1;
+    if (through.some((grain) => value(grain.kind) > 1)) return COLORS.danger;
+    if (through.length > 0) return COLORS.good;
+    const tolerance = rules.checkTolerance * DEG;
+    const onCheck = log.checks.some((check) => {
+      const gap = normalize(angle - check * DEG);
+      return Math.min(gap, TAU - gap) <= tolerance;
+    });
+    return onCheck && plan.checkLines > 0 ? COLORS.gold : COLORS.guide;
   }
 
   /**
-   * At the start of a lever: which way the thin side looks on screen, so a sideways drag away
-   * from it pushes the bubble back.
+   * While pulling: pulses of buzz and creak that come faster the harder you push and the further
+   * the head has gone, so the pressure builds until it bursts.
    */
-  #findThinSide(): void {
+  #pressureFeedback(): void {
     const round = this.#round;
-    const piece = round?.current;
     const phase = round?.phase;
-    const log = this.#log;
-    if (!round || !piece || !log || phase?.kind !== 'lever') return;
-    const pieces = splitPiece(piece, phase.angle);
-    const [thin, thick] = thinSide(pieces) === 0 ? pieces : [pieces[1], pieces[0]];
-    const x = (part: Piece) =>
-      this.#facePoint(piece, part.start + part.width / 2, log.radius * 0.6).project(this.#camera).x;
-    this.#thinSign = x(thin) >= x(thick) ? 1 : -1;
+    if (!round || phase?.kind !== 'press') return;
+    const press = phase.press;
+    if (press.pressure <= 0 || round.now < this.#pulseAt) return;
+    const feel = this.#deps.feel.values;
+    const build = Math.min(press.pressure * 0.6 + press.progress * 0.4, 1);
+    this.#pulseAt =
+      round.now + feel.pressPulseSlow + (feel.pressPulseFast - feel.pressPulseSlow) * build;
+    this.#deps.haptics.pulse(feel.buzzPressMs + Math.round(build * 10));
+    this.#play(`creak-${1 + Math.floor(Math.random() * 3)}`, 0.15 + build * 0.4, build * 900);
+    this.#shake = Math.max(this.#shake, 0.012 * build * feel.shakeStrength);
   }
 
-  /** A point on a piece's top, `distance` from the pith at `angle`, in world space. */
-  #facePoint(piece: Piece, angle: number, distance: number): THREE.Vector3 {
-    const log = this.#log;
-    return this.#restingPlace(piece)
-      .addScaledVector(this.#direction(angle), distance)
-      .setY(BLOCK_HEIGHT + (log?.height ?? 1.6) + LIFT);
+  /** The burst's staves: arcing out of the log, tumbling, then lying in the heap. */
+  #updateStaves(): void {
+    const round = this.#round;
+    if (this.#flights.length === 0 || !round) return;
+    const matrix = new THREE.Matrix4();
+    const rotation = new THREE.Quaternion();
+    const scale = new THREE.Vector3(1, 1, 1);
+    const hidden = new THREE.Vector3(0, 0, 0);
+    this.#flights.forEach((flight, index) => {
+      const t = (round.now - flight.launchAt) / flight.seconds;
+      if (t < 0) {
+        matrix.compose(flight.from, rotation.identity(), hidden);
+      } else {
+        const done = Math.min(t, 1);
+        const position = flight.from.clone().lerp(flight.to, done);
+        position.y += flight.height * 4 * done * (1 - done);
+        const tumble = new THREE.Euler(
+          done < 1 ? flight.spin.x * done : 0,
+          flight.yaw + (done < 1 ? flight.spin.y * done : 0),
+          done < 1 ? flight.spin.z * done : 0,
+        );
+        rotation.setFromEuler(tumble);
+        matrix.compose(position, rotation, scale);
+      }
+      this.#staves.setMatrixAt(index, matrix);
+    });
+    this.#staves.instanceMatrix.needsUpdate = true;
   }
 
   #updateCamera(dt: number): void {
@@ -910,7 +965,7 @@ export class Rive3DView implements ScreenView {
     if (width === 0 || height === 0) return;
     this.#renderer.setSize(width, height);
     this.#camera.aspect = width / height;
-    // Narrow portrait screens: widen the view so the whole block and pile fit across.
+    // Narrow portrait screens: widen the view so the whole block and heap fit across.
     this.#camera.fov = width / height < 0.6 ? 46 : 40;
     this.#camera.updateProjectionMatrix();
   }
@@ -927,42 +982,40 @@ export class Rive3DView implements ScreenView {
       const round = this.#round;
       if (!round || this.#pointer) return;
       canvas.setPointerCapture(event.pointerId);
-      const phase = round.phase;
+      const angle = this.#angleAt(event.clientX, event.clientY);
       this.#pointer = {
         id: event.pointerId,
         startX: event.clientX,
         startY: event.clientY,
         base: this.#leverPixels,
-        // A finger keeps doing what it started: one levering on doesn't aim the next piece.
-        aiming: phase.kind === 'aim',
+        // A finger keeps doing what it started: one that was turning the cuts doesn't pull.
+        turn:
+          round.phase.kind === 'plan' && angle !== undefined
+            ? { from: round.rotation, at: angle }
+            : undefined,
       };
-      if (phase.kind === 'aim') {
-        const hit = this.#pieceAt(event.clientX, event.clientY);
-        if (hit && hit !== round.current?.id) round.select(hit);
-        else this.#aimAt(event.clientX, event.clientY);
-      }
     });
     canvas.addEventListener('pointermove', (event) => {
       const pointer = this.#pointer;
       const round = this.#round;
       if (!pointer || pointer.id !== event.pointerId || !round) return;
       const phase = round.phase;
-      if (phase.kind === 'aim') {
-        if (pointer.aiming) this.#aimAt(event.clientX, event.clientY);
-      } else if (phase.kind === 'lever' && !pointer.aiming) {
-        // Pulling the handle down runs the crack; sideways moves the bubble (lean against the
-        // pull, away from the thin side).
+      if (phase.kind === 'plan' && pointer.turn) {
+        // Turning: the cuts follow the finger round the pith.
+        const angle = this.#angleAt(event.clientX, event.clientY);
+        if (angle !== undefined) round.turnTo(pointer.turn.from + angle - pointer.turn.at);
+      } else if (phase.kind === 'press' && !pointer.turn) {
+        // Pulling down drives the head; sideways pushes the bubble (back to the middle).
         this.#leverPixels = pointer.base + Math.max(event.clientY - pointer.startY, 0);
         round.drag(this.#leverPixels);
-        const lean = (event.clientX - pointer.startX) / this.#deps.feel.values.leanTravel;
-        round.lean(lean * this.#thinSign);
+        round.lean((event.clientX - pointer.startX) / this.#deps.feel.values.leanTravel);
       }
     });
     const end = (event: PointerEvent) => {
       const pointer = this.#pointer;
       if (pointer?.id !== event.pointerId) return;
       // Where the finger lifted counts too: moves can be dropped on a fast flick.
-      if (this.#round?.phase.kind === 'lever' && !pointer.aiming) {
+      if (this.#round?.phase.kind === 'press' && !pointer.turn) {
         this.#leverPixels = pointer.base + Math.max(event.clientY - pointer.startY, 0);
         this.#round.drag(this.#leverPixels);
         this.#round.lean(0);
@@ -973,44 +1026,19 @@ export class Rive3DView implements ScreenView {
     canvas.addEventListener('pointercancel', end);
   }
 
-  /** The froe turns to point from the pith toward the finger, on the log's top. */
-  #aimAt(clientX: number, clientY: number): void {
-    const round = this.#round;
+  /** The angle round the pith (as the face measures it) of a point on the screen. */
+  #angleAt(clientX: number, clientY: number): number | undefined {
     const log = this.#log;
-    const piece = round?.current;
-    if (!round || !log || !piece) return;
-    const point = this.#onTop(clientX, clientY, log.height + BLOCK_HEIGHT);
-    if (!point) return;
-    const centre = this.#restingPlace(piece);
-    const angle = Math.atan2(-(point.z - centre.z), point.x - centre.x);
-    round.aimTo(normalize(angle));
-  }
-
-  #onTop(clientX: number, clientY: number, height: number): THREE.Vector3 | undefined {
+    if (!log) return undefined;
     const rect = this.#renderer.domElement.getBoundingClientRect();
     const ndc = new THREE.Vector2(
       ((clientX - rect.left) / rect.width) * 2 - 1,
       -((clientY - rect.top) / rect.height) * 2 + 1,
     );
     this.#raycaster.setFromCamera(ndc, this.#camera);
-    const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -height);
-    return this.#raycaster.ray.intersectPlane(plane, new THREE.Vector3()) ?? undefined;
-  }
-
-  /** The unfinished piece under the finger, if any. */
-  #pieceAt(clientX: number, clientY: number): string | undefined {
-    const rect = this.#renderer.domElement.getBoundingClientRect();
-    const ndc = new THREE.Vector2(
-      ((clientX - rect.left) / rect.width) * 2 - 1,
-      -((clientY - rect.top) / rect.height) * 2 + 1,
-    );
-    this.#raycaster.setFromCamera(ndc, this.#camera);
-    const meshes = [...this.#pieces.values()]
-      .filter((visual) => !visual.fate)
-      .map((visual) => visual.mesh);
-    const [hit] = this.#raycaster.intersectObjects(meshes, true);
-    const id: unknown = hit?.object.userData.piece;
-    return typeof id === 'string' ? id : undefined;
+    const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -(log.height + BLOCK_HEIGHT));
+    const point = this.#raycaster.ray.intersectPlane(plane, new THREE.Vector3());
+    return point ? Math.atan2(-point.z, point.x) : undefined;
   }
 
   // Overlay
@@ -1030,10 +1058,19 @@ export class Rive3DView implements ScreenView {
     };
     const root = el('div', 'rv-ui');
     const logName = el('div', 'rv-log-name');
-    const tally = el('div', 'rv-tally');
+    // The stars this plan would earn, and what each needs.
+    const stars = el('div', 'rv-stars');
+    const starRow = el('div', 'rv-star-row');
+    const starIcons = [0, 1, 2].map(() => el('span', 'rv-star', '★'));
+    starRow.append(...starIcons);
+    const starText = el('div', 'rv-star-text');
+    stars.append(starRow, starText);
     const hint = el('div', 'rv-hint');
-    // While aiming: a chip for each grain the line would cut, and what it does to the log.
-    const chips = el('div', 'rv-chips');
+    // The plan as a sum: staves × each grain kept (cut ones struck through) = what the log makes.
+    const sum = el('div', 'rv-sum');
+    const heads = el('div', 'rv-heads');
+    heads.setAttribute('role', 'radiogroup');
+    heads.setAttribute('aria-label', 'Splitting head');
     const flashes = el('div', 'rv-flashes');
     const controls = el('div', 'rv-controls');
     const left = button('↺', 'rv-button rv-nudge', () => {
@@ -1045,19 +1082,15 @@ export class Rive3DView implements ScreenView {
     const right = button('↻', 'rv-button rv-nudge', () => {
       this.#round?.nudge(-1);
     });
-    left.setAttribute('aria-label', 'Turn the froe counter-clockwise');
-    right.setAttribute('aria-label', 'Turn the froe clockwise');
-    const finish = button('Keep', 'rv-button rv-finish', () => {
-      this.#round?.finish();
-    });
-    controls.append(left, strike, right, finish);
-    // The bubble while levering: drifts toward the thin side; drag sideways to keep it centred.
+    left.setAttribute('aria-label', 'Turn the cuts counter-clockwise');
+    right.setAttribute('aria-label', 'Turn the cuts clockwise');
+    controls.append(left, strike, right);
+    // The bubble while pulling: wanders; drag sideways to keep it in the middle.
     const level = el('div', 'rv-level');
     const levelBubble = el('div', 'rv-level-bubble');
-    const levelThin = el('div', 'rv-level-thin', 'thin side');
-    level.append(levelThin, levelBubble);
-    const sideLabels = el('div', 'rv-sides');
+    level.append(levelBubble);
     const card = el('div', 'rv-card');
+    const cardStars = el('div', 'w3d-stars rv-card-stars');
     const cardTitle = el('div', 'rv-card-title');
     const cardText = el('div', 'rv-card-text');
     const cardButtons = el('div', 'rv-card-buttons');
@@ -1070,31 +1103,76 @@ export class Rive3DView implements ScreenView {
       this.#startLog();
     });
     cardButtons.append(leave, next);
-    card.append(cardTitle, cardText, cardButtons);
+    card.append(cardStars, cardTitle, cardText, cardButtons);
     card.hidden = true;
-    root.append(logName, tally, sideLabels, chips, hint, flashes, controls, level, card);
+    root.append(logName, stars, hint, sum, heads, flashes, controls, level, card);
     this.#element.append(root);
     return {
       root,
       logName,
-      tally,
+      stars,
+      starIcons,
+      starText,
       hint,
+      sum,
+      heads,
       flashes,
       controls,
-      left,
       strike,
-      right,
-      finish,
       level,
       levelBubble,
-      levelThin,
-      sideLabels,
-      chips,
       card,
+      cardStars,
       cardTitle,
       cardText,
       next,
     };
+  }
+
+  /**
+   * The head picker: a button per open head, each drawn as the cut it makes (a log end split
+   * that many ways), and the next head to open, locked, with the level it needs.
+   */
+  #buildPicker(level: number): void {
+    const round = this.#round;
+    if (!round) return;
+    const rules = this.#deps.game.data.riving;
+    const locked = rules.cutters
+      .filter((cutter) => cutter.level > level)
+      .sort((a, b) => a.level - b.level || a.count - b.count)[0];
+    const entries = [
+      ...round.heads.map((count) => ({ count, level: undefined as number | undefined })),
+      ...(locked ? [{ count: locked.count, level: locked.level }] : []),
+    ];
+    const buttons = entries.map(({ count, level: needs }) => {
+      const item = document.createElement('button');
+      item.type = 'button';
+      item.className = `rv-head${needs === undefined ? '' : ' rv-head-locked'}`;
+      item.dataset.count = String(count);
+      item.setAttribute('role', 'radio');
+      item.setAttribute(
+        'aria-label',
+        needs === undefined
+          ? `${String(count)}-way head`
+          : `${String(count)}-way head, opens at level ${String(needs)}`,
+      );
+      item.innerHTML = `${headIcon(count)}<span class="rv-head-label">${
+        needs === undefined ? String(count) : `Lv ${String(needs)}`
+      }</span>`;
+      item.addEventListener('click', () => {
+        if (needs !== undefined) {
+          this.#flash(`${String(count)}-way opens at Fletching ${String(needs)}`, 'warn');
+          return;
+        }
+        if (this.#round?.phase.kind !== 'plan' || this.#round.count === count) return;
+        this.#round.choose(count);
+        this.#lastHead = count;
+        this.#play('chop-1', 0.3, 700 - count * 20);
+        this.#deps.haptics.pulse(6);
+      });
+      return item;
+    });
+    this.#ui.heads.replaceChildren(...buttons);
   }
 
   #updateUi(): void {
@@ -1107,190 +1185,176 @@ export class Rive3DView implements ScreenView {
       document.body.dataset.riving = phase;
     }
     if (!round) {
-      ui.controls.hidden = true;
+      ui.controls.hidden = ui.heads.hidden = ui.sum.hidden = ui.stars.hidden = true;
+      ui.level.hidden = true;
       ui.hint.textContent = '';
-      ui.tally.textContent = '';
       return;
     }
-    const logs = this.#deps.game.inventory.count('log');
-    const multiplier = round.multiplierLeft;
-    const grains = multiplier === 1 ? '' : ` · grains ×${times(multiplier)}`;
-    const staves = round.staves + round.stavesReady;
-    ui.tally.textContent = `Staves ${String(staves)} / ${String(round.maxStaves)}${grains} · logs left ${String(logs)}`;
     const kind = round.phase.kind;
-    ui.controls.hidden = kind === 'done';
-    ui.left.hidden = ui.right.hidden = ui.strike.hidden = kind !== 'aim';
-    ui.finish.hidden = !round.canFinish;
-    ui.finish.textContent = `Keep ${String(staves)}`;
-    const preview = round.aimPreview;
-    this.#showSides(preview);
-    this.#showCuts(preview);
-    const pull = pullLevel(preview?.unevenness ?? 0);
+    const planning = kind === 'plan';
+    ui.controls.hidden = ui.heads.hidden = !planning;
+    ui.sum.hidden = kind === 'done';
+    ui.stars.hidden = kind === 'done';
+    const plan = round.plan;
+    this.#showPlan(plan);
     const practice = this.#log?.id === this.#deps.game.data.riving.tutorialLog.id;
     const hints: Record<string, string> = {
-      // The chips say what a line through a knot or a grain does.
-      aim:
-        preview?.throughKnot || (preview?.cut.length ?? 0) > 0
-          ? ''
-          : pull > 0
-            ? "Uneven: it'll pull to the thin side · lean against it"
-            : practice
-              ? 'A knot spoils any stave it touches: trim it off in a thin sliver'
-              : preview?.check
-                ? 'Along a check: it splits easier'
-                : 'Drag to aim anywhere · thinner staves = more staves, harder to hold',
+      plan: practice
+        ? 'Drag the log to turn the cuts: run one through the rot, keep the silver whole'
+        : 'Drag the log to turn the cuts · pick a head · then Strike',
       swing: '',
-      lever: 'Drag down to open it · slide sideways to keep the bubble in the middle',
+      press: 'Pull down · slide sideways to keep the bubble centred',
       done: '',
     };
     ui.hint.textContent = hints[kind] ?? '';
-    ui.hint.classList.toggle(
-      'rv-hint-warn',
-      kind === 'aim' &&
-        (pull >= 2 || (preview ? preview.multiplierAfter < preview.multiplierNow : false)),
-    );
     const phaseNow = round.phase;
-    const lever = phaseNow.kind === 'lever' ? phaseNow.lever : undefined;
-    ui.level.hidden = !lever;
-    if (lever) {
-      const x = Math.max(-1, Math.min(1, lever.offset)) * this.#thinSign;
+    const press = phaseNow.kind === 'press' ? phaseNow.press : undefined;
+    ui.level.hidden = !press;
+    if (press) {
+      const x = Math.max(-1, Math.min(1, press.offset));
       ui.levelBubble.style.left = `${String(50 + x * 45)}%`;
-      ui.levelBubble.classList.toggle('rv-level-danger', Math.abs(lever.offset) > 0.6);
-      ui.levelThin.classList.toggle('rv-level-thin-left', this.#thinSign < 0);
+      ui.levelBubble.classList.toggle('rv-level-danger', Math.abs(press.offset) > 0.6);
+      ui.level.style.setProperty('--pressure', press.pressure.toFixed(2));
     }
-    this.#element.dataset.crack = lever ? lever.progress.toFixed(2) : '';
-    this.#element.dataset.bubble = lever ? lever.offset.toFixed(2) : '';
-    this.#element.dataset.aim =
-      round.phase.kind === 'aim' ? String(Math.round(normalize(round.phase.angle) / DEG)) : '';
+    this.#element.dataset.head = String(round.count);
+    this.#element.dataset.turn = String(Math.round(round.rotation / DEG));
+    this.#element.dataset.worth = String(plan.worth);
+    this.#element.dataset.progress = press ? press.progress.toFixed(2) : '';
   }
 
   /**
-   * While aiming, the grains the line would cut: they glow on the log, and each gets a red chip on
-   * its own line, with the log's multiplier before and after under them. A line through a knot
-   * gets its own chip: the crack will wobble hard.
+   * The plan, redrawn when it changes: grains the cuts run through glow on the log, the sum
+   * shows staves × each grain (cut ones struck through) = the total, the stars light up for
+   * what it would earn, and the picker marks the head chosen.
    */
-  #showCuts(preview: AimPreview | undefined): void {
-    const log = this.#log;
-    const round = this.#round;
-    const cut = preview?.cut ?? [];
-    const key = preview
-      ? `${cut.join(',')}|${String(preview.multiplierAfter)}|${String(preview.throughKnot)}`
-      : '';
-    if (key === this.#aimedKey || !log || !round) return;
-    this.#aimedKey = key;
-    this.#drawFace(log, round.live, cut);
-    const kinds = this.#deps.game.data.riving.grainKinds;
-    const chips = cut.flatMap((index) => {
-      const kind = kinds.find((entry) => entry.id === log.grains[index]?.kind);
-      if (!kind) return [];
-      const chip = document.createElement('div');
-      chip.className = 'rv-chip rv-chip-bad';
-      chip.textContent = `Cuts the ${kind.name.toLowerCase()} ×${times(kind.multiplier)}`;
-      return [chip];
-    });
-    if (preview && cut.length > 0) {
-      const total = document.createElement('div');
-      total.className = 'rv-chip rv-chip-total';
-      total.textContent = `Log ×${times(preview.multiplierNow)} → ×${times(preview.multiplierAfter)}`;
-      chips.push(total);
-    }
-    if (preview?.throughKnot) {
-      const chip = document.createElement('div');
-      chip.className = 'rv-chip rv-chip-knot';
-      chip.textContent = 'Through a knot: wobbles hard';
-      chips.unshift(chip);
-    }
-    this.#ui.chips.replaceChildren(...chips);
-  }
-
-  /**
-   * While aiming: each side of the line labelled on the log with its width and what it'll be
-   * (a stave, kindling, or a slab to split again), and the thin side with how hard it'll pull.
-   */
-  #showSides(preview: AimPreview | undefined): void {
-    const ui = this.#ui;
-    const round = this.#round;
-    const piece = round?.current;
-    const log = this.#log;
-    if (!preview || !piece || !log) {
-      ui.sideLabels.hidden = true;
-      return;
-    }
-    ui.sideLabels.hidden = false;
-    const { clientWidth: width, clientHeight: height } = this.#element;
-    const names = { stave: 'stave', kindling: 'kindling', slab: 'split again' };
-    preview.pieces.forEach((part, index) => {
-      let label = this.#sideLabels[index];
-      if (!label) {
-        label = document.createElement('div');
-        label.className = 'rv-side';
-        ui.sideLabels.append(label);
-        this.#sideLabels[index] = label;
-      }
-      const size = preview.sizes[index] ?? 'slab';
-      const pull = index === preview.thin ? pullLevel(preview.unevenness) : 0;
-      const knotted = preview.knotted[index] ?? false;
-      // A stave-sized piece touching a knot won't count; a slab with one needs the knot trimmed.
-      const name =
-        size === 'stave' && knotted
-          ? 'knotted'
-          : size === 'slab' && knotted
-            ? 'split again · knot'
-            : names[size];
-      label.textContent = `${String(Math.round(part.width / DEG))}° ${name}${
-        pull > 0 ? ` ${'›'.repeat(pull)}` : ''
-      }`;
-      label.dataset.size = size === 'stave' && knotted ? 'knotted' : size;
-      const at = this.#facePoint(piece, part.start + part.width / 2, log.radius * 0.55).project(
-        this.#camera,
-      );
-      label.style.left = `${String(((at.x + 1) / 2) * width)}px`;
-      label.style.top = `${String(((1 - at.y) / 2) * height)}px`;
-    });
-  }
-
-  /**
-   * The end card, as the sum it is: the staves kept, times each grain that counted, equals what
-   * goes into the warchest. Grains cut or lost with a piece are listed under it.
-   */
-  #showCard(staves: number, kept: number[], multiplier: number, worth: number): void {
+  #showPlan(plan: Plan): void {
     const round = this.#round;
     const log = this.#log;
     if (!round || !log) return;
+    const key = `${String(plan.count)}|${plan.cut.join(',')}|${String(plan.staves)}|${String(
+      plan.worth,
+    )}|${round.phase.kind === 'plan' ? 'plan' : 'go'}`;
+    if (key === this.#planKey) return;
+    const worthBefore = Number(this.#planKey.split('|')[3] ?? -1);
+    this.#planKey = key;
     const ui = this.#ui;
-    const rules = this.#deps.game.data.riving;
-    const kindOf = (index: number) =>
-      rules.grainKinds.find((entry) => entry.id === log.grains[index]?.kind);
-    const factors = kept.flatMap((index) => {
-      const kind = kindOf(index);
+    if (round.phase.kind === 'plan') this.#drawFace(log, plan.cut, []);
+    for (const item of ui.heads.querySelectorAll<HTMLElement>('.rv-head')) {
+      const on = item.dataset.count === String(plan.count);
+      if (on && !item.classList.contains('rv-head-on')) {
+        item.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+      }
+      item.classList.toggle('rv-head-on', on);
+      item.setAttribute('aria-checked', String(on));
+    }
+    // The sum: kept grains multiply; cut ones are struck through (green for rot, red for good).
+    const kinds = this.#deps.game.data.riving.grainKinds;
+    const parts: HTMLElement[] = [];
+    const span = (className: string, text: string) => {
+      const part = document.createElement('span');
+      part.className = className;
+      part.textContent = text;
+      return part;
+    };
+    parts.push(span('rv-sum-staves', `${String(plan.staves)} staves`));
+    const kept = plan.kept.map((entry) => entry.grain);
+    log.grains.forEach((grain, index) => {
+      const kind = kinds.find((entry) => entry.id === grain.kind);
+      if (!kind) return;
+      const isCut = plan.cut.includes(index);
+      if (!isCut && !kept.includes(index)) return;
+      const tone = isCut ? (kind.multiplier < 1 ? ' rv-sum-cut-good' : ' rv-sum-cut-bad') : '';
+      parts.push(span(`rv-sum-factor rv-sum-${grain.kind}${tone}`, `×${times(kind.multiplier)}`));
+    });
+    parts.push(span('rv-sum-equals', '='));
+    const total = span('rv-sum-total', String(plan.worth));
+    if (worthBefore >= 0 && plan.worth !== worthBefore) {
+      total.classList.add(plan.worth > worthBefore ? 'rv-sum-up' : 'rv-sum-down');
+    }
+    parts.push(total);
+    const product = kept.reduce(
+      (value, index) =>
+        value * (kinds.find((entry) => entry.id === log.grains[index]?.kind)?.multiplier ?? 1),
+      1,
+    );
+    if (product > plan.multiplier) parts.push(span('rv-sum-cap', `cap ×${times(plan.multiplier)}`));
+    ui.sum.replaceChildren(...parts);
+    // Stars for this plan if pulled cleanly.
+    const stars = starsFor(this.#deps.game.data.riving, plan.worth, round.best.worth);
+    ui.starIcons.forEach((icon, index) => {
+      const on = index < stars;
+      icon.classList.toggle('rv-star-on', on);
+      if (on && index >= this.#starsShown) {
+        icon.classList.remove('rv-star-pop');
+        // Reading the layout restarts the pop.
+        icon.getBoundingClientRect();
+        icon.classList.add('rv-star-pop');
+      }
+    });
+    if (stars > this.#starsShown && round.phase.kind === 'plan') {
+      this.#sfx.play('star', 0.3, 200 + stars * 200);
+    }
+    this.#starsShown = stars;
+    const targets = round.starTargets;
+    const next = targets.find((target) => target > plan.worth);
+    ui.starText.textContent =
+      next === undefined
+        ? `${String(plan.worth)} · the best split!`
+        : `${String(plan.worth)} · next ★ at ${String(next)}`;
+  }
+
+  /**
+   * The end card: the stars, what went into the warchest, the sum, any bonus, and the best this
+   * log could have made.
+   */
+  #showCard(event: Extract<RivingEvent, { type: 'done' }>): void {
+    const log = this.#log;
+    if (!log) return;
+    const ui = this.#ui;
+    const { plan, best, stars, bonus, banked, lost } = event;
+    const kinds = this.#deps.game.data.riving.grainKinds;
+    ui.cardStars.replaceChildren(
+      ...[0, 1, 2].map((index) => {
+        const star = document.createElement('span');
+        star.className = `w3d-star ${index < stars ? 'w3d-star-on' : 'w3d-star-off'}`;
+        star.textContent = '★';
+        star.style.animationDelay = `${String(index * 0.18)}s`;
+        return star;
+      }),
+    );
+    window.setTimeout(() => {
+      for (let index = 0; index < stars; index++) {
+        window.setTimeout(() => {
+          this.#sfx.play('star', 0.6, index * 250);
+        }, index * 180);
+      }
+    }, 50);
+    const factors = plan.kept.flatMap((entry) => {
+      const kind = kinds.find((value) => value.id === log.grains[entry.grain]?.kind);
       return kind ? [`×${times(kind.multiplier)}`] : [];
     });
-    const product = kept.reduce((total, index) => total * (kindOf(index)?.multiplier ?? 1), 1);
-    const sum = [`${String(staves)} stave${staves === 1 ? '' : 's'}`, ...factors].join(' ');
-    const capped = product > multiplier ? ` (capped at ×${times(multiplier)})` : '';
-    const runouts = round.finished.filter((entry) => entry.fate === 'runout').length;
-    const kindling = round.finished.filter((entry) => entry.fate === 'kindling').length;
-    const notes: string[] = [];
-    if (runouts > 0) notes.push(`${String(runouts)} runout${runouts === 1 ? '' : 's'}`);
-    const knotted = round.finished.filter((entry) => entry.fate === 'knotted').length;
-    if (knotted > 0) notes.push(`${String(knotted)} knotted`);
-    if (kindling > 0) notes.push(`${String(kindling)} kindling`);
-    log.grains.forEach((_, index) => {
-      if (kept.includes(index)) return;
-      const kind = kindOf(index);
-      if (kind) notes.push(`${kind.name} ${round.live.has(index) ? 'lost' : 'cut'}`);
-    });
-    const perfect = staves === round.maxStaves;
-    ui.cardTitle.textContent = `${perfect ? 'Perfect log! ' : ''}${String(worth)} staves`;
-    ui.cardText.textContent = `${sum} = ${String(worth)}${capped}${
-      notes.length > 0 ? `\n${notes.join(' · ')}` : ''
-    }`;
+    const sum = [`${String(plan.staves)} stave${plan.staves === 1 ? '' : 's'}`, ...factors].join(
+      ' ',
+    );
+    const lines = [`${sum} = ${String(plan.worth)}`];
+    if (bonus > 0) lines.push(`${'★'.repeat(stars)} bonus +${String(bonus)}`);
+    if (lost.length > 0) {
+      lines.push(`${String(lost.length)} piece${lost.length === 1 ? '' : 's'} split off`);
+    }
+    lines.push(
+      plan.worth >= best.worth && lost.length === 0
+        ? 'The best split there was!'
+        : `Best: ${String(best.worth)} with the ${String(best.count)}-way`,
+    );
+    ui.cardTitle.textContent = `${String(banked)} stave${banked === 1 ? '' : 's'}`;
+    ui.cardText.textContent = lines.join('\n');
     ui.next.hidden = false;
     ui.card.hidden = false;
   }
 
   #showNoLogs(): void {
     const ui = this.#ui;
+    ui.cardStars.replaceChildren();
     ui.cardTitle.textContent = 'No logs';
     ui.cardText.textContent = 'The warchest has no logs to rive. Fell some at the tree line.';
     ui.next.hidden = true;
@@ -1307,6 +1371,17 @@ export class Rive3DView implements ScreenView {
       flash.remove();
     }, 1100);
   }
+}
+
+/** A head's icon: a log end split `count` ways, as an inline SVG. */
+function headIcon(count: number): string {
+  const lines = Array.from({ length: count }, (_, index) => {
+    const angle = (index * TAU) / count - Math.PI / 2;
+    const x = (20 + Math.cos(angle) * 17).toFixed(2);
+    const y = (20 + Math.sin(angle) * 17).toFixed(2);
+    return `<line x1="20" y1="20" x2="${x}" y2="${y}"/>`;
+  }).join('');
+  return `<svg class="rv-head-icon" viewBox="0 0 40 40" aria-hidden="true"><circle class="rv-head-bark" cx="20" cy="20" r="18"/><circle class="rv-head-wood" cx="20" cy="20" r="15.5"/><circle class="rv-head-ring" cx="20" cy="20" r="10"/><g class="rv-head-cuts">${lines}</g><circle class="rv-head-hub" cx="20" cy="20" r="3"/></svg>`;
 }
 
 /** A multiplier or bonus for show: ½ for a half, whole numbers as they are. */
@@ -1326,12 +1401,4 @@ function times(value: number): string {
   const fraction = eighths[Math.round(part * 8)];
   if (!fraction || Math.abs(part * 8 - Math.round(part * 8)) > 1e-6) return value.toFixed(2);
   return whole > 0 ? `${String(whole)}${fraction}` : fraction;
-}
-
-/** How hard a split will pull, for the guide: 0 (even) to 3. */
-function pullLevel(unevenness: number): number {
-  if (unevenness < 0.08) return 0;
-  if (unevenness < 0.25) return 1;
-  if (unevenness < 0.45) return 2;
-  return 3;
 }

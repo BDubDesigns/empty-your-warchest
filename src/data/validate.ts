@@ -109,11 +109,18 @@ function checkReferences(data: GameData, ctx: z.RefinementCtx): void {
   if (!data.recipes.some((recipe) => recipe.id === riving.recipe)) {
     issue(['riving', 'recipe'], `Unknown recipe "${riving.recipe}"`);
   }
-  if (riving.stave.min > riving.stave.max) {
-    issue(['riving', 'stave'], 'min must not be more than max');
+  const counts = new Set<number>();
+  riving.cutters.forEach((cutter, index) => {
+    if (counts.has(cutter.count)) {
+      issue(['riving', 'cutters', index, 'count'], `Duplicate head ${String(cutter.count)}`);
+    }
+    counts.add(cutter.count);
+  });
+  if (!riving.cutters.some((cutter) => cutter.level === 1)) {
+    issue(['riving', 'cutters'], 'At least one head must be open from level 1');
   }
-  if (riving.stave.max < 45) {
-    issue(['riving', 'stave', 'max'], 'An even eighth (45°) has to be a stave');
+  if (riving.stars.one > riving.stars.two || riving.stars.two > riving.stars.three) {
+    issue(['riving', 'stars'], 'More stars must not need less');
   }
   const kinds = new Set<string>();
   riving.grainKinds.forEach((kind, index) => {
