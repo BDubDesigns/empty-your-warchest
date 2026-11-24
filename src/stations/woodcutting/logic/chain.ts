@@ -4,6 +4,14 @@ import type { Clearing, ClearingTree } from '../../../data';
 const CABIN_STEP = 2;
 
 type Boulder = Clearing['boulders'][number];
+
+/** How boulders roll (from the feel numbers, so they can be tuned live). */
+export interface BoulderRules {
+  /** How far one rolls when knocked, in clearing units. */
+  roll: number;
+  /** Share of the roll left that it keeps after each bounce off the fence. */
+  bounce: number;
+}
 type Cabin = NonNullable<Clearing['cabin']>;
 
 export interface Point {
@@ -276,7 +284,7 @@ interface Leg {
 /**
  * The legs a boulder of radius `r` rolls with nothing in its way: straight on for `length`, and
  * off the fence at the clearing's edge like a cushion (angle in = angle out), keeping
- * `boulderBounce` of the roll left each time.
+ * `keep` of the roll left each time.
  */
 function fenceLegs(
   clearing: Clearing,
@@ -284,6 +292,7 @@ function fenceLegs(
   angle: number,
   length: number,
   r: number,
+  keep: number,
 ): Leg[] {
   const legs: Leg[] = [];
   let at = { ...from };
@@ -291,7 +300,7 @@ function fenceLegs(
   let dy = Math.sin(angle);
   let left = length;
   let start = 0;
-  for (let bounce = 0; bounce <= MAX_BOUNCES && left > 1e-6; bounce++) {
+  for (let bounces = 0; bounces <= MAX_BOUNCES && left > 1e-6; bounces++) {
     let wall = left;
     let flipX = false;
     let flipY = false;
@@ -317,7 +326,7 @@ function fenceLegs(
     if (!flipX && !flipY) break;
     at = { x: at.x + dx * wall, y: at.y + dy * wall };
     start += wall;
-    left = (left - wall) * clearing.boulderBounce;
+    left = (left - wall) * keep;
     if (flipX) dx = -dx;
     if (flipY) dy = -dy;
   }
@@ -337,6 +346,7 @@ export function rollBoulder(
   angle: number,
   planned: number,
   others: readonly Boulder[],
+  bounce: number,
 ): {
   path: Point[];
   to: Point;
@@ -348,7 +358,7 @@ export function rollBoulder(
   next?: { boulder: Boulder; at: number; angle: number; left: number };
 } {
   const r = boulder.radius;
-  const legs = fenceLegs(clearing, boulder, angle, planned, r);
+  const legs = fenceLegs(clearing, boulder, angle, planned, r, bounce);
   const last = legs[legs.length - 1];
   const natural = last ? last.start + last.length : 0;
   const path: Point[] = [{ x: boulder.x, y: boulder.y }];
@@ -467,6 +477,7 @@ export function resolveFall(
   standing: ReadonlySet<string>,
   startId: string,
   angle: number,
+  rules: BoulderRules,
 ): Chain {
   const start = clearing.trees.find((tree) => tree.id === startId);
   if (!start || !standing.has(startId)) throw new Error(`Tree "${startId}" isn't standing`);
@@ -511,9 +522,15 @@ export function resolveFall(
     depth: number,
   ): Mover => {
     resting.delete(boulder.id);
-    const result = rollBoulder(clearing, stillStanding, boulder, angle, planned, [
-      ...resting.values(),
-    ]);
+    const result = rollBoulder(
+      clearing,
+      stillStanding,
+      boulder,
+      angle,
+      planned,
+      [...resting.values()],
+      rules.bounce,
+    );
     const entry: BoulderRoll = {
       boulder: boulder.id,
       from: { x: boulder.x, y: boulder.y },
@@ -565,7 +582,7 @@ export function resolveFall(
             if (!boulder) continue;
             const by = { hitBy: mover.tree.id, byBoulder: false, hitAt: item.at };
             const knock = boulderKnock(item.angle, item.boulder.offset);
-            next.push(roll(boulder, knock, clearing.boulderRoll, by, depth));
+            next.push(roll(boulder, knock, rules.roll, by, depth));
           }
         }
       } else {
@@ -594,8 +611,9 @@ export function resolveChain(
   standing: ReadonlySet<string>,
   startId: string,
   angle: number,
+  rules: BoulderRules,
 ): FallStep[] {
-  return resolveFall(clearing, standing, startId, angle).steps;
+  return resolveFall(clearing, standing, startId, angle, rules).steps;
 }
 
 export interface FallPreview {
@@ -623,6 +641,7 @@ export function previewFall(
   standing: ReadonlySet<string>,
   tree: ClearingTree,
   angle: number,
+  rules: BoulderRules,
 ): FallPreview {
   const fallen = fallPath(clearing, standing, tree, angle);
   const { path } = fallen;
@@ -642,8 +661,9 @@ export function previewFall(
       left,
       boulder.boulder,
       boulderKnock(angle, boulder.offset),
-      clearing.boulderRoll,
+      rules.roll,
       clearing.boulders.filter((other) => other.id !== boulder.boulder.id),
+      rules.bounce,
     );
     return {
       ghost: contact,

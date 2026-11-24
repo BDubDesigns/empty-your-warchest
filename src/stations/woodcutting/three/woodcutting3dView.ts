@@ -886,7 +886,8 @@ export class Woodcutting3DView implements ScreenView {
     trunkAngles(tree, phase.angle).forEach((trunk, index) => {
       const set = sets[index];
       if (!set) return;
-      const preview = previewFall(this.#round.clearing, this.#round.standing, tree, trunk);
+      const round = this.#round;
+      const preview = previewFall(round.clearing, round.standing, tree, trunk, round.boulderRules);
       // Red: what the guide shows reaches the cabin.
       const tint = (mesh: THREE.Mesh, color: number) => {
         (mesh.material as THREE.MeshBasicMaterial).color.setHex(

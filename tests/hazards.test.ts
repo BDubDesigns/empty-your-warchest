@@ -17,6 +17,7 @@ const RIGHT = 0;
 const DOWN = Math.PI / 2;
 
 /** Canopies of radius 20 from the base up, trunks of 5, boulders of 10 that roll 150. */
+const ROLL = { roll: 150, bounce: 0.5 };
 function clearing(
   trees: Clearing['trees'],
   hazards: Partial<Pick<Clearing, 'boulders' | 'cabin'>> = {},
@@ -28,8 +29,6 @@ function clearing(
     canopyRadius: 20,
     trunkRadius: 5,
     canopyStart: 0,
-    boulderRoll: 150,
-    boulderBounce: 0.5,
     trees,
     boulders: [],
     ...hazards,
@@ -51,7 +50,7 @@ describe('boulders', () => {
 
   it('a falling tree knocks a boulder rolling, and it knocks over trees past the tree’s reach', () => {
     const c = clearing(trees, { boulders: [boulder] });
-    const chain = resolveFall(c, all(c), 'a', RIGHT);
+    const chain = resolveFall(c, all(c), 'a', RIGHT, ROLL);
     expect(chain.rolls).toHaveLength(1);
     const [roll] = chain.rolls;
     expect(roll?.boulder).toBe('b');
@@ -70,7 +69,7 @@ describe('boulders', () => {
     const c = clearing([{ id: 'a', x: 100, y: 100, height: 60 }], {
       boulders: [{ id: 'b', x: 135, y: 100, radius: 10 }],
     });
-    const rollAt = (angle: number) => resolveFall(c, all(c), 'a', angle).rolls[0]?.angle;
+    const rollAt = (angle: number) => resolveFall(c, all(c), 'a', angle, ROLL).rolls[0]?.angle;
     const straight = rollAt(RIGHT);
     expect(straight).toBeCloseTo(RIGHT, 5);
     const nudged = rollAt(RIGHT - 0.2);
@@ -90,7 +89,7 @@ describe('boulders', () => {
     const c = clearing([{ id: 'a', x: 50, y: 400, height: 60 }], {
       boulders: [{ id: 'b', x: 450, y: 400, radius: 10 }],
     });
-    const result = rollBoulder(c, new Set(), c.boulders[0] as never, Math.PI / 4, 150, []);
+    const result = rollBoulder(c, new Set(), c.boulders[0] as never, Math.PI / 4, 150, [], 0.5);
     // It reaches the right-hand fence after ~57, bounces back left, keeping half what's left.
     expect(result.path).toHaveLength(3);
     const [start, wall, end] = result.path;
@@ -105,7 +104,7 @@ describe('boulders', () => {
     const c = clearing([{ id: 'a', x: 100, y: 100, height: 60 }], {
       boulders: [boulder, { id: 'b2', x: 220, y: 100, radius: 10 }],
     });
-    const chain = resolveFall(c, all(c), 'a', RIGHT);
+    const chain = resolveFall(c, all(c), 'a', RIGHT, ROLL);
     expect(chain.rolls.map((roll) => roll.boulder)).toEqual(['b', 'b2']);
     expect(chain.rolls[0]?.to.x).toBeCloseTo(200, 0);
     expect(chain.rolls[1]?.byBoulder).toBe(true);
@@ -116,15 +115,15 @@ describe('boulders', () => {
       boulders: [boulder],
       cabin: { x: 230, y: 100, width: 20, depth: 60, height: 30 },
     });
-    const chain = resolveFall(c, all(c), 'a', RIGHT);
+    const chain = resolveFall(c, all(c), 'a', RIGHT, ROLL);
     expect(chain.rolls[0]?.cabin).toBe(true);
     expect(hitsCabin(chain)).toBe(true);
-    expect(previewFall(c, all(c), trees[0] as never, RIGHT).danger).toBe(true);
+    expect(previewFall(c, all(c), trees[0] as never, RIGHT, ROLL).danger).toBe(true);
   });
 
   it('the aim guide shows the boulder it would set rolling and where it stops', () => {
     const c = clearing(trees, { boulders: [boulder] });
-    const preview = previewFall(c, all(c), trees[0] as never, RIGHT);
+    const preview = previewFall(c, all(c), trees[0] as never, RIGHT, ROLL);
     expect(preview.roll?.boulder).toBe('b');
     expect(preview.roll?.path.at(-1)?.x).toBeCloseTo(300, 0);
     expect(preview.danger).toBe(false);
@@ -147,18 +146,18 @@ describe('the cabin', () => {
 
   it('stops a tree that reaches it, and the chain is marked as a crash', () => {
     const c = clearing(trees, { cabin });
-    const chain = resolveFall(c, all(c), 'a', RIGHT);
+    const chain = resolveFall(c, all(c), 'a', RIGHT, ROLL);
     expect(ids(chain.steps)).toEqual(['a']);
     expect(chain.steps[0]?.paths[0]?.cabin).toBeDefined();
     expect(hitsCabin(chain)).toBe(true);
-    expect(hitsCabin(resolveFall(c, all(c), 'a', DOWN))).toBe(false);
+    expect(hitsCabin(resolveFall(c, all(c), 'a', DOWN, ROLL))).toBe(false);
   });
 
   it('turns the aim guide red', () => {
     const c = clearing(trees, { cabin });
     const a = trees[0] as Clearing['trees'][number];
-    expect(previewFall(c, all(c), a, RIGHT).danger).toBe(true);
-    expect(previewFall(c, all(c), a, DOWN).danger).toBe(false);
+    expect(previewFall(c, all(c), a, RIGHT, ROLL).danger).toBe(true);
+    expect(previewFall(c, all(c), a, DOWN, ROLL).danger).toBe(false);
   });
 
   it('loses the chain: no logs banked, and the round ends', async () => {
@@ -218,7 +217,7 @@ describe('a round with a boulder', () => {
     );
     const { logger } = testLogger();
     const events: RoundEvent[] = [];
-    const feel = data.woodcutting.feel;
+    const feel = { ...data.woodcutting.feel, boulderRoll: ROLL.roll, boulderBounce: ROLL.bounce };
     const round = new WoodcuttingRound(
       c,
       {

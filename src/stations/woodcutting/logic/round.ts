@@ -6,6 +6,7 @@ import {
   hitsCabin,
   resolveFall,
   type BoulderRoll,
+  type BoulderRules,
   type Chain,
   type FallStep,
   type Point,
@@ -165,6 +166,12 @@ export class WoodcuttingRound {
 
   get feel(): WoodcuttingFeel {
     return this.#hooks.feel();
+  }
+
+  /** How boulders roll right now (live tuning applies at once). */
+  get boulderRules(): BoulderRules {
+    const feel = this.feel;
+    return { roll: feel.boulderRoll, bounce: feel.boulderBounce };
   }
 
   /** 0–3 stars for the logs banked so far against par (0 without a par). */
@@ -427,7 +434,7 @@ export class WoodcuttingRound {
 
   #fell(treeId: string, angle: number): void {
     // The chain is decided here, before anything moves; views only play it back.
-    const chain = resolveFall(this.clearing, this.standing, treeId, angle);
+    const chain = resolveFall(this.clearing, this.standing, treeId, angle, this.boulderRules);
     const { steps, rolls } = chain;
     const feel = this.feel;
     const speed = feel.boulderSpeed;

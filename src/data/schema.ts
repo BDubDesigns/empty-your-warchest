@@ -143,15 +143,12 @@ const clearingSchema = z.object({
   /**
    * Boulders: a falling tree that touches one (its trunk or canopy, lying down) knocks it rolling
    * by the pool cut rule: dead on straight along the fall, a half hit 30° off to its side, an edge
-   * clipped nearly sideways.
-   * It rolls `boulderRoll` units, knocking over every tree it runs into the same way, bounces off
-   * the fence around the clearing (keeping `boulderBounce` of the roll left each time), and stops
-   * early against the cabin (a crash) or another boulder (which it sets rolling). It stays where
-   * it stops.
+   * clipped nearly sideways. It rolls `boulderRoll` (feel) units, knocking over every tree it runs
+   * into the same way, bounces off the fence around the clearing (keeping `boulderBounce` of the
+   * roll left each time), and stops early against the cabin (a crash) or another boulder (which it
+   * sets rolling). It stays where it stops.
    */
   boulders: z.array(z.object({ id, x: nonNegative, y: nonNegative, radius: positive })).default([]),
-  boulderRoll: positive,
-  boulderBounce: fraction,
   /**
    * The cabin: a falling tree that touches it crashes into it and stops there. The chain's logs
    * are lost and the round ends. A box centred on (x, y), `width` across and `depth` down the
@@ -200,8 +197,14 @@ export const woodcuttingFeelSchema = z.object({
   fallEase: z.number().min(1),
   /** Extra pause before a hit tree starts to fall, so the cascade ripples. */
   chainDelay: nonNegative,
-  /** How fast (clearing units per second) a boulder sets off when knocked; it slows to a stop. */
+  /**
+   * Boulders: how far one rolls when knocked (clearing units), how fast it sets off (units per
+   * second; it slows evenly to a stop), and how much of the roll left it keeps after each bounce
+   * off the fence.
+   */
+  boulderRoll: positive,
   boulderSpeed: positive,
+  boulderBounce: fraction,
   /** Multiplier for every screen shake. 0 turns shake off. */
   shakeStrength: nonNegative,
   /** How long the game freezes on a perfect chop (hit-stop), in milliseconds. */

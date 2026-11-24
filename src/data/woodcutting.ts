@@ -39,10 +39,7 @@ export const woodcutting = {
         { id: 'd2', x: 170, y: 300, height: 90 },
         { id: 'd3', x: 300, y: 610, height: 90 },
       ],
-      // The tutorial has no hazards; random clearings bring the cabin and boulders. A boulder rolls
-      // about a tree and a half, and keeps 80% of what's left each time it bounces off the fence.
-      boulderRoll: 160,
-      boulderBounce: 0.8,
+      // The tutorial has no hazards; random clearings bring the cabin and boulders.
     },
   ],
   tutorialClearing: 'first_clearing',
@@ -88,7 +85,10 @@ export const woodcutting = {
     fallSeconds: 1.5,
     fallEase: 2.5,
     chainDelay: 0.22,
-    boulderSpeed: 220,
+    // About 2.4 tree heights, most of the clearing's width, over about 3 s; 80% kept per bounce.
+    boulderRoll: 260,
+    boulderSpeed: 180,
+    boulderBounce: 0.8,
     shakeStrength: 1,
     hitStopMs: 70,
     buzzChopMs: 10,

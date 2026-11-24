@@ -1,6 +1,6 @@
 import { Rng } from '../../../core';
 import type { Clearing, ClearingTree, GameData } from '../../../data';
-import { afterChain, hitsCabin, resolveFall } from './chain';
+import { afterChain, hitsCabin, resolveFall, type BoulderRules } from './chain';
 import { chainLogs } from './score';
 import { forestAt } from './unlocks';
 
@@ -31,13 +31,14 @@ export function bestChain(
   clearing: Clearing,
   standing: ReadonlySet<string>,
   samples: number,
+  rules: BoulderRules,
 ): BestChain | undefined {
   let best: BestChain | undefined;
   for (const tree of clearing.trees) {
     if (!standing.has(tree.id)) continue;
     const angles = Array.from({ length: samples }, (_, index) => (index / samples) * Math.PI * 2);
     const lengths = angles.map((angle) => {
-      const chain = resolveFall(clearing, standing, tree.id, angle);
+      const chain = resolveFall(clearing, standing, tree.id, angle, rules);
       return hitsCabin(chain) ? 0 : chain.steps.length;
     });
     lengths.forEach((length, index) => {
@@ -56,21 +57,33 @@ export function bestChain(
  * Par: the logs a solid player banks by always taking the biggest chain they can find. Not the
  * true best (that would need every felling order), so it's reachable and can be beaten.
  */
-export function clearingPar(clearing: Clearing, exponent: number, samples: number): number {
+export function clearingPar(
+  clearing: Clearing,
+  exponent: number,
+  samples: number,
+  rules: BoulderRules,
+): number {
   const standing = new Set(clearing.trees.map((tree) => tree.id));
   // Boulders stay where they roll, so each chain plays on the clearing the last one left.
   let field = clearing;
   let logs = 0;
   while (standing.size > 0) {
-    const best = bestChain(field, standing, samples);
+    const best = bestChain(field, standing, samples, rules);
     // Whatever's left can only reach the cabin: a solid player leaves it standing.
     if (!best || best.length === 0) break;
-    const chain = resolveFall(field, standing, best.tree, best.angle);
+    const chain = resolveFall(field, standing, best.tree, best.angle, rules);
     for (const step of chain.steps) standing.delete(step.tree);
     field = afterChain(field, chain);
     logs += chainLogs(chain.steps.length, exponent);
   }
   return logs;
+}
+
+/** How boulders roll, from the feel numbers in data (live tuning doesn't change par). */
+export function boulderRules(woodcutting: {
+  feel: Pick<WoodcuttingData['feel'], 'boulderRoll' | 'boulderBounce'>;
+}): BoulderRules {
+  return { roll: woodcutting.feel.boulderRoll, bounce: woodcutting.feel.boulderBounce };
 }
 
 /** The hand-made first clearing, with its par. */
@@ -79,7 +92,7 @@ export function tutorialPlan(woodcutting: WoodcuttingData): ClearingPlan {
   const { chainExponent, generator } = woodcutting;
   return {
     clearing,
-    par: clearingPar(clearing, chainExponent, generator.aimSamples),
+    par: clearingPar(clearing, chainExponent, generator.aimSamples, boulderRules(woodcutting)),
     tutorial: true,
   };
 }
@@ -98,18 +111,19 @@ export function generateClearing(
   const { generator, chainExponent } = woodcutting;
   const rng = new Rng(seed);
   const forest = forestAt(woodcutting, level);
+  const rules = boulderRules(woodcutting);
   let chosen: { clearing: Clearing; chain: number } | undefined;
   for (let attempt = 0; attempt < generator.attempts; attempt++) {
     const clearing = layout(woodcutting, forest, rng, `random-${String(seed)}`);
     const all = new Set(clearing.trees.map((tree) => tree.id));
-    const chain = bestChain(clearing, all, generator.aimSamples)?.length ?? 0;
+    const chain = bestChain(clearing, all, generator.aimSamples, rules)?.length ?? 0;
     if (!chosen || chain > chosen.chain) chosen = { clearing, chain };
     if (chain >= generator.minBestChain) break;
   }
   if (!chosen) throw new Error('The clearing generator made no attempts');
   return {
     clearing: chosen.clearing,
-    par: clearingPar(chosen.clearing, chainExponent, generator.aimSamples),
+    par: clearingPar(chosen.clearing, chainExponent, generator.aimSamples, rules),
     seed,
     tutorial: false,
   };
