@@ -2,6 +2,10 @@ import { expect, test, type Page } from '@playwright/test';
 import { riving } from '../src/data/riving';
 import { stations } from '../src/data/stations';
 
+// CI draws 3D in software: a pixel ratio of 1 keeps it fast enough (this tests the flow, not the
+// pixels).
+test.use({ deviceScaleFactor: 1 });
+
 const bench = stations.find((station) => station.mechanic === 'rive');
 const feel = riving.feel;
 
