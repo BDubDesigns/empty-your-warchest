@@ -85,6 +85,7 @@ const COLORS = {
   crack: 0x1d120a,
   strain: 0xe0503c,
   pull: [0xf2ead3, 0xf0cd5c, 0xf09a3c, 0xe0503c],
+  good: 0x7fd65a,
   spoiled: 0x7c7468,
 };
 
@@ -755,7 +756,16 @@ export class Rive3DView implements ScreenView {
     // The guide: each line along the end face, warming from white to red the harder it'll pull.
     if (phase.kind === 'aim') {
       const preview = round.aimPreview;
-      const color = COLORS.pull[pullLevel(preview?.unevenness ?? 0)] ?? COLORS.guide;
+      // Green when it cuts out only rot, red through gold or silver; else by how hard it'll pull.
+      const kinds = this.#deps.game.data.riving.grainKinds;
+      const multipliers = (preview?.cut ?? []).map(
+        (index) => kinds.find((entry) => entry.id === log.grains[index]?.kind)?.multiplier ?? 1,
+      );
+      const color = multipliers.some((value) => value > 1)
+        ? COLORS.danger
+        : multipliers.length > 0
+          ? COLORS.good
+          : (COLORS.pull[pullLevel(preview?.unevenness ?? 0)] ?? COLORS.guide);
       lines.forEach((angle, index) => {
         const mesh = this.#guide.lines[index];
         if (!mesh) return;
@@ -1055,7 +1065,7 @@ export class Rive3DView implements ScreenView {
     }
     const logs = this.#deps.game.inventory.count('log');
     const multiplier = round.multiplierLeft;
-    const grains = multiplier === 1 ? '' : ` · ×${times(multiplier)} if kept`;
+    const grains = multiplier === 1 ? '' : ` · grains ×${times(multiplier)}`;
     const staves = round.staves + round.stavesReady;
     ui.tally.textContent = `Staves ${String(staves)} / ${String(round.maxStaves)}${grains} · logs left ${String(logs)}`;
     const kind = round.phase.kind;
@@ -1069,20 +1079,26 @@ export class Rive3DView implements ScreenView {
     const cuts = (preview?.cut ?? []).flatMap((index) => {
       const grain = kinds.find((entry) => entry.id === this.#log?.grains[index]?.kind);
       if (!grain) return [];
-      const verb = grain.multiplier < 1 ? 'cuts out' : 'cuts';
-      return [`${verb} the ${grain.name.toLowerCase()} ×${times(grain.multiplier)}`];
+      const verb = grain.multiplier < 1 ? 'Cuts out' : 'Cuts';
+      return [`${verb} the ${grain.name.toLowerCase()}`];
     });
+    // What the cut does to the log: "×¾ → ×1½".
+    const change = preview
+      ? `×${times(preview.multiplierNow)} → ×${times(preview.multiplierAfter)}`
+      : '';
     const pull = pullLevel(preview?.unevenness ?? 0);
+    const practiceRot = this.#log?.id === this.#deps.game.data.riving.tutorialLog.id;
     const hints: Record<string, string> = {
-      aim: preview?.throughRot
-        ? 'Through rot: the crack will wobble · or slice the rot out thin'
-        : cuts.length > 0
-          ? `This line ${cuts.join(' and ')}`
+      aim:
+        cuts.length > 0
+          ? `${cuts.join(' and ')}: ${change}${preview?.throughRot ? ' · rot wobbles, hold it' : ''}`
           : pull > 0
             ? "Uneven: it'll pull to the thin side · lean against it"
-            : preview?.check
-              ? 'Along a check: it splits easier'
-              : 'Drag to aim anywhere · thinner staves = more staves, harder to hold',
+            : practiceRot && round.multiplierLeft < 1
+              ? 'Rot halves the whole log: aim a line through it to cut it out'
+              : preview?.check
+                ? 'Along a check: it splits easier'
+                : 'Drag to aim anywhere · thinner staves = more staves, harder to hold',
       swing: '',
       lever: 'Drag down to open it · slide sideways to keep the bubble in the middle',
       done: '',
@@ -1090,7 +1106,8 @@ export class Rive3DView implements ScreenView {
     ui.hint.textContent = hints[kind] ?? '';
     ui.hint.classList.toggle(
       'rv-hint-warn',
-      kind === 'aim' && (pull >= 2 || Boolean(preview?.throughRot)),
+      kind === 'aim' &&
+        (pull >= 2 || (preview ? preview.multiplierAfter < preview.multiplierNow : false)),
     );
     const phaseNow = round.phase;
     const lever = phaseNow.kind === 'lever' ? phaseNow.lever : undefined;
@@ -1205,8 +1222,21 @@ export class Rive3DView implements ScreenView {
 
 /** A multiplier or bonus for show: ½ for a half, whole numbers as they are. */
 function times(value: number): string {
-  if (Math.abs(value - 0.5) < 1e-9) return '½';
-  return Number.isInteger(value) ? String(value) : value.toFixed(1);
+  const whole = Math.floor(value + 1e-9);
+  const part = value - whole;
+  if (part < 1e-6) return String(whole);
+  const eighths: Record<number, string> = {
+    1: '⅛',
+    2: '¼',
+    3: '⅜',
+    4: '½',
+    5: '⅝',
+    6: '¾',
+    7: '⅞',
+  };
+  const fraction = eighths[Math.round(part * 8)];
+  if (!fraction || Math.abs(part * 8 - Math.round(part * 8)) > 1e-6) return value.toFixed(2);
+  return whole > 0 ? `${String(whole)}${fraction}` : fraction;
 }
 
 /** How hard a split will pull, for the guide: 0 (even) to 3. */

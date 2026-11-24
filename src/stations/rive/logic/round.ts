@@ -45,6 +45,9 @@ export interface AimPreview {
   cut: number[];
   throughRot: boolean;
   check: boolean;
+  /** What the grains left could multiply the log by now, and after this cut (capped). */
+  multiplierNow: number;
+  multiplierAfter: number;
 }
 
 /** Things a view plays effects for. */
@@ -168,13 +171,17 @@ export class RivingRound {
 
   /** What the grains could still multiply the log by: every grain not cut or lost (capped). */
   get multiplierLeft(): number {
+    return logMultiplier(this.rules, this.log, this.#alive());
+  }
+
+  /** Grains (by index) still in play: not cut, and not lost with a piece. */
+  #alive(): number[] {
     const gone = this.finished
       .filter((entry) => entry.fate !== 'stave')
       .map((entry) => entry.piece);
-    const alive = [...this.live].filter(
+    return [...this.live].filter(
       (index) => grainsKept(this.log, gone, new Set([index])).length === 0,
     );
-    return logMultiplier(this.rules, this.log, alive);
   }
 
   // Aiming
@@ -207,7 +214,14 @@ export class RivingRound {
     if (phase.kind !== 'aim' || !piece) return undefined;
     const pieces = splitPiece(piece, phase.angle);
     const cut = grainsCut(this.log, piece, phase.angle, this.live);
+    const alive = this.#alive();
     return {
+      multiplierNow: logMultiplier(this.rules, this.log, alive),
+      multiplierAfter: logMultiplier(
+        this.rules,
+        this.log,
+        alive.filter((index) => !cut.includes(index)),
+      ),
       pieces,
       sizes: [sizeOf(this.rules, pieces[0]), sizeOf(this.rules, pieces[1])],
       unevenness: unevenness(piece, phase.angle),

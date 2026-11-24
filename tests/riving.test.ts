@@ -273,6 +273,20 @@ describe('RivingRound', () => {
     expect(rot.banked()).toEqual({ worth: 4, staves: 8 });
   });
 
+  it('the aim preview shows what a cut does to the log: cutting rot doubles it', () => {
+    const { round } = setup(
+      logWith([
+        { kind: 'gold', angle: 120, width: 10 },
+        { kind: 'rot', angle: 22.5, width: 10 },
+      ]),
+    );
+    round.aimTo(22.5 * DEG);
+    expect(round.aimPreview?.multiplierNow).toBe(1.5);
+    expect(round.aimPreview?.multiplierAfter).toBe(3);
+    round.aimTo(120 * DEG);
+    expect(round.aimPreview?.multiplierAfter).toBe(0.5);
+  });
+
   it('cutting through a grain cancels it, good or bad', () => {
     const { round, banked, events } = setup(logWith([{ kind: 'rot', angle: 22.5, width: 10 }]));
     rive(round, steady, 22.5 * DEG);

@@ -19,7 +19,8 @@ export const riving = {
     height: 1.7,
     rings: 14,
     checks: [100, 280],
-    grains: [],
+    // One rot, to learn that cutting through it cancels it.
+    grains: [{ kind: 'rot', angle: 60, width: 16 }],
   },
   generator: {
     radius: { min: 0.92, max: 1.08 },

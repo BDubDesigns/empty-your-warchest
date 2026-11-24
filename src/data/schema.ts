@@ -407,7 +407,7 @@ const rivingSchema = z.object({
       }),
     )
     .min(1),
-  /** The first log ever: no grains, to learn the controls on. */
+  /** The first log ever: to learn the controls on, with one rot to learn to cut out. */
   tutorialLog: rivingLogSchema,
   /** Random logs: sizes, rings, checks and grains, from a seed. */
   generator: z.object({
