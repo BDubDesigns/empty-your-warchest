@@ -159,11 +159,6 @@ export function mountDebugMenu(root: HTMLElement, deps: DebugDeps): void {
     { ariaLabel: 'Item' },
     data.items.map((item) => el('option', { value: item.id, textContent: item.name })),
   );
-  const qualitySelect = el(
-    'select',
-    { ariaLabel: 'Quality' },
-    data.qualities.map((quality) => el('option', { value: quality.id, textContent: quality.name })),
-  );
   const countInput = el('input', {
     type: 'number',
     min: '1',
@@ -171,18 +166,12 @@ export function mountDebugMenu(root: HTMLElement, deps: DebugDeps): void {
     ariaLabel: 'Count',
     inputMode: 'numeric',
   });
-  const syncQuality = (): void => {
-    qualitySelect.hidden = !game.inventory.isTiered(itemSelect.value);
-  };
-  itemSelect.addEventListener('change', syncQuality);
-  syncQuality();
   const addButton = el('button', { type: 'button', textContent: 'Add' });
   addButton.addEventListener('click', () => {
     const count = Number(countInput.value);
-    const quality = game.inventory.isTiered(itemSelect.value) ? qualitySelect.value : undefined;
     try {
-      game.addItems(itemSelect.value, count, quality);
-      logger.log('debug.addItems', { item: itemSelect.value, count, quality });
+      game.addItems(itemSelect.value, count);
+      logger.log('debug.addItems', { item: itemSelect.value, count });
       say(`Added ${count} ${itemSelect.selectedOptions[0]?.textContent ?? itemSelect.value}`);
     } catch (error) {
       say(String(error));
@@ -400,9 +389,7 @@ export function mountDebugMenu(root: HTMLElement, deps: DebugDeps): void {
         ? [el('li', { textContent: 'Empty' })]
         : game.inventory.stacks().map((stack) => {
             const item = data.items.find((candidate) => candidate.id === stack.item);
-            const quality = data.qualities.find((candidate) => candidate.id === stack.quality);
-            const label = [quality?.name, item?.name ?? stack.item].filter(Boolean).join(' ');
-            return el('li', { textContent: `${label} × ${stack.count}` });
+            return el('li', { textContent: `${item?.name ?? stack.item} × ${stack.count}` });
           })),
     );
     for (const skill of skillRows) skill.update();
@@ -434,7 +421,7 @@ export function mountDebugMenu(root: HTMLElement, deps: DebugDeps): void {
       ),
       section(
         'Warchest',
-        el('div', { className: 'debug-row' }, [itemSelect, qualitySelect, countInput, addButton]),
+        el('div', { className: 'debug-row' }, [itemSelect, countInput, addButton]),
         warchestList,
       ),
       section('Skills', ...skillRows.map((skill) => skill.row)),

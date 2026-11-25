@@ -4,7 +4,7 @@ import type { GameData } from '../data';
 export interface WarchestRow {
   item: string;
   name: string;
-  /** "12" for plain items; "Poor 4 · Good 2 · Perfect 1" for tiered ones. */
+  /** The count, e.g. "12". */
   detail: string;
 }
 
@@ -16,10 +16,6 @@ export function warchestRows(data: GameData, inventory: Pick<Inventory, 'count'>
   return data.items.map((item) => ({
     item: item.id,
     name: item.name,
-    detail: item.tiered
-      ? data.qualities
-          .map((quality) => `${quality.name} ${inventory.count(item.id, quality.id)}`)
-          .join(' · ')
-      : String(inventory.count(item.id)),
+    detail: String(inventory.count(item.id)),
   }));
 }

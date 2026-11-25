@@ -5,8 +5,6 @@ import type { Inventory, Stack } from './inventory';
 export interface CraftOutcome {
   /** How many times the recipe runs (e.g. a full rack of staves). Default 1. */
   batches?: number;
-  /** Tier for tiered outputs that the recipe leaves open (e.g. how well a spear was hardened). */
-  outputQuality?: string;
   /**
    * How many times the outputs come out this time, e.g. the staves one log gave (0 allowed: a log
    * split into nothing usable). The recipe's XP is per output, so it scales too. Default 1.
@@ -33,9 +31,7 @@ function wholeAtLeastOne(value: number, label: string): number {
 }
 
 export function canCraft(inventory: Inventory, recipe: Recipe, batches = 1): boolean {
-  return recipe.inputs.every((input) =>
-    inventory.has(input.item, input.count * batches, input.quality),
-  );
+  return recipe.inputs.every((input) => inventory.has(input.item, input.count * batches));
 }
 
 /**
@@ -54,30 +50,22 @@ export function craft(
   }
 
   const consumed = recipe.inputs.map((input) => ({ ...input, count: input.count * batches }));
-  const missing = consumed.filter(
-    (stack) => !inventory.has(stack.item, stack.count, stack.quality),
-  );
+  const missing = consumed.filter((stack) => !inventory.has(stack.item, stack.count));
   if (missing.length > 0) {
     const list = missing.map((stack) => `${stack.count} ${stack.item}`).join(', ');
     throw new Error(`Can't run "${recipe.id}": missing ${list}`);
   }
 
-  const produced = recipe.outputs.map((output): Stack => {
-    const quality =
-      output.quality ?? (inventory.isTiered(output.item) ? outcome.outputQuality : undefined);
-    if (inventory.isTiered(output.item) && quality === undefined) {
-      throw new Error(
-        `"${recipe.id}" makes tiered "${output.item}"; the outcome needs an outputQuality`,
-      );
-    }
-    return { item: output.item, count: output.count * batches * multiplier, quality };
-  });
+  const produced = recipe.outputs.map((output): Stack => ({
+    item: output.item,
+    count: output.count * batches * multiplier,
+  }));
 
-  // Reading each output's count throws on a bad item or tier, before anything is changed.
-  for (const stack of produced) inventory.count(stack.item, stack.quality);
-  for (const stack of consumed) inventory.remove(stack.item, stack.count, stack.quality);
+  // Reading each output's count throws on a bad item, before anything is changed.
+  for (const stack of produced) inventory.count(stack.item);
+  for (const stack of consumed) inventory.remove(stack.item, stack.count);
   for (const stack of produced) {
-    if (stack.count > 0) inventory.add(stack.item, stack.count, stack.quality);
+    if (stack.count > 0) inventory.add(stack.item, stack.count);
   }
   const xpYield = outcome.xpYield ?? multiplier;
   if (!Number.isInteger(xpYield) || xpYield < 0) {

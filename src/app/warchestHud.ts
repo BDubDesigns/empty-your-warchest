@@ -342,12 +342,7 @@ export class WarchestHud {
   #rows() {
     const { inventory } = this.#game;
     return warchestRows(this.#game.data, {
-      count: (item, quality) =>
-        Math.max(
-          inventory.count(item, quality) -
-            (item === this.#item && quality === undefined ? this.#held : 0),
-          0,
-        ),
+      count: (item) => Math.max(inventory.count(item) - (item === this.#item ? this.#held : 0), 0),
     });
   }
 

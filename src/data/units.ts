@@ -7,7 +7,7 @@ export const units = [
     name: 'Spearman',
     hp: 10,
     unarmedDamage: 1,
-    weapon: { item: 'spear', damageByQuality: { poor: 3, good: 4, perfect: 6 } },
+    weapon: { item: 'spear', damage: 4 },
   },
 ] satisfies GameDataInput['units'];
 

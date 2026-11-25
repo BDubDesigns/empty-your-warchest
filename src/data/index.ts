@@ -4,7 +4,6 @@
 import { camp } from './camp';
 import { items } from './items';
 import { levels } from './levels';
-import { qualities } from './qualities';
 import { recipes } from './recipes';
 import { splitting } from './splitting';
 import type { GameData, GameDataInput } from './schema';
@@ -20,7 +19,6 @@ export * from './schema';
 export { GameDataError, parseGameData } from './validate';
 
 export const rawGameData: GameDataInput = {
-  qualities,
   skills,
   items,
   stations,

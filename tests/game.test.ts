@@ -56,7 +56,7 @@ describe('Game', () => {
     const { game } = newGame();
     let changes = 0;
     const stop = game.onChange(() => changes++);
-    game.addItems('spear', 2, 'good');
+    game.addItems('spear', 2);
     game.setLevel('splitting', 5);
     stop();
     game.addItems('log', 1);
@@ -64,7 +64,7 @@ describe('Game', () => {
     expect(game.snapshot()).toMatchObject({
       inventory: [
         { item: 'log', count: 1 },
-        { item: 'spear', count: 2, quality: 'good' },
+        { item: 'spear', count: 2 },
       ],
       skills: { splitting: game.xpCurve.xpForLevel(5) },
     });

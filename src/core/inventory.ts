@@ -1,87 +1,60 @@
-import { byId, type GameData, type Item } from '../data';
+import { byId, type GameData } from '../data';
 
 export interface Stack {
   item: string;
   count: number;
-  /** Set for tiered items only. */
-  quality?: string | undefined;
 }
 
 /**
- * Item counts, per quality tier for tiered items. No per-object tracking:
- * the warchest holds "12 Good spears", not 12 spear objects.
+ * Item counts. No per-object tracking: the warchest holds "12 spears", not 12 spear objects.
  */
 export class Inventory {
-  readonly #data: Pick<GameData, 'items' | 'qualities'>;
+  readonly #data: Pick<GameData, 'items'>;
   readonly #counts = new Map<string, number>();
 
-  constructor(data: Pick<GameData, 'items' | 'qualities'>, stacks: readonly Stack[] = []) {
+  constructor(data: Pick<GameData, 'items'>, stacks: readonly Stack[] = []) {
     this.#data = data;
-    for (const stack of stacks) this.add(stack.item, stack.count, stack.quality);
+    for (const stack of stacks) this.add(stack.item, stack.count);
   }
 
-  isTiered(itemId: string): boolean {
-    return this.#item(itemId).tiered;
+  count(itemId: string): number {
+    return this.#counts.get(this.#id(itemId)) ?? 0;
   }
 
-  /** Count of one item. For a tiered item without a quality, the total across all tiers. */
-  count(itemId: string, quality?: string): number {
-    const item = this.#item(itemId);
-    if (item.tiered && quality === undefined) {
-      return this.#data.qualities.reduce((sum, q) => sum + this.count(itemId, q.id), 0);
-    }
-    return this.#counts.get(this.#key(item, quality)) ?? 0;
+  has(itemId: string, count: number): boolean {
+    return this.count(itemId) >= count;
   }
 
-  has(itemId: string, count: number, quality?: string): boolean {
-    return this.count(itemId, quality) >= count;
-  }
-
-  add(itemId: string, count: number, quality?: string): void {
+  add(itemId: string, count: number): void {
     this.#checkCount(count);
-    const key = this.#key(this.#item(itemId), quality);
-    this.#counts.set(key, (this.#counts.get(key) ?? 0) + count);
+    const id = this.#id(itemId);
+    this.#counts.set(id, (this.#counts.get(id) ?? 0) + count);
   }
 
-  remove(itemId: string, count: number, quality?: string): void {
+  remove(itemId: string, count: number): void {
     this.#checkCount(count);
-    const key = this.#key(this.#item(itemId), quality);
-    const current = this.#counts.get(key) ?? 0;
+    const id = this.#id(itemId);
+    const current = this.#counts.get(id) ?? 0;
     if (current < count) {
-      throw new Error(
-        `Not enough ${itemId}${quality ? ` (${quality})` : ''}: have ${current}, need ${count}`,
-      );
+      throw new Error(`Not enough ${itemId}: have ${current}, need ${count}`);
     }
-    if (current === count) this.#counts.delete(key);
-    else this.#counts.set(key, current - count);
+    if (current === count) this.#counts.delete(id);
+    else this.#counts.set(id, current - count);
   }
 
-  /** Non-empty stacks, in data order (items, then quality worst to best). */
+  /** Non-empty stacks, in data order. */
   stacks(): Stack[] {
     const result: Stack[] = [];
     for (const item of this.#data.items) {
-      const qualities = item.tiered ? this.#data.qualities.map((q) => q.id) : [undefined];
-      for (const quality of qualities) {
-        const count = this.#counts.get(this.#key(item, quality)) ?? 0;
-        if (count > 0)
-          result.push(quality ? { item: item.id, count, quality } : { item: item.id, count });
-      }
+      const count = this.#counts.get(item.id) ?? 0;
+      if (count > 0) result.push({ item: item.id, count });
     }
     return result;
   }
 
-  #item(itemId: string): Item {
-    return byId(this.#data.items, itemId);
-  }
-
-  #key(item: Item, quality: string | undefined): string {
-    if (!item.tiered) {
-      if (quality !== undefined) throw new Error(`"${item.id}" has no quality tiers`);
-      return item.id;
-    }
-    if (quality === undefined) throw new Error(`"${item.id}" needs a quality tier`);
-    byId(this.#data.qualities, quality);
-    return `${item.id}:${quality}`;
+  /** The item's id, throwing if the data has no such item. */
+  #id(itemId: string): string {
+    return byId(this.#data.items, itemId).id;
   }
 
   #checkCount(count: number): void {

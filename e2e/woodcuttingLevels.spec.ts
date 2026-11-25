@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { skills } from '../src/data/skills';
 import { stations } from '../src/data/stations';
 import { tuning } from '../src/data/tuning';
 import { woodcutting } from '../src/data/woodcutting';
@@ -11,6 +12,10 @@ const fastFallLevel = woodcutting.unlocks.find((unlock) => unlock.fastFall)?.lev
 /** Starts with woodcutting at `level`, past the tutorial, and opens the tree line. */
 async function openTreeLineAt(page: Page, level: number) {
   if (!tile) throw new Error('No tree line in data');
+  // Every skill in data, so the save fits the data and isn't discarded.
+  const xp = Object.fromEntries(
+    skills.map((skill) => [skill.id, skill.id === 'woodcutting' ? curve.xpForLevel(level) : 0]),
+  );
   await page.addInitScript((xp) => {
     localStorage.setItem('warchest.woodcutting.treeStyle', 'kenney');
     localStorage.setItem('warchest.woodcutting.scenery', 'off');
@@ -21,13 +26,13 @@ async function openTreeLineAt(page: Page, level: number) {
         savedAt: 1,
         state: {
           inventory: [],
-          skills: { woodcutting: xp, splitting: 0, command: 0 },
+          skills: xp,
           lastSeenAt: 1,
           done: ['tutorial.woodcutting'],
         },
       }),
     );
-  }, curve.xpForLevel(level));
+  }, xp);
   await page.goto('/');
   await expect(page.locator('body')).toHaveAttribute('data-view', 'camp');
   const camp = await page.locator('#screen-phaser canvas').boundingBox();

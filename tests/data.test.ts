@@ -18,7 +18,16 @@ describe('game data', () => {
       'fire_pit',
       'war_tent',
     ]);
-    expect(data.qualities.map((quality) => quality.name)).toEqual(['Poor', 'Good', 'Perfect']);
+    expect(data.skills.map((skill) => skill.id)).toEqual([
+      'woodcutting',
+      'splitting',
+      'firemaking',
+      'command',
+    ]);
+  });
+
+  it('runs the fire pit on Firemaking', () => {
+    expect(data.stations.find((station) => station.id === 'fire_pit')?.skill).toBe('firemaking');
   });
 
   it('fails loudly on a chain exponent that is not positive', () => {
@@ -51,7 +60,7 @@ describe('game data', () => {
 
   it('fails loudly on duplicate ids', () => {
     expectInvalid((raw) => {
-      raw.items.push({ id: 'log', name: 'Another log', tiered: false });
+      raw.items.push({ id: 'log', name: 'Another log' });
     }, 'Duplicate id "log"');
   });
 
@@ -61,10 +70,10 @@ describe('game data', () => {
     }, 'Unknown skill "mining"');
   });
 
-  it('requires weapon damage for every quality tier', () => {
+  it('fails loudly on a weapon that is not an item', () => {
     expectInvalid((raw) => {
-      if (raw.units[0]) raw.units[0].weapon.damageByQuality = { poor: 1, good: 2 };
-    }, 'Missing a value for quality "perfect"');
+      if (raw.units[0]) raw.units[0].weapon.item = 'sword';
+    }, 'Unknown item "sword"');
   });
 
   it('requires one wall as the last level event', () => {

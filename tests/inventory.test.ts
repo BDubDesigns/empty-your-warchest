@@ -12,25 +12,15 @@ describe('Inventory', () => {
     expect(inventory.has('log', 4)).toBe(false);
   });
 
-  it('counts tiered items per tier, with a total across tiers', () => {
-    const inventory = new Inventory(data);
-    inventory.add('spear', 4, 'poor');
-    inventory.add('spear', 2, 'perfect');
-    expect(inventory.count('spear', 'poor')).toBe(4);
-    expect(inventory.count('spear', 'good')).toBe(0);
-    expect(inventory.count('spear')).toBe(6);
-  });
-
-  it('lists stacks in data order, worst tier first', () => {
+  it('lists stacks in data order, merging stacks of the same item', () => {
     const inventory = new Inventory(data, [
-      { item: 'spear', count: 1, quality: 'perfect' },
+      { item: 'spear', count: 1 },
       { item: 'log', count: 3 },
-      { item: 'spear', count: 2, quality: 'poor' },
+      { item: 'spear', count: 2 },
     ]);
     expect(inventory.stacks()).toEqual([
       { item: 'log', count: 3 },
-      { item: 'spear', count: 2, quality: 'poor' },
-      { item: 'spear', count: 1, quality: 'perfect' },
+      { item: 'spear', count: 3 },
     ]);
   });
 
@@ -42,17 +32,8 @@ describe('Inventory', () => {
     expect(inventory.count('stave')).toBe(2);
   });
 
-  it('enforces tier rules and known items', () => {
+  it('only takes known items and positive whole counts', () => {
     const inventory = new Inventory(data);
-    expect(() => {
-      inventory.add('spear', 1);
-    }).toThrow('needs a quality tier');
-    expect(() => {
-      inventory.add('log', 1, 'good');
-    }).toThrow('no quality tiers');
-    expect(() => {
-      inventory.add('spear', 1, 'legendary');
-    }).toThrow('Unknown id "legendary"');
     expect(() => {
       inventory.add('sword', 1);
     }).toThrow('Unknown id "sword"');

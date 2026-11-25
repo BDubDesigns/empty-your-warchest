@@ -11,22 +11,13 @@ const nonNegative = z.number().nonnegative();
 /** A spot in the camp, as a fraction of the portrait screen (0,0 top-left; 1,1 bottom-right). */
 const campSpotSchema = z.object({ x: fraction, y: fraction });
 
-export const qualitySchema = z.object({ id, name });
-
 export const skillSchema = z.object({ id, name });
 
-export const itemSchema = z.object({
-  id,
-  name,
-  /** Tiered items are counted per quality tier (e.g. Poor/Good/Perfect spears). */
-  tiered: z.boolean(),
-});
+export const itemSchema = z.object({ id, name });
 
 export const itemStackSchema = z.object({
   item: id,
   count: positiveInt,
-  /** Only for tiered items. A tiered recipe output without one gets its tier from the mini game. */
-  quality: id.optional(),
 });
 
 export const stationSchema = z.object({
@@ -59,10 +50,7 @@ export const unitSchema = z.object({
   hp: positiveInt,
   /** Damage when no weapon was left in the warchest for this unit. */
   unarmedDamage: nonNegative,
-  weapon: z.object({
-    item: id,
-    damageByQuality: z.record(id, nonNegative),
-  }),
+  weapon: z.object({ item: id, damage: nonNegative }),
 });
 
 export const enemySchema = z.object({ id, name, hp: positiveInt, damage: nonNegative });
@@ -102,8 +90,8 @@ export const tuningSchema = z.object({
     divisor: positive,
   }),
   idle: z.object({ capMinutes: positive }),
-  /** Share of used weapons recovered after winning a run, per quality tier. */
-  weaponRecoveryOnWin: z.record(id, fraction),
+  /** Share of used weapons recovered after winning a run. */
+  weaponRecoveryOnWin: fraction,
 });
 
 const clearingSchema = z.object({
@@ -570,8 +558,6 @@ const splittingSchema = z.object({
 });
 
 export const gameDataShape = z.object({
-  /** Ordered worst to best. */
-  qualities: z.array(qualitySchema).min(1),
   skills: z.array(skillSchema).min(1),
   items: z.array(itemSchema).min(1),
   stations: z.array(stationSchema),
@@ -588,7 +574,6 @@ export const gameDataShape = z.object({
 
 export type GameDataInput = z.input<typeof gameDataShape>;
 export type GameData = z.output<typeof gameDataShape>;
-export type Quality = GameData['qualities'][number];
 export type Skill = GameData['skills'][number];
 export type Item = GameData['items'][number];
 export type ItemStack = z.output<typeof itemStackSchema>;

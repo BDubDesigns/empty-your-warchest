@@ -20,7 +20,7 @@ export const recipes = [
     xp: 5,
   },
   {
-    // The spear's quality tier comes from when the rack is pulled from the fire.
+    // Fire-hardening one stave into a spear (M5). XP is a placeholder until rack sizes are tuned.
     id: 'harden_spear',
     station: 'fire_pit',
     inputs: [{ item: 'stave', count: 1 }],

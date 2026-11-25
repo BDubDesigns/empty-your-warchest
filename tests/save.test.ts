@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  Inventory,
   ManualClock,
   MemoryStore,
   SAVE_VERSION,
@@ -12,10 +13,9 @@ import { data, dataWith } from './helpers';
 const state: GameState = {
   inventory: [
     { item: 'log', count: 7 },
-    { item: 'spear', count: 2, quality: 'poor' },
-    { item: 'spear', count: 3, quality: 'perfect' },
+    { item: 'spear', count: 5 },
   ],
-  skills: { woodcutting: 1_154, splitting: 83, command: 0 },
+  skills: { woodcutting: 1_154, splitting: 83, firemaking: 40, command: 0 },
   lastSeenAt: 5_000,
   done: ['tutorial.woodcutting'],
 };
@@ -39,7 +39,7 @@ describe('save/load', () => {
     expect(result.status).toBe('new');
     expect(result.state).toEqual({
       inventory: [],
-      skills: { woodcutting: 0, splitting: 0, command: 0 },
+      skills: { woodcutting: 0, splitting: 0, firemaking: 0, command: 0 },
       lastSeenAt: 10_000,
       done: [],
     });
@@ -51,6 +51,24 @@ describe('save/load', () => {
     delete older.done;
     store.set('warchest.save', JSON.stringify({ version: SAVE_VERSION, savedAt: 1, state: older }));
     expect(saves.load()).toEqual({ status: 'loaded', state: { ...state, done: [] } });
+  });
+
+  it('merges the quality tiers of a save from before tiers were removed', () => {
+    const { store, saves } = setup();
+    const tiered = {
+      ...state,
+      inventory: [
+        { item: 'spear', count: 2, quality: 'poor' },
+        { item: 'spear', count: 3, quality: 'perfect' },
+      ],
+    };
+    store.set(
+      'warchest.save',
+      JSON.stringify({ version: SAVE_VERSION, savedAt: 1, state: tiered }),
+    );
+    const result = saves.load();
+    expect(result.status).toBe('loaded');
+    expect(new Inventory(data, result.state.inventory).count('spear')).toBe(5);
   });
 
   it('round-trips the full state', () => {

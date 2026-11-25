@@ -16,10 +16,9 @@ test('debug menu adds items, sets levels, keeps them after reload, exports logs 
 
   await openDebug(page);
   await page.getByLabel('Item').selectOption('spear');
-  await page.getByLabel('Quality').selectOption('good');
   await page.getByLabel('Count').fill('5');
   await page.getByRole('button', { name: 'Add' }).tap();
-  await expect(page.getByText('Good Spear × 5')).toBeVisible();
+  await expect(page.getByText('Spear × 5')).toBeVisible();
 
   await page.getByLabel('Woodcutting level').fill('10');
   await page.locator('[data-skill=woodcutting]').getByRole('button', { name: 'Set' }).tap();
@@ -27,7 +26,7 @@ test('debug menu adds items, sets levels, keeps them after reload, exports logs 
 
   await page.reload();
   await openDebug(page);
-  await expect(page.getByText('Good Spear × 5')).toBeVisible();
+  await expect(page.getByText('Spear × 5')).toBeVisible();
   await expect(page.locator('[data-skill=woodcutting]')).toContainText('Lv 10');
 
   const downloadButton = page.getByRole('button', { name: 'Download logs' });
@@ -52,7 +51,7 @@ test('debug menu adds items, sets levels, keeps them after reload, exports logs 
   const reset = page.getByRole('button', { name: 'Reset save' });
   await reset.tap();
   await page.getByRole('button', { name: 'Tap again to wipe the save' }).tap();
-  await expect(page.getByText('Good Spear × 5')).toBeHidden();
+  await expect(page.getByText('Spear × 5')).toBeHidden();
   await expect(page.locator('[data-skill=woodcutting]')).toContainText('Lv 1 ');
 
   await page.getByRole('button', { name: 'Close' }).tap();

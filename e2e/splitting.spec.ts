@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { skills } from '../src/data/skills';
 import { splitting } from '../src/data/splitting';
 import { stations } from '../src/data/stations';
 
@@ -12,21 +13,26 @@ const feel = splitting.feel;
 /** Opens the workbench with `logs` logs in the warchest. */
 async function openWorkbench(page: Page, logs: number) {
   if (!bench) throw new Error('No splitting station in data');
-  await page.addInitScript((count) => {
-    localStorage.setItem(
-      'warchest.save',
-      JSON.stringify({
-        version: 1,
-        savedAt: 1,
-        state: {
-          inventory: count > 0 ? [{ item: 'log', count }] : [],
-          skills: { woodcutting: 0, splitting: 0, command: 0 },
-          lastSeenAt: 1,
-          done: ['tutorial.woodcutting'],
-        },
-      }),
-    );
-  }, logs);
+  // Every skill in data at 0, so the save fits the data and isn't discarded.
+  const xp = Object.fromEntries(skills.map((skill) => [skill.id, 0]));
+  await page.addInitScript(
+    ({ count, xp }) => {
+      localStorage.setItem(
+        'warchest.save',
+        JSON.stringify({
+          version: 1,
+          savedAt: 1,
+          state: {
+            inventory: count > 0 ? [{ item: 'log', count }] : [],
+            skills: xp,
+            lastSeenAt: 1,
+            done: ['tutorial.woodcutting'],
+          },
+        }),
+      );
+    },
+    { count: logs, xp },
+  );
   await page.goto('/');
   await expect(page.locator('body')).toHaveAttribute('data-view', 'camp');
   const camp = await page.locator('#screen-phaser canvas').boundingBox();
