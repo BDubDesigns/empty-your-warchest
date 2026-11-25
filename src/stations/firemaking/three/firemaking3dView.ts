@@ -93,16 +93,19 @@ const COLORS = {
 };
 
 /**
- * Smoke as a stave cooks, by stage: none, thin white wisps, thicker, thick grey (pull now), and
- * black (burning). How many puffs a second, how big, what colour and how thick.
+ * Smoke off a stave's point as it cooks, by stage: none, thin white wisps, thicker, thick grey
+ * (pull now), and black (burning). How many puffs a second, how big, what colour and how thick.
+ * Puffs are short-lived, so the plume changes the moment the stave does.
  */
 const SMOKE = [
   { rate: 0, size: 0, color: 0xffffff, opacity: 0 },
-  { rate: 2.5, size: 0.11, color: 0xf6f6f2, opacity: 0.22 },
-  { rate: 6, size: 0.17, color: 0xebebe6, opacity: 0.36 },
-  { rate: 13, size: 0.27, color: 0x8f8f8b, opacity: 0.6 },
-  { rate: 16, size: 0.3, color: 0x1a1816, opacity: 0.8 },
+  { rate: 4, size: 0.09, color: 0xf6f6f2, opacity: 0.3 },
+  { rate: 9, size: 0.14, color: 0xe6e6e0, opacity: 0.45 },
+  { rate: 22, size: 0.24, color: 0x7d7d79, opacity: 0.75 },
+  { rate: 24, size: 0.26, color: 0x141210, opacity: 0.9 },
 ] as const;
+/** The burst of thick grey off a point the moment it hardens. */
+const READY_PUFFS = 7;
 
 type ParticleKind = 'flame' | 'ember' | 'smoke' | 'steam' | 'ash';
 
@@ -122,6 +125,8 @@ interface Particle {
 interface StaveVisual {
   mesh: THREE.Group;
   material: THREE.MeshLambertMaterial;
+  /** The point: glows as it chars. */
+  tipMaterial: THREE.MeshLambertMaterial;
   column: number;
   layer: number;
   finish: Finish | undefined;
@@ -587,13 +592,16 @@ export class Firemaking3DView implements ScreenView {
     for (const stave of this.#staves) {
       stave.mesh.removeFromParent();
       stave.material.dispose();
+      stave.tipMaterial.dispose();
     }
     const columns = this.#deps.game.data.firemaking.rack.staves;
     this.#staves = Array.from({ length: count }, (_, index) => {
       const material = new THREE.MeshLambertMaterial({ map: this.#grain });
+      const tipMaterial = new THREE.MeshLambertMaterial({ map: this.#grain, emissive: 0xff3a08 });
+      tipMaterial.emissiveIntensity = 0;
       const mesh = new THREE.Group();
       const body = new THREE.Mesh(this.#staveGeometry, material);
-      const tip = new THREE.Mesh(this.#tipGeometry, material);
+      const tip = new THREE.Mesh(this.#tipGeometry, tipMaterial);
       body.castShadow = tip.castShadow = true;
       mesh.add(body, tip);
       const column = index % columns;
@@ -606,6 +614,7 @@ export class Firemaking3DView implements ScreenView {
       return {
         mesh,
         material,
+        tipMaterial,
         column,
         layer,
         finish: undefined,
@@ -789,29 +798,46 @@ export class Firemaking3DView implements ScreenView {
       for (let column = 0; column < columns; column++) {
         const done = round.doneness(column);
         const stage = this.#stage(done, feel);
-        if (stage !== (this.#shownStage[column] ?? 0)) {
-          // Thick grey or black: a crackle so the change is heard as well as seen.
-          if (stage >= 3) this.#play('fire-crackle', stage === 4 ? 0.4 : 0.22, stage * 120);
+        const point = () =>
+          new THREE.Vector3(
+            this.#columnX(column) + (Math.random() - 0.5) * 0.05,
+            RACK_Y + (round.layers - 1) * LAYER_GAP + 0.04,
+            this.#rack.position.z - STAVE_LENGTH / 2 + TIP_LENGTH * (0.4 + Math.random()),
+          );
+        const shown = this.#shownStage[column] ?? 0;
+        if (stage !== shown) {
           this.#shownStage[column] = stage;
+          // The moment a point hardens it puffs thick grey: seen, not heard or felt, so reading
+          // the smoke stays the skill.
+          if (stage === 3) {
+            for (let puff = 0; puff < READY_PUFFS; puff++) this.#smoke(point(), SMOKE[3]);
+          }
+          // Starting to char: a crackle and a buzz, so you know you're late (like a glancing
+          // chop), without giving away the moment before it.
+          if (
+            stage === 4 &&
+            !this.#shownStage.some((other, index) => other === 4 && index !== column)
+          ) {
+            this.#play('fire-crackle', 0.5, 240);
+            this.#deps.haptics.pulse(feel.buzzCharMs);
+          }
         }
         const look = SMOKE[stage] ?? SMOKE[0];
         const due = (this.#smokeDue[column] ?? 0) + look.rate * dt;
         const puffs = Math.floor(due);
         this.#smokeDue[column] = due - puffs;
-        for (let puff = 0; puff < puffs; puff++) {
-          const top = RACK_Y + (round.layers - 1) * LAYER_GAP + 0.05;
-          const at = new THREE.Vector3(
-            this.#columnX(column) + (Math.random() - 0.5) * 0.06,
-            top,
-            this.#rack.position.z + (Math.random() - 0.5) * STAVE_LENGTH * 0.8,
-          );
-          this.#smoke(at, look);
-        }
+        for (let puff = 0; puff < puffs; puff++) this.#smoke(point(), look);
+        // Burning points throw sparks.
+        if (stage === 4 && Math.random() < dt * 6) this.#burst('ember', point(), 1);
       }
     }
     for (const stave of this.#staves) {
       const done = round.phase.kind === 'plan' ? 0 : round.doneness(stave.column);
       stave.material.color.copy(staveColor(done, feel.charRatio, color));
+      // The point darkens first and glows once it's burning.
+      stave.tipMaterial.color.copy(staveColor(done * 1.06, feel.charRatio, color));
+      stave.tipMaterial.emissiveIntensity =
+        done >= feel.charRatio ? 0.5 + 0.3 * Math.sin(round.now * 18 + stave.column) : 0;
       const move = stave.move;
       if (move) {
         if (round.now < move.at) continue;
@@ -906,7 +932,15 @@ export class Firemaking3DView implements ScreenView {
       }
     }
     const phase = round?.phase.kind;
-    this.#fireSound.setVolume(phase === 'cook' ? 0.55 : phase === 'plan' ? 0.3 : 0.18);
+    // The fire roars up as the rack cooks: a build, not a signal at any one moment.
+    let cookShare = 0;
+    if (round && phase === 'cook') {
+      for (let column = 0; column < round.columns; column++) cookShare += round.doneness(column);
+      cookShare = Math.min(cookShare / round.columns / round.feel.charRatio, 1);
+    }
+    this.#fireSound.setVolume(
+      phase === 'cook' ? 0.35 + 0.45 * cookShare : phase === 'plan' ? 0.3 : 0.18,
+    );
   }
 
   // Particles
@@ -933,7 +967,7 @@ export class Firemaking3DView implements ScreenView {
     const motion: Record<ParticleKind, { up: number; side: number; life: number; grow: number }> = {
       flame: { up: 0.55, side: 0.06, life: 0.45, grow: -1.2 },
       ember: { up: 0.9, side: 0.15, life: 1.1, grow: -0.6 },
-      smoke: { up: 0.42, side: 0.07, life: 2, grow: 0.9 },
+      smoke: { up: 0.7, side: 0.08, life: 0.85, grow: 1.4 },
       steam: { up: 0.75, side: 0.35, life: 1.1, grow: 2.2 },
       ash: { up: -0.25, side: 0.12, life: 0.9, grow: -0.4 },
     };
@@ -1155,12 +1189,10 @@ export class Firemaking3DView implements ScreenView {
     const streak = el('div', 'fm-streak');
     streak.hidden = true;
     const hint = el('div', 'fm-hint');
-    // The heat under each stave as bars, with the band that hardens together.
+    // The heat under each stave as bars, coloured by how each would come out at the best pull.
     const heat = el('div', 'fm-heat');
     heat.setAttribute('aria-label', 'Heat under each stave');
     const heatBars = el('div', 'fm-heat-bars');
-    const band = el('div', 'fm-band');
-    heatBars.append(band);
     const heatMarks = el('div', 'fm-heat-marks');
     const bars = Array.from({ length: rules.rack.staves }, () => {
       const column = el('div', 'fm-bar');
@@ -1215,7 +1247,6 @@ export class Firemaking3DView implements ScreenView {
       streak,
       hint,
       heat,
-      band,
       bars,
       best,
       spots,
@@ -1258,7 +1289,7 @@ export class Firemaking3DView implements ScreenView {
     const hints: Record<string, string> = {
       plan:
         logsLeft + round.logsPlaced > 0
-          ? 'Tap a fuel spot to drop in a log: get every bar into the gold band'
+          ? 'Tap a fuel spot to drop in a log: even out the fire until every bar is gold'
           : 'No logs for fuel: lay the rack on the fire as it is',
       cook: 'Grab the handle and pull the rack out when the smoke turns thick grey',
       done: '',
@@ -1284,7 +1315,7 @@ export class Firemaking3DView implements ScreenView {
     ).join(',');
   }
 
-  /** The heat bars, the gold band and each stave's mark at the best pull, redrawn on change. */
+  /** The heat bars and each stave's mark and colour at the best pull, redrawn on change. */
   #showPreview(round: FiremakingRound): void {
     const preview = round.preview;
     const heats = round.heats;
@@ -1294,15 +1325,12 @@ export class Firemaking3DView implements ScreenView {
     const ui = this.#ui;
     const rules = this.#deps.game.data.firemaking;
     // Scaled to this fire so the lumps read: from half the coldest up to a little over the
-    // hottest stave or the band's top.
-    const floor = Math.min(...heats, preview.band.low) * 0.5;
-    const top = Math.max(...heats, preview.band.high) * 1.08;
+    // hottest stave (and at least the even fire's heat, so an even fire isn't drawn squashed at
+    // the top).
+    const floor = Math.min(...heats) * 0.5;
+    const top = Math.max(...heats, rules.generator.flat) * 1.25;
     const share = (heat: number) =>
       `${String(Math.min(Math.max(((heat - floor) / (top - floor)) * 100, 0), 100))}%`;
-    ui.band.style.bottom = share(preview.band.low);
-    ui.band.style.height = `${String(
-      Math.min(((preview.band.high - preview.band.low) / (top - floor)) * 100, 100),
-    )}%`;
     const marks: Record<Finish, string> = { hardened: '✓', under: '↓', charred: '✕' };
     ui.bars.forEach((bar, column) => {
       const finish = preview.finishes[column] ?? 'under';

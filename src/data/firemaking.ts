@@ -22,9 +22,11 @@ export const firemaking = {
     heatPerLog: 2.5,
     spill: 1,
     cookSeconds: 5,
-    charRatio: 1.3,
-    smokeWisps: 0.45,
-    smokeThick: 0.75,
+    // Playtest 1 (Nov 25): 1.3 was a 1.25 s window at an even fire, too tight to read; 1.4 is
+    // about 2 s. Smoke started at 45% done, so "it's smoking" didn't mean "nearly ready".
+    charRatio: 1.4,
+    smokeWisps: 0.75,
+    smokeThick: 0.9,
     streakCap: 3,
     grabPx: 70,
     dragPx: 40,
@@ -35,6 +37,7 @@ export const firemaking = {
     shakeStrength: 1,
     buzzLogMs: 15,
     buzzLayMs: 25,
+    buzzCharMs: 45,
     buzzPullMs: 30,
     buzzPlungeMs: 45,
   },

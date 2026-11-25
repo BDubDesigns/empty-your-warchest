@@ -268,6 +268,17 @@ body:not([data-view='camp']) #build-label {
   font-size: 13px;
 }
 
+.debug-more {
+  margin: 8px 0;
+}
+
+.debug-more > summary {
+  padding: 8px 0;
+  color: var(--muted);
+  font-weight: 700;
+  cursor: pointer;
+}
+
 .debug-tune {
   display: block;
   margin-bottom: 10px;
@@ -1843,9 +1854,9 @@ body:not([data-view='camp']) #build-label {
 }
 
 /*
- * The heat under each stave, like an equalizer: a bar per stave, the gold band that hardens
- * together, and a mark under each bar for how it would come out at the best pull (a tick, an
- * arrow for underdone, a cross for charred), so it reads without colour too.
+ * The heat under each stave, like an equalizer: a bar per stave, coloured and marked for how it
+ * would come out at the best pull (gold with a tick, blue with an arrow for underdone, red with a
+ * cross for charred), so it reads without colour too.
  */
 .fm-heat {
   position: absolute;
@@ -1871,20 +1882,6 @@ body:not([data-view='camp']) #build-label {
   height: 72px;
 }
 
-.fm-band {
-  position: absolute;
-  z-index: 1;
-  left: -4px;
-  right: -4px;
-  border-top: 2px solid #f6d36b;
-  border-bottom: 2px solid #f6d36b;
-  background: rgb(246 211 107 / 0.14);
-  box-shadow: 0 0 8px rgb(246 211 107 / 0.4);
-  transition:
-    bottom 0.25s ease-out,
-    height 0.25s ease-out;
-}
-
 .fm-bar {
   position: relative;
   display: flex;
@@ -1897,6 +1894,22 @@ body:not([data-view='camp']) #build-label {
   background: linear-gradient(0deg, #8a1f0a, #ff6a1a 60%, #ffd27a);
   box-shadow: 0 0 10px rgb(255 106 26 / 0.45);
   transition: height 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+/* Hardened at the best pull: gold. Too cold: blue. Too hot: red. */
+.fm-bar[data-finish='hardened'] .fm-bar-fill {
+  background: linear-gradient(0deg, #9a5a10, #f2b63a 60%, #ffe7a0);
+  box-shadow: 0 0 12px rgb(242 182 58 / 0.55);
+}
+
+.fm-bar[data-finish='under'] .fm-bar-fill {
+  background: linear-gradient(0deg, #1f3c6a, #4f86c8 60%, #a8cdf5);
+  box-shadow: none;
+}
+
+.fm-bar[data-finish='charred'] .fm-bar-fill {
+  background: linear-gradient(0deg, #5a0c06, #d8321c 60%, #ff8a66);
+  box-shadow: 0 0 12px rgb(216 50 28 / 0.55);
 }
 
 .fm-bar-mark {

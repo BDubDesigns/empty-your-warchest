@@ -574,7 +574,10 @@ export const firemakingFeelSchema = z.object({
    */
   cookSeconds: positive,
   charRatio: z.number().gt(1),
-  /** Smoke, as a share of the way to hardened: thin white wisps, then thicker. Thick grey is ready. */
+  /**
+   * Smoke off the points, as a share of the way to hardened: thin white wisps from `smokeWisps`,
+   * thicker from `smokeThick`; thick grey once hardened (pull now), black once charring.
+   */
   smokeWisps: fraction,
   smokeThick: fraction,
   /** The hot streak: how deep racks can stack (1 = no streak). */
@@ -591,9 +594,14 @@ export const firemakingFeelSchema = z.object({
   pourDelaySeconds: nonNegative,
   hitStopMs: nonNegative,
   shakeStrength: nonNegative,
-  /** Vibration (ms): a log dropping onto a spot, laying the rack, the pull, the plunge. */
+  /**
+   * Vibration (ms): a log dropping onto a spot, laying the rack, the first point starting to char
+   * (you're late), the pull, the plunge. Nothing buzzes when it's ready: reading the smoke is the
+   * skill.
+   */
   buzzLogMs: nonNegative,
   buzzLayMs: nonNegative,
+  buzzCharMs: nonNegative,
   buzzPullMs: nonNegative,
   buzzPlungeMs: nonNegative,
 });

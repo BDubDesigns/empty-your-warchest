@@ -21,11 +21,6 @@ export interface BestPull {
   at: number;
   finishes: Finish[];
   hardened: number;
-  /**
-   * The heat band that hardens at that moment: every stave whose heat is in it comes out a spear.
-   * It runs from `low` to `low × charRatio`.
-   */
-  band: { low: number; high: number };
   /** Seconds the whole rack is hardened together, if it ever is (0 if not). */
   window: number;
 }
@@ -98,9 +93,9 @@ export function finishOf(cook: Cook, done: number): Finish {
 
 /**
  * The best moment to pull a rack whose staves have `heats`: the one that hardens the most staves
- * (the earliest such moment, while the coldest of them has just hardened). Hardened staves are
- * the ones whose heat falls in a band `charRatio` wide, so the fire is even enough for a full rack
- * when its hottest stave is under `charRatio` times its coldest.
+ * (the earliest such moment, while the coldest of them has just hardened). Staves harden
+ * together when their heats are within `charRatio` of each other, so the fire is even enough for a
+ * full rack when its hottest stave is under `charRatio` times its coldest.
  */
 export function bestPull(
   rules: Pick<Firemaking, 'generator'>,
@@ -113,13 +108,7 @@ export function bestPull(
     const finishes = heats.map((other) => finishOf(cook, doneness(rules, cook, other, at)));
     const hardened = finishes.filter((finish) => finish === 'hardened').length;
     if (!best || hardened > best.hardened || (hardened === best.hardened && at < best.at)) {
-      best = {
-        at,
-        finishes,
-        hardened,
-        band: { low: heat, high: heat * cook.charRatio },
-        window: 0,
-      };
+      best = { at, finishes, hardened, window: 0 };
     }
   }
   if (!best) throw new Error('A rack needs at least one stave');
