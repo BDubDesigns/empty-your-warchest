@@ -2,5 +2,5 @@
 export * from './feel';
 export * from './logic/generate';
 export * from './logic/pattern';
-export * from './logic/press';
+export * from './logic/pump';
 export * from './logic/round';

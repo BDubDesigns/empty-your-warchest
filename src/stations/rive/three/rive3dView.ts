@@ -7,7 +7,7 @@ import { WarchestHud, type ScreenPoint } from '../../../app/warchestHud';
 import type { EventLogger, Game, LiveTuning } from '../../../core';
 import type { RivingFeel, RivingLog } from '../../../data';
 import { generateLog } from '../logic/generate';
-import { DEG, inArc, markArc, normalize, openHeads, starsFor, type Plan } from '../logic/pattern';
+import { DEG, inArc, markArc, openHeads, starsFor, type Plan } from '../logic/pattern';
 import { RivingRound, type RivingEvent } from '../logic/round';
 
 export interface Rive3DDeps {
@@ -25,7 +25,7 @@ const TUTORIAL = 'tutorial.riving';
 /** The chopping block the log stands on: its height, and how much wider than the log it is. */
 const BLOCK_HEIGHT = 0.55;
 const BLOCK_SPREAD = 1.25;
-/** How far the wedges open while the head is driven through (world units, at the end). */
+/** How far the wedges open while the head is pumped through (world units, at the end). */
 const STRAIN_GAP = 0.06;
 /** The camera: how far it looks down (radians) and how far back it sits. */
 const CAMERA_ELEVATION = 58 * DEG;
@@ -33,8 +33,12 @@ const CAMERA_DISTANCE = 9;
 /** The splitting head: how high it starts its drop, and how far it sinks into the log. */
 const HEAD_DROP = 1.5;
 const HEAD_SINK = 0.5;
-/** How far the lever's arm swings down by the end of the pull (radians). */
-const LEVER_SWING = 55 * DEG;
+/** How far the pump handle swings down at the bottom of a stroke (radians). */
+const HANDLE_SWING = 50 * DEG;
+/** How much of a notch the head gives as the handle goes down, before the stroke clicks it in. */
+const HANDLE_GIVE = 0.35;
+/** How wide the cut lines are drawn (world units): thin, so you can see where they cross. */
+const GUIDE_WIDTH = 0.025;
 /** Staves drawn in the burst (past this many, the count says the rest), stacked this many wide. */
 const MAX_STAVES_SHOWN = 64;
 const HEAP_COLUMNS = 8;
@@ -77,11 +81,8 @@ const COLORS = {
   handle: 0x8b5a2b,
   guide: 0xf2ead3,
   danger: 0xe0503c,
-  gold: 0xf0cd5c,
   good: 0x7fd65a,
   crack: 0x1d120a,
-  strain: 0xe0503c,
-  spoiled: 0x7c7468,
 };
 
 /** A part of the log seen on its end: the arc of the end face it covers. */
@@ -103,7 +104,7 @@ interface PieceVisual {
   toScale: number;
   movedAt: number;
   seconds: number;
-  /** Lost pieces and burst ones hop on their way; lost ones also grey out. */
+  /** Burst pieces hop on their way. */
   hop: number;
 }
 
@@ -121,7 +122,7 @@ interface StaveFlight {
 /**
  * Riving in 3D: a log stood on end on a chopping block, seen from above, split by a splitting
  * head (a star of blades) into staves. Pick a head and turn the cuts, strike to drop the head on,
- * pull the lever down to drive it through, and the log bursts into its staves (times its grains).
+ * pump the handle to drive it through, and the log bursts into its staves (times its grains).
  * The rules (RivingRound) decide everything; this draws them and feeds them touches.
  */
 export class Rive3DView implements ScreenView {
@@ -155,15 +156,22 @@ export class Rive3DView implements ScreenView {
   #pointer:
     | {
         id: number;
-        startX: number;
         startY: number;
-        base: number;
-        turn: { from: number; at: number } | undefined;
+        /** Turning the cuts: where it started, and the recent turns for the lift guard. */
+        turn:
+          | {
+              from: number;
+              at: number;
+              recent: { time: number; x: number; y: number; rotation: number }[];
+            }
+          | undefined;
       }
     | undefined;
-  /** Total lever drag (pixels) this pull, carried across finger lifts. */
-  #leverPixels = 0;
-  #pulseAt = 0;
+  /** The turn last shown, and when it last ticked, for the detent tick on each step. */
+  #shownTurn: number | undefined;
+  #tickedAt = 0;
+  /** The head's depth into the log as drawn (0–1), easing from one notch to the next. */
+  #drive = { from: 0, to: 0, at: 0 };
   #shake = 0;
   #frozenUntil = 0;
   #bankedXp: XpDeposit | undefined;
@@ -273,7 +281,8 @@ export class Rive3DView implements ScreenView {
       seed,
       this.#lastHead ?? heads[heads.length - 1],
     );
-    this.#leverPixels = 0;
+    this.#drive = { from: 0, to: 0, at: 0 };
+    this.#shownTurn = undefined;
     this.#planKey = '';
     this.#starsShown = 0;
     this.#buildLog(log);
@@ -334,8 +343,8 @@ export class Rive3DView implements ScreenView {
 
   /**
    * The splitting head for a `count`-way split: a steel blade along each cut line from a hub at
-   * the pith, a post up from the hub, and a lever arm reaching toward you that swings down as
-   * you pull.
+   * the pith, a post up from the hub, and a pump handle reaching toward you that swings down with
+   * each stroke.
    */
   #buildHead(count: number, radius: number) {
     if (this.#head) this.#logRoot.remove(this.#head.root);
@@ -356,8 +365,8 @@ export class Rive3DView implements ScreenView {
     const post = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.06, 0.7, 10), dark);
     post.position.y = 0.22 + 0.35;
     root.add(post);
-    // The arm always reaches out to the right, however the blades are turned, so you see it
-    // swing down as you pull.
+    // The handle always reaches out to the right, however the blades are turned, so you see it
+    // swing down as you pump.
     const yaw = new THREE.Group();
     yaw.position.y = 0.22 + 0.7;
     const arm = new THREE.Group();
@@ -660,7 +669,6 @@ export class Rive3DView implements ScreenView {
       this.#deps.haptics.pulse(feel.buzzStrikeMs);
       this.#shake = 0.07 * feel.shakeStrength;
       this.#frozenUntil = performance.now() + feel.hitStopMs;
-      this.#leverPixels = 0;
       // The log becomes its wedges, standing together until the head drives them apart.
       const whole = this.#pieces.get('log');
       if (whole) this.#logRoot.remove(whole.mesh);
@@ -672,32 +680,37 @@ export class Rive3DView implements ScreenView {
           round.now,
         );
       }
-    } else if (event.type === 'lost') {
-      const visual = this.#pieces.get(String(event.wedge));
-      if (visual) {
-        // It pops off its side and lands behind the block, out of the way.
-        const out = this.#direction(visual.arc.start + visual.arc.width / 2);
-        const behind = new THREE.Vector3(out.x * 1.6, -BLOCK_HEIGHT, -1.5 - Math.random() * 0.4);
-        this.#move(visual, behind, {
-          tilt: Math.PI / 2.3,
-          scale: 0.5,
-          seconds: feel.pieceSeconds,
-          hop: 0.7,
-        });
-        visual.mesh.traverse((child) => {
-          if (child instanceof THREE.Mesh && child.material instanceof THREE.MeshLambertMaterial) {
-            child.material.color.setHex(COLORS.spoiled);
-            child.material.map = null;
-          }
-        });
-      }
-      this.#play('crash-wood', 0.75, -200);
-      this.#deps.haptics.pulse(feel.buzzLostMs);
-      this.#shake = 0.12 * feel.shakeStrength;
-      this.#flash('A piece split off! −1', 'bad');
+    } else if (event.type === 'stroke') {
+      this.#stroke(event.stroke, event.strokes);
     } else {
       this.#burst(event);
     }
+  }
+
+  /**
+   * A stroke of the pump: the head jolts one notch deeper, each one harder than the last (louder,
+   * lower, a longer buzz and a bigger shake), so it builds to the burst.
+   */
+  #stroke(stroke: number, strokes: number): void {
+    const feel = this.#deps.feel.values;
+    const round = this.#round;
+    if (!round) return;
+    const build = stroke / strokes;
+    this.#drive = { from: this.#driveDepth(), to: build, at: round.now };
+    this.#play(`chop-${1 + Math.floor(Math.random() * 3)}`, 0.55 + build * 0.35, -150 * stroke);
+    this.#play(`creak-${1 + Math.floor(Math.random() * 3)}`, 0.25 + build * 0.45, -400 * build);
+    this.#deps.haptics.pulse(feel.buzzPumpMs + Math.round(build * feel.buzzPumpBuildMs));
+    this.#shake = (0.03 + 0.07 * build) * feel.shakeStrength;
+    this.#frozenUntil = performance.now() + feel.hitStopMs * (0.4 + 0.6 * build);
+  }
+
+  /** How deep the head is drawn now: easing into the last notch the pump drove it to. */
+  #driveDepth(): number {
+    const round = this.#round;
+    if (!round) return 0;
+    const { from, to, at } = this.#drive;
+    const t = Math.min(Math.max((round.now - at) / this.#deps.feel.values.pumpSeconds, 0), 1);
+    return from + (to - from) * (1 - (1 - t) ** 3);
   }
 
   /**
@@ -717,7 +730,6 @@ export class Rive3DView implements ScreenView {
     this.#frozenUntil = performance.now() + feel.hitStopMs * 1.5;
     if (this.#head) this.#head.root.visible = false;
     for (const visual of this.#pieces.values()) {
-      if (event.lost.includes(Number(visual.arc.id))) continue;
       const out = this.#direction(visual.arc.start + visual.arc.width / 2);
       this.#move(visual, out.multiplyScalar(1.3).setY(0.2), {
         tilt: Math.PI / 3,
@@ -806,8 +818,7 @@ export class Rive3DView implements ScreenView {
   #updatePieces(): void {
     const round = this.#round;
     if (!round) return;
-    const phase = round.phase;
-    const strain = phase.kind === 'press' ? phase.press.progress : 0;
+    const strain = round.phase.kind === 'pump' ? this.#headDepth() : 0;
     for (const visual of this.#pieces.values()) {
       // Standing wedges open a little as the head drives in.
       if (visual.seconds === 0 && visual.arc.id !== 'log') {
@@ -828,6 +839,15 @@ export class Rive3DView implements ScreenView {
     }
   }
 
+  /** The head's depth as drawn (0–1): the notch it's at, plus the give as the handle goes down. */
+  #headDepth(): number {
+    const phase = this.#round?.phase;
+    if (phase?.kind === 'done') return 1;
+    if (phase?.kind !== 'pump') return 0;
+    const { pump } = phase;
+    return Math.min(this.#driveDepth() + (pump.handle * HANDLE_GIVE) / pump.strokes, 1);
+  }
+
   /** The cut lines while planning; the head dropping and driving in, and the cracks, after. */
   #updateTools(): void {
     const round = this.#round;
@@ -843,15 +863,15 @@ export class Rive3DView implements ScreenView {
         mesh.visible = true;
         mesh.position.set(0, log.height + 0.01, 0);
         mesh.rotation.set(0, angle, 0);
-        mesh.scale.set(log.radius, 1, 0.04);
-        (mesh.material as THREE.MeshBasicMaterial).color.setHex(this.#lineColor(plan, angle));
+        mesh.scale.set(log.radius, 1, GUIDE_WIDTH);
+        (mesh.material as THREE.MeshBasicMaterial).color.setHex(this.#lineColor(angle));
       });
       return;
     }
     const head = this.#head;
     if (!head) return;
-    const press = phase.kind === 'press' ? phase.press : undefined;
-    const progress = press?.progress ?? (phase.kind === 'done' ? 1 : 0);
+    const pump = phase.kind === 'pump' ? phase.pump : undefined;
+    const progress = this.#headDepth();
     if (phase.kind === 'swing') {
       // The head drops, speeding up, and bites in as it lands.
       const t = Math.min((round.now - phase.at) / round.feel.strikeSeconds, 1);
@@ -859,9 +879,9 @@ export class Rive3DView implements ScreenView {
     } else {
       head.root.position.y = log.height - 0.03 - progress * HEAD_SINK;
     }
-    head.arm.rotation.x = progress * LEVER_SWING;
-    if (!press) return;
-    // A crack runs down the bark at the end of every line, reddening as the bubble strays.
+    head.arm.rotation.x = (pump?.handle ?? 0) * HANDLE_SWING;
+    if (!pump) return;
+    // A crack runs down the bark at the end of every line, further with each stroke.
     plan.lines.forEach((angle, index) => {
       const crack = this.#crack(index);
       const out = this.#direction(angle);
@@ -871,15 +891,11 @@ export class Rive3DView implements ScreenView {
       crack.position.copy(out).multiplyScalar(log.radius + 0.01);
       crack.position.y = log.height - depth / 2;
       crack.rotation.set(0, angle + Math.PI / 2, 0);
-      (crack.material as THREE.MeshBasicMaterial).color
-        .setHex(COLORS.crack)
-        .lerp(new THREE.Color(COLORS.strain), Math.min(Math.abs(press.offset), 1));
     });
-    this.#pressureFeedback();
   }
 
-  /** Red through a good grain, green through rot, gold along a check; else plain. */
-  #lineColor(plan: Plan, angle: number): number {
+  /** Red through a good grain, green through rot; else plain. */
+  #lineColor(angle: number): number {
     const log = this.#log;
     if (!log) return COLORS.guide;
     const rules = this.#deps.game.data.riving;
@@ -891,31 +907,7 @@ export class Rive3DView implements ScreenView {
       rules.grainKinds.find((entry) => entry.id === kind)?.multiplier ?? 1;
     if (through.some((grain) => value(grain.kind) > 1)) return COLORS.danger;
     if (through.length > 0) return COLORS.good;
-    const tolerance = rules.checkTolerance * DEG;
-    const onCheck = log.checks.some((check) => {
-      const gap = normalize(angle - check * DEG);
-      return Math.min(gap, TAU - gap) <= tolerance;
-    });
-    return onCheck && plan.checkLines > 0 ? COLORS.gold : COLORS.guide;
-  }
-
-  /**
-   * While pulling: pulses of buzz and creak that come faster the harder you push and the further
-   * the head has gone, so the pressure builds until it bursts.
-   */
-  #pressureFeedback(): void {
-    const round = this.#round;
-    const phase = round?.phase;
-    if (!round || phase?.kind !== 'press') return;
-    const press = phase.press;
-    if (press.pressure <= 0 || round.now < this.#pulseAt) return;
-    const feel = this.#deps.feel.values;
-    const build = Math.min(press.pressure * 0.6 + press.progress * 0.4, 1);
-    this.#pulseAt =
-      round.now + feel.pressPulseSlow + (feel.pressPulseFast - feel.pressPulseSlow) * build;
-    this.#deps.haptics.pulse(feel.buzzPressMs + Math.round(build * 10));
-    this.#play(`creak-${1 + Math.floor(Math.random() * 3)}`, 0.15 + build * 0.4, build * 900);
-    this.#shake = Math.max(this.#shake, 0.012 * build * feel.shakeStrength);
+    return COLORS.guide;
   }
 
   /** The burst's staves: arcing out of the log, tumbling, then lying in the heap. */
@@ -986,13 +978,11 @@ export class Rive3DView implements ScreenView {
       const angle = this.#angleAt(event.clientX, event.clientY);
       this.#pointer = {
         id: event.pointerId,
-        startX: event.clientX,
         startY: event.clientY,
-        base: this.#leverPixels,
-        // A finger keeps doing what it started: one that was turning the cuts doesn't pull.
+        // A finger keeps doing what it started: one that was turning the cuts doesn't pump.
         turn:
           round.phase.kind === 'plan' && angle !== undefined
-            ? { from: round.rotation, at: angle }
+            ? { from: round.rotation, at: angle, recent: [] }
             : undefined,
       };
     });
@@ -1002,29 +992,62 @@ export class Rive3DView implements ScreenView {
       if (!pointer || pointer.id !== event.pointerId || !round) return;
       const phase = round.phase;
       if (phase.kind === 'plan' && pointer.turn) {
-        // Turning: the cuts follow the finger round the pith.
+        // Turning: the cuts follow the finger round the pith, a step at a time.
         const angle = this.#angleAt(event.clientX, event.clientY);
-        if (angle !== undefined) round.turnTo(pointer.turn.from + angle - pointer.turn.at);
-      } else if (phase.kind === 'press' && !pointer.turn) {
-        // Pulling down drives the head; sideways pushes the bubble (back to the middle).
-        this.#leverPixels = pointer.base + Math.max(event.clientY - pointer.startY, 0);
-        round.drag(this.#leverPixels);
-        round.lean((event.clientX - pointer.startX) / this.#deps.feel.values.leanTravel);
+        if (angle === undefined) return;
+        const { turn } = pointer;
+        turn.recent.push({
+          time: performance.now(),
+          x: event.clientX,
+          y: event.clientY,
+          rotation: round.rotation,
+        });
+        if (turn.recent.length > 40) turn.recent.shift();
+        round.turnTo(turn.from + angle - turn.at);
+      } else if (phase.kind === 'pump' && !pointer.turn) {
+        // Pumping: swipe down for a stroke, back up (or lift) for the next.
+        round.pull(event.clientY - pointer.startY);
       }
     });
     const end = (event: PointerEvent) => {
       const pointer = this.#pointer;
       if (pointer?.id !== event.pointerId) return;
-      // Where the finger lifted counts too: moves can be dropped on a fast flick.
-      if (this.#round?.phase.kind === 'press' && !pointer.turn) {
-        this.#leverPixels = pointer.base + Math.max(event.clientY - pointer.startY, 0);
-        this.#round.drag(this.#leverPixels);
-        this.#round.lean(0);
+      const round = this.#round;
+      if (round?.phase.kind === 'pump' && !pointer.turn) {
+        // Where the finger lifted counts too: moves can be dropped on a fast flick.
+        round.pull(event.clientY - pointer.startY);
+        round.release();
+      } else if (round?.phase.kind === 'plan' && pointer.turn) {
+        this.#guardLift(round, pointer.turn.recent, event);
       }
       this.#pointer = undefined;
     };
     canvas.addEventListener('pointerup', end);
     canvas.addEventListener('pointercancel', end);
+  }
+
+  /**
+   * A finger that was holding still before it lifted meant the turn it was holding: lifting rolls
+   * the touch point a pixel or two, which mustn't nudge the cuts off it. If the finger moved under
+   * `liftPx` in its last `liftMs`, the turn goes back to where it was then.
+   */
+  #guardLift(
+    round: RivingRound,
+    recent: readonly { time: number; x: number; y: number; rotation: number }[],
+    event: PointerEvent,
+  ): void {
+    const feel = this.#deps.feel.values;
+    const settled = performance.now() - feel.liftMs;
+    const before = recent.filter((entry) => entry.time <= settled).at(-1);
+    if (!before || before.rotation === round.rotation) return;
+    const moved = Math.hypot(event.clientX - before.x, event.clientY - before.y);
+    if (moved >= feel.liftPx) return;
+    this.#deps.logger.log('riving.liftGuard', {
+      from: Math.round(round.rotation / DEG),
+      to: Math.round(before.rotation / DEG),
+      moved: Math.round(moved),
+    });
+    round.turnTo(before.rotation);
   }
 
   /** The angle round the pith (as the face measures it) of a point on the screen. */
@@ -1086,10 +1109,9 @@ export class Rive3DView implements ScreenView {
     left.setAttribute('aria-label', 'Turn the cuts counter-clockwise');
     right.setAttribute('aria-label', 'Turn the cuts clockwise');
     controls.append(left, strike, right);
-    // The bubble while pulling: wanders; drag sideways to keep it in the middle.
-    const level = el('div', 'rv-level');
-    const levelBubble = el('div', 'rv-level-bubble');
-    level.append(levelBubble);
+    // The turn of the cuts, in degrees.
+    const turn = el('div', 'rv-turn');
+    turn.setAttribute('aria-label', 'Turn of the cuts');
     const card = el('div', 'rv-card');
     const cardStars = el('div', 'w3d-stars rv-card-stars');
     const cardTitle = el('div', 'rv-card-title');
@@ -1106,7 +1128,7 @@ export class Rive3DView implements ScreenView {
     cardButtons.append(leave, next);
     card.append(cardStars, cardTitle, cardText, cardButtons);
     card.hidden = true;
-    root.append(logName, stars, hint, sum, heads, flashes, controls, level, card);
+    root.append(logName, stars, turn, hint, sum, heads, flashes, controls, card);
     this.#element.append(root);
     return {
       root,
@@ -1120,8 +1142,7 @@ export class Rive3DView implements ScreenView {
       flashes,
       controls,
       strike,
-      level,
-      levelBubble,
+      turn,
       card,
       cardStars,
       cardTitle,
@@ -1187,13 +1208,13 @@ export class Rive3DView implements ScreenView {
     }
     if (!round) {
       ui.controls.hidden = ui.heads.hidden = ui.sum.hidden = ui.stars.hidden = true;
-      ui.level.hidden = true;
+      ui.turn.hidden = true;
       ui.hint.textContent = '';
       return;
     }
     const kind = round.phase.kind;
     const planning = kind === 'plan';
-    ui.controls.hidden = ui.heads.hidden = !planning;
+    ui.controls.hidden = ui.heads.hidden = ui.turn.hidden = !planning;
     ui.sum.hidden = kind === 'done';
     ui.stars.hidden = kind === 'done';
     const plan = round.plan;
@@ -1204,23 +1225,32 @@ export class Rive3DView implements ScreenView {
         ? 'Drag the log to turn the cuts: run one through the rot, keep the silver whole'
         : 'Drag the log to turn the cuts · pick a head · then Strike',
       swing: '',
-      press: 'Pull down · slide sideways to keep the bubble centred',
+      pump: 'Swipe down to pump the handle',
       done: '',
     };
     ui.hint.textContent = hints[kind] ?? '';
     const phaseNow = round.phase;
-    const press = phaseNow.kind === 'press' ? phaseNow.press : undefined;
-    ui.level.hidden = !press;
-    if (press) {
-      const x = Math.max(-1, Math.min(1, press.offset));
-      ui.levelBubble.style.left = `${String(50 + x * 45)}%`;
-      ui.levelBubble.classList.toggle('rv-level-danger', Math.abs(press.offset) > 0.6);
-      ui.level.style.setProperty('--pressure', press.pressure.toFixed(2));
-    }
+    const pump = phaseNow.kind === 'pump' ? phaseNow.pump : undefined;
+    const degrees = Math.round(round.rotation / DEG);
+    if (planning) this.#showTurn(degrees);
     this.#element.dataset.head = String(round.count);
-    this.#element.dataset.turn = String(Math.round(round.rotation / DEG));
+    this.#element.dataset.turn = String(degrees);
     this.#element.dataset.worth = String(plan.worth);
-    this.#element.dataset.progress = press ? press.progress.toFixed(2) : '';
+    this.#element.dataset.progress = pump ? pump.progress.toFixed(2) : '';
+  }
+
+  /** The degrees readout, and a detent tick (a tap of vibration) for each step the cuts turn. */
+  #showTurn(degrees: number): void {
+    if (degrees === this.#shownTurn) return;
+    const first = this.#shownTurn === undefined;
+    this.#shownTurn = degrees;
+    this.#ui.turn.textContent = `${String(degrees)}°`;
+    const feel = this.#deps.feel.values;
+    const now = performance.now();
+    if (first || now - this.#tickedAt < feel.tickGapMs) return;
+    this.#tickedAt = now;
+    this.#deps.haptics.pulse(feel.buzzTickMs);
+    this.#play('chop-1', 0.06, 1500);
   }
 
   /**
@@ -1280,7 +1310,7 @@ export class Rive3DView implements ScreenView {
     );
     if (product > plan.multiplier) parts.push(span('rv-sum-cap', `cap ×${times(plan.multiplier)}`));
     ui.sum.replaceChildren(...parts);
-    // Stars for this plan if pulled cleanly.
+    // Stars for this plan.
     const stars = starsFor(this.#deps.game.data.riving, plan.worth, round.best.worth);
     ui.starIcons.forEach((icon, index) => {
       const on = index < stars;
@@ -1312,7 +1342,7 @@ export class Rive3DView implements ScreenView {
     const log = this.#log;
     if (!log) return;
     const ui = this.#ui;
-    const { plan, best, stars, bonus, banked, lost } = event;
+    const { plan, best, stars, bonus, banked } = event;
     const kinds = this.#deps.game.data.riving.grainKinds;
     ui.cardStars.replaceChildren(
       ...[0, 1, 2].map((index) => {
@@ -1339,11 +1369,8 @@ export class Rive3DView implements ScreenView {
     );
     const lines = [`${sum} = ${String(plan.worth)}`];
     if (bonus > 0) lines.push(`${'★'.repeat(stars)} bonus +${String(bonus)}`);
-    if (lost.length > 0) {
-      lines.push(`${String(lost.length)} piece${lost.length === 1 ? '' : 's'} split off`);
-    }
     lines.push(
-      plan.worth >= best.worth && lost.length === 0
+      plan.worth >= best.worth
         ? 'The best split there was!'
         : `Best: ${String(best.worth)} with the ${String(best.count)}-way`,
     );

@@ -1,17 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import {
   DEG,
-  Press,
+  Pump,
   RivingRound,
   bestPlan,
   cutLines,
   generateLog,
   openHeads,
   planFor,
+  snapTurn,
   starsFor,
   survey,
   wedgesOf,
-  type PressSetup,
   type RivingEvent,
 } from '../src/stations/rive';
 import type { RivingLog } from '../src/data';
@@ -30,34 +30,18 @@ function logWith(
   return { id: 'test_log', radius: 1, height: 1.6, rings: 12, checks, grains, knots };
 }
 
-/** A pull for a head like this one. */
-function press(setup: Partial<PressSetup> = {}) {
-  return new Press(() => feel, { count: 6, checkLines: 0, knotLines: 0, seed: 1, ...setup });
+/** A pump for a `count`-way head among 4- to 16-way heads. */
+function pump(count = 6) {
+  return new Pump(() => feel, count, 4, 16);
 }
 
-/**
- * Pulls `target` through, keeping the lever `lead` of the log ahead of the head, and leaning
- * `steer` times against where the bubble was `lag` seconds ago (0: no leaning).
- */
-function pullThrough(target: Press, lead: number, steer = 0, lag = 0.25) {
-  const seen: number[] = [];
-  for (let t = 0; t < 30 && !target.through; t += STEP) {
-    target.drag((target.progress + lead) * feel.leverTravel);
-    seen.push(target.offset);
-    const late = seen[Math.max(0, seen.length - 1 - Math.round(lag / STEP))] ?? 0;
-    target.lean(Math.max(-1, Math.min(1, -late * steer)));
-    target.tick(STEP);
+/** Pumps `target` through: full swipes down and back up. */
+function pumpThrough(target: Pump) {
+  for (let stroke = 0; stroke < 20 && !target.through; stroke++) {
+    target.pull(feel.pumpTravel);
+    target.pull(0);
   }
   return target;
-}
-
-/** Pieces lost on average over `runs` seeds. */
-function averageLosses(setup: Partial<PressSetup>, lead: number, steer: number, runs = 100) {
-  let losses = 0;
-  for (let seed = 1; seed <= runs; seed++) {
-    losses += pullThrough(press({ ...setup, seed }), lead, steer).losses;
-  }
-  return losses / runs;
 }
 
 describe('the cut pattern', () => {
@@ -105,24 +89,21 @@ describe('the cut pattern', () => {
     expect(capped.multiplier).toBe(Math.min(81, rules.multiplierCap));
   });
 
-  it('a knot spoils the wedge it touches; lost wedges take their grains with them', () => {
+  it('a knot spoils the wedge it touches', () => {
     const log = logWith([{ kind: 'gold', angle: 45, width: 10 }], [], [{ angle: 135, width: 10 }]);
     const plan = planFor(rules, log, 4, 0);
     expect(plan.knotted).toEqual([1]);
     expect(plan.staves).toBe(3);
-    // Wedge 0 (0°–90°) holds the gold: lose it and the ×3 goes too.
-    const lost = planFor(rules, log, 4, 0, [0]);
-    expect(lost.staves).toBe(2);
-    expect(lost.multiplier).toBe(1);
   });
 
-  it('lines along checks are counted', () => {
-    const log = logWith([], [90, 270]);
-    expect(planFor(rules, log, 4, 0).checkLines).toBe(2);
-    expect(planFor(rules, log, 4, 30 * DEG).checkLines).toBe(0);
+  it('turns snap to whole steps, all the way round', () => {
+    expect(snapTurn(rules, 30.4 * DEG) / DEG).toBeCloseTo(30);
+    expect(snapTurn(rules, 30.6 * DEG) / DEG).toBeCloseTo(31);
+    expect(snapTurn(rules, 359.7 * DEG)).toBeCloseTo(0);
+    expect(snapTurn(rules, -1 * DEG) / DEG).toBeCloseTo(359);
   });
 
-  it('the best split tries every open head at every turn', () => {
+  it('the best split tries every open head at every whole step of turn', () => {
     // Gold and silver 90° apart: a 4-way keeps both (×6 = 24); a 6-way can't fit lines past
     // both without cutting one, so the 4-way wins on 4-6 heads.
     const log = logWith([
@@ -135,6 +116,25 @@ describe('the cut pattern', () => {
     expect(bestPlan(rules, log, [4, 5, 6])).toEqual(best);
     // A plain log: the most pieces wins.
     expect(bestPlan(rules, logWith([]), [4, 5, 6]).count).toBe(6);
+    // A 7-way's lines never land on whole steps again, so it's tried all the way round.
+    const seven = bestPlan(rules, logWith([{ kind: 'gold', angle: 300, width: 12 }]), [7]);
+    expect(Math.abs(seven.rotation / DEG - Math.round(seven.rotation / DEG))).toBeLessThan(1e-6);
+    expect(seven.multiplier).toBe(3);
+  });
+
+  it('leeway: the most degrees in a row a head keeps 3 stars', () => {
+    // A 4-way keeps 3 stars over a 20° silver while every line misses it (a line on its edge
+    // misses): 55° to 125°, 71 whole steps.
+    const log = logWith([{ kind: 'silver', angle: 45, width: 20 }]);
+    const { leeway } = survey(rules, log, [4]);
+    expect(leeway).toBe(71);
+    // A line through the rot (81°–89°) puts the opposite one through the gold at 260°–268°
+    // until 88°: 3 stars hangs on 88° and 89°.
+    const tight = logWith([
+      { kind: 'rot', angle: 85, width: 10 },
+      { kind: 'gold', angle: 264, width: 8 },
+    ]);
+    expect(survey(rules, tight, [4]).leeway).toBe(2);
   });
 
   it('stars are shares of the best, and heads open by level', () => {
@@ -185,57 +185,61 @@ describe('random logs', () => {
     expect(bestPlan(rules, log, [5, 8]).count).toBe(5);
   });
 
-  it('most logs are a real choice: the biggest head often is not the best', () => {
+  it('most logs are a real choice you can find: the biggest head often is not the best', () => {
     let notBiggest = 0;
     let easy = 0;
+    let fiddly = 0;
     for (let seed = 1; seed <= 40; seed++) {
       const log = generateLog(rules, seed * 7919, heads);
       const result = survey(rules, log, heads);
       if (result.best.count !== 6) notBiggest += 1;
       if (result.easy > rules.generator.easyShare) easy += 1;
+      if (result.leeway < rules.generator.leeway) fiddly += 1;
     }
     expect(notBiggest).toBeGreaterThan(12);
     expect(easy).toBeLessThan(10);
+    expect(fiddly).toBeLessThanOrEqual(1);
   });
 });
 
-describe('the pull', () => {
-  it('drives through, faster under more pressure', () => {
-    const hard = pullThrough(press({ count: 4 }), 1, 3);
-    const gentle = pullThrough(press({ count: 4 }), 0.05, 3);
-    expect(hard.through && gentle.through).toBe(true);
-    expect(hard.seconds).toBeLessThan(gentle.seconds);
-    expect(hard.seconds).toBeGreaterThanOrEqual(feel.driveSeconds - 0.05);
+describe('the pump', () => {
+  it('each full swipe down is a stroke; the last one goes through', () => {
+    const target = pump(4);
+    expect(target.strokes).toBe(feel.pumpsFew);
+    expect(target.pull(feel.pumpTravel / 2)).toBeUndefined();
+    expect(target.handle).toBeCloseTo(0.5);
+    expect(target.pull(feel.pumpTravel)).toBe('stroke');
+    expect(target.done).toBe(1);
+    // Held at the bottom, it doesn't stroke again until the handle comes back up.
+    expect(target.pull(feel.pumpTravel * 3)).toBeUndefined();
+    expect(target.done).toBe(1);
+    pumpThrough(target);
+    expect(target.through).toBe(true);
+    expect(target.progress).toBe(1);
   });
 
-  it('more pieces wander more; checks calm it; knots shake it', () => {
-    expect(press({ count: 12 }).wobble).toBeGreaterThan(press({ count: 4 }).wobble);
-    expect(press({ count: 6, checkLines: 6 }).wobble).toBeLessThan(press({ count: 6 }).wobble);
-    expect(press({ count: 6, knotLines: 1 }).wobble).toBeGreaterThan(press({ count: 6 }).wobble);
+  it('past the bottom stop, the finger carries the stroke: back up a little re-arms it', () => {
+    const target = pump(4);
+    target.pull(feel.pumpTravel * 3);
+    // Halfway back up from where the finger got to, not from where it started.
+    target.pull(feel.pumpTravel * 2.5);
+    expect(target.handle).toBeCloseTo(0.5);
+    expect(target.pull(feel.pumpTravel * 3)).toBe('stroke');
   });
 
-  it('leaning against the bubble saves pieces; greedy heads still lose some', () => {
-    expect(averageLosses({ count: 4 }, 1, 2.5)).toBe(0);
-    expect(averageLosses({ count: 8 }, 1, 2.5)).toBeLessThan(averageLosses({ count: 8 }, 1, 0));
-    expect(averageLosses({ count: 16 }, 0.1, 2.5)).toBeGreaterThan(0.5);
+  it('lifting the finger re-arms it too', () => {
+    const target = pump(4);
+    target.pull(feel.pumpTravel);
+    target.release();
+    expect(target.handle).toBe(0);
+    expect(target.pull(feel.pumpTravel)).toBe('stroke');
+    expect(target.done).toBe(2);
   });
 
-  it('a lost piece starts the bubble again from the middle', () => {
-    const target = press({ count: 6 });
-    target.drag(feel.leverTravel * 0.2);
-    target.lean(1);
-    let result;
-    for (let t = 0; t < 5 && result !== 'lost'; t += STEP) result = target.tick(STEP);
-    expect(result).toBe('lost');
-    expect(target.losses).toBe(1);
-    expect(target.offset).toBe(0);
-  });
-
-  it('the same seed wanders the same way', () => {
-    const one = pullThrough(press({ count: 10, seed: 9 }), 0.5);
-    const two = pullThrough(press({ count: 10, seed: 9 }), 0.5);
-    expect(two.offset).toBe(one.offset);
-    expect(two.losses).toBe(one.losses);
+  it('more pieces take more strokes', () => {
+    expect(pump(16).strokes).toBe(feel.pumpsMany);
+    expect(pump(10).strokes).toBeGreaterThanOrEqual(feel.pumpsFew);
+    expect(pump(10).strokes).toBeLessThanOrEqual(feel.pumpsMany);
   });
 });
 
@@ -262,19 +266,18 @@ describe('RivingRound', () => {
     return { round, logger, events, banked: () => banked };
   }
 
-  /** Strikes, then pulls the head through, leaning `steer` times against the bubble. */
-  function rive(round: RivingRound, lead = 0.2, steer = 3) {
+  /** Strikes, then pumps the head through. */
+  function rive(round: RivingRound) {
     round.strike();
     round.tick(feel.strikeSeconds + STEP);
-    for (let t = 0; t < 30 && round.phase.kind === 'press'; t += STEP) {
-      const phase = round.phase;
-      round.drag((phase.press.progress + lead) * feel.leverTravel);
-      round.lean(-phase.press.offset * steer);
+    for (let stroke = 0; stroke < 20 && round.phase.kind === 'pump'; stroke++) {
+      round.pull(feel.pumpTravel);
+      round.release();
       round.tick(STEP);
     }
   }
 
-  it('pick a head, turn the cuts, strike and pull: the log banks staves × grains, plus stars', async () => {
+  it('pick a head, turn the cuts, strike and pump: the log banks staves × grains, plus stars', async () => {
     const log = logWith([{ kind: 'gold', angle: 45, width: 10 }]);
     const { round, banked, events, logger } = setup(log);
     round.choose(4);
@@ -282,9 +285,11 @@ describe('RivingRound', () => {
     expect(round.plan.worth).toBe(12);
     rive(round);
     expect(round.phase.kind).toBe('done');
+    const strokes = events.filter((event) => event.type === 'stroke');
+    expect(strokes).toHaveLength(feel.pumpsFew - 1);
     const done = events.find((event) => event.type === 'done');
     if (done?.type !== 'done') throw new Error('No done event');
-    // The best on 4–6 heads: a 6-way keeping the gold, 18. 12 is 2 stars (two-thirds).
+    // The best on 4–6 heads: a 6-way keeping the gold, 18. 12 is two-thirds of it.
     expect(done.best.worth).toBe(18);
     expect(done.stars).toBe(starsFor(rules, 12, 18));
     const bonus =
@@ -296,24 +301,28 @@ describe('RivingRound', () => {
     );
   });
 
-  it('the best split with a clean pull gets 3 stars', () => {
+  it('the best split gets 3 stars, and every piece comes out', () => {
     const log = logWith([{ kind: 'silver', angle: 100, width: 14 }]);
     const { round, events } = setup(log);
     round.choose(round.best.count);
     round.turnTo(round.best.rotation);
-    rive(round, 0.05, 3);
+    rive(round);
     const done = events.find((event) => event.type === 'done');
     expect(done?.type === 'done' && done.stars).toBe(3);
+    expect(done?.type === 'done' && done.plan.staves).toBe(round.best.count);
   });
 
-  it('pieces lost in the pull are gone, with any grain in them', () => {
-    const { round, events } = setup(logWith([]), [4, 5, 6, 16]);
-    round.choose(16);
-    rive(round, 1, 0);
-    const lost = events.filter((event) => event.type === 'lost');
-    expect(lost.length).toBeGreaterThan(0);
-    const done = events.find((event) => event.type === 'done');
-    expect(done?.type === 'done' && done.plan.staves).toBe(16 - lost.length);
+  it('the cuts turn in whole steps, from the start', () => {
+    const { round } = setup(logWith([]));
+    const whole = (radians: number) => Math.abs(radians / DEG - Math.round(radians / DEG));
+    expect(whole(round.rotation)).toBeLessThan(1e-6);
+    round.turnTo(30.4 * DEG);
+    expect(round.rotation / DEG).toBeCloseTo(30);
+    round.nudge(1);
+    expect(round.rotation / DEG).toBeCloseTo(31);
+    round.nudge(-1);
+    round.nudge(-1);
+    expect(round.rotation / DEG).toBeCloseTo(29);
   });
 
   it('only open heads can be picked, and only while planning', () => {

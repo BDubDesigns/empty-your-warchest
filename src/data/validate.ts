@@ -119,6 +119,13 @@ function checkReferences(data: GameData, ctx: z.RefinementCtx): void {
   if (!riving.cutters.some((cutter) => cutter.level === 1)) {
     issue(['riving', 'cutters'], 'At least one head must be open from level 1');
   }
+  const steps = 360 / riving.turnStep;
+  if (Math.abs(steps - Math.round(steps)) > 1e-9) {
+    issue(['riving', 'turnStep'], 'Must go into 360 a whole number of times');
+  }
+  if (riving.feel.pumpsFew > riving.feel.pumpsMany) {
+    issue(['riving', 'feel', 'pumpsFew'], 'The fewest-piece head must not need more strokes');
+  }
   if (riving.stars.one > riving.stars.two || riving.stars.two > riving.stars.three) {
     issue(['riving', 'stars'], 'More stars must not need less');
   }

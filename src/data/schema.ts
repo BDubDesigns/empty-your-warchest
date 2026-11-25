@@ -324,54 +324,38 @@ export const warchestSchema = z.object({
 
 /** Feel numbers for riving. The debug menu can override them live. */
 export const rivingFeelSchema = z.object({
-  /** Degrees each ↺ ↻ tap turns the cuts. */
-  fineAimStep: positive,
   /** Seconds the splitting head takes to drop onto the log, and the freeze when it lands (ms). */
   strikeSeconds: positive,
   hitStopMs: nonNegative,
   shakeStrength: nonNegative,
-  /** Screen pixels of lever drag from the top of the log to the bottom. */
-  leverTravel: positive,
   /**
-   * Pulling the lever ahead of the head builds pressure, full at `pressureAt` of the log ahead.
-   * Gentle pressure drives the head through in `slowDriveSeconds`, full pressure in
-   * `driveSeconds`, and full pressure makes the bubble wander `pressurePull` times more again.
+   * Turning the cuts: a tick of vibration (ms) for each step of turn, at most one every
+   * `tickGapMs`. A finger that moved under `liftPx` in its last `liftMs` before lifting was
+   * holding still: the turn goes back to where it was, so lifting off can't nudge it.
    */
-  pressureAt: fraction,
-  driveSeconds: positive,
-  slowDriveSeconds: positive,
-  pressurePull: nonNegative,
+  buzzTickMs: nonNegative,
+  tickGapMs: nonNegative,
+  liftMs: nonNegative,
+  liftPx: nonNegative,
   /**
-   * The bubble wanders while the head is moving: up to `wobble` (bubble widths per second) for
-   * any head, plus `wobblePerStave` for each piece over `wobbleFrom`. It changes direction every
-   * `wobbleSeconds`.
+   * The pump: a swipe of `pumpTravel` pixels down is one stroke (back up halfway, or lift, for
+   * the next). The fewest-piece head takes `pumpsFew` strokes to go through, the most-piece head
+   * `pumpsMany`, the rest in between. Each stroke drives the head in over `pumpSeconds`.
    */
-  wobble: nonNegative,
-  wobbleFrom: positiveInt,
-  wobblePerStave: nonNegative,
-  wobbleSeconds: positive,
-  /** Leaning: a sideways drag of `leanTravel` pixels pushes the bubble back at `leanRate`. */
-  leanRate: positive,
-  leanTravel: positive,
-  /** Extra wander (bubble widths per second) for each line through a knot. */
-  knotJitter: nonNegative,
-  /** Lines along checks calm the wander: all of them along checks multiplies it by this. */
-  checkEase: fraction,
-  /** Seconds a lost piece takes to fall off, and the staves take to burst out and land. */
-  pieceSeconds: positive,
+  pumpTravel: positive,
+  pumpsFew: positiveInt,
+  pumpsMany: positiveInt,
+  pumpSeconds: positive,
+  /** Seconds the staves take to burst out and land, then sit in a heap before pouring in. */
   burstSeconds: positive,
-  /** Seconds the heap of staves sits before it pours into the chest. */
   heapSeconds: nonNegative,
   /**
-   * Vibration (ms): the head landing, each pulse of pressure while pulling (pulses come every
-   * `pressPulseSlow` seconds at no pressure, down to `pressPulseFast` at full pressure near the
-   * end), a piece lost, and the burst.
+   * Vibration (ms): the head landing, each stroke of the pump (plus up to `buzzPumpBuildMs` more
+   * by the last), and the burst.
    */
   buzzStrikeMs: nonNegative,
-  buzzPressMs: nonNegative,
-  pressPulseSlow: positive,
-  pressPulseFast: positive,
-  buzzLostMs: nonNegative,
+  buzzPumpMs: nonNegative,
+  buzzPumpBuildMs: nonNegative,
   buzzBurstMs: nonNegative,
 });
 
@@ -393,22 +377,21 @@ const rivingLogSchema = z.object({
 /**
  * Riving a log into staves with a splitting head: a star of blades that splits the whole log
  * into `count` equal wedges at once, each one a stave. You pick a head (more open up with
- * levels) and turn the cuts, then pull the lever down to drive it through. Grains multiply the
+ * levels) and turn the cuts, then pump the handle to drive it through. Grains multiply the
  * whole log's staves if they end up whole in a stave; a cut line through a grain cancels it, good
- * or bad. Knots spoil the staves they touch, and the wander of the pull grows with the count, so
- * a greedy head can lose pieces.
+ * or bad. Knots spoil the staves they touch.
  */
 const rivingSchema = z.object({
   /** The recipe a riven log runs: its yield is the staves it's worth. */
   recipe: id,
   multiplierCap: positive,
-  /** A cut line within this many degrees of a check runs along it, and splits more easily. */
-  checkTolerance: nonNegative,
+  /** Degrees the cuts turn in steps of (dragging and ↺ ↻ alike): whole steps round a turn. */
+  turnStep: positive,
   /** The splitting heads: how many staves each makes, and the Fletching level it opens up at. */
   cutters: z.array(z.object({ count: z.number().int().min(2), level: positiveInt })).min(1),
   /**
    * Stars, by the share of the best a log could make with the heads you have (every head at
-   * every turn, pulled perfectly), and the bonus staves for 2 and 3 stars, as a share of the log.
+   * every step of turn), and the bonus staves for 2 and 3 stars, as a share of the log.
    */
   stars: z.object({ one: fraction, two: fraction, three: fraction }),
   starBonus: z.object({ two: nonNegative, three: nonNegative }),
@@ -457,6 +440,11 @@ const rivingSchema = z.object({
      */
     easyShare: fraction,
     easyChance: fraction,
+    /**
+     * And a log is fiddly when no head keeps 3 stars over `leeway` degrees of turn in a row:
+     * those are always made again (the last fair one is used if every try is fiddly).
+     */
+    leeway: nonNegative,
     tries: positiveInt,
   }),
   feel: rivingFeelSchema,

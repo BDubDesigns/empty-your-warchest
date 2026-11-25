@@ -2,8 +2,6 @@ import type { Riving, RivingLog } from '../../../data';
 
 const TAU = Math.PI * 2;
 export const DEG = Math.PI / 180;
-/** The best split is searched at every half degree of turn. */
-const SEARCH_STEP = 0.5 * DEG;
 
 /** An angle brought into 0 to 2π. */
 export function normalize(angle: number): number {
@@ -26,6 +24,12 @@ export function arcsOverlap(
     inArc(a.start, b.start, b.width) ||
     Math.abs(normalize(a.start - b.start)) < 1e-9
   );
+}
+
+/** A turn brought onto the rules' steps (whole degrees), in 0 to 2π. */
+export function snapTurn(rules: Riving, rotation: number): number {
+  const step = rules.turnStep * DEG;
+  return normalize(Math.round(normalize(rotation) / step) * step);
 }
 
 /** A grain's (or knot's) arc of the end face. */
@@ -62,9 +66,6 @@ export interface Plan {
   knotted: number[];
   /** Grains (by index) whole in a stave, and which wedge each is in. */
   kept: { grain: number; wedge: number }[];
-  /** Lines along a check (they calm the pull) and through a knot (they shake it). */
-  checkLines: number;
-  knotLines: number;
   /** What the kept grains multiply the log by (capped), the staves, and staves × multiplier. */
   multiplier: number;
   staves: number;
@@ -85,17 +86,8 @@ export function worthOf(staves: number, multiplier: number): number {
   return Math.floor(staves * multiplier + 1e-9);
 }
 
-/**
- * What a `count`-way head turned to `rotation` makes of `log`, with the wedges in `lost` gone
- * (a grain in a lost wedge goes with it).
- */
-export function planFor(
-  rules: Riving,
-  log: RivingLog,
-  count: number,
-  rotation: number,
-  lost: readonly number[] = [],
-): Plan {
+/** What a `count`-way head turned to `rotation` makes of `log`. */
+export function planFor(rules: Riving, log: RivingLog, count: number, rotation: number): Plan {
   const lines = cutLines(count, rotation);
   const wedges = wedgesOf(count, rotation);
   const through = (arc: { start: number; width: number }) =>
@@ -104,26 +96,13 @@ export function planFor(
   const knotted = wedges.flatMap((wedge) =>
     log.knots.some((knot) => arcsOverlap(wedge, markArc(knot))) ? [wedge.index] : [],
   );
-  const counts = (wedge: Wedge) => !knotted.includes(wedge.index) && !lost.includes(wedge.index);
+  const counts = (wedge: Wedge) => !knotted.includes(wedge.index);
   // A grain no line runs through lies wholly in one wedge: its middle says which.
   const kept = log.grains.flatMap((grain, index) => {
     if (cut.includes(index)) return [];
     const wedge = wedges.find((entry) => inArc(grain.angle * DEG, entry.start, entry.width));
     return wedge && counts(wedge) ? [{ grain: index, wedge: wedge.index }] : [];
   });
-  const tolerance = rules.checkTolerance * DEG;
-  const checkLines = lines.filter((line) =>
-    log.checks.some((check) => {
-      const gap = normalize(line - check * DEG);
-      return Math.min(gap, TAU - gap) <= tolerance;
-    }),
-  ).length;
-  const knotLines = lines.filter((line) =>
-    log.knots.some((knot) => {
-      const arc = markArc(knot);
-      return inArc(line, arc.start, arc.width);
-    }),
-  ).length;
   const multiplier = multiplierOf(
     rules,
     log,
@@ -138,47 +117,71 @@ export function planFor(
     cut,
     knotted,
     kept,
-    checkLines,
-    knotLines,
     multiplier,
     staves,
     worth: worthOf(staves, multiplier),
   };
 }
 
-/** Every head at every half degree of turn (a head repeats every 1/count of a turn). */
-function everyPlan(rules: Riving, log: RivingLog, counts: readonly number[]): Plan[] {
-  return counts.flatMap((count) =>
-    Array.from({ length: Math.ceil(TAU / count / SEARCH_STEP) }, (_, step) =>
-      planFor(rules, log, count, step * SEARCH_STEP),
-    ),
-  );
+/**
+ * Every turn a head can be at, step by step, until its cuts come round to where they started
+ * (a 7-way's 51.4° never lands on a whole step again, so it's tried all the way round).
+ */
+function turnsFor(rules: Riving, count: number): number {
+  const steps = 360 / count / rules.turnStep;
+  return Math.abs(steps - Math.round(steps)) < 1e-9 ? Math.round(steps) : 360 / rules.turnStep;
 }
 
 /**
- * The best a log could make with these heads, pulled perfectly: every head tried at every half
- * degree of turn. The first best found wins ties, so the answer is the same every time.
+ * The best a log could make with these heads: every head tried at every step of turn. The first
+ * best found wins ties, so the answer is the same every time.
  */
 export function bestPlan(rules: Riving, log: RivingLog, counts: readonly number[]): Plan {
   return survey(rules, log, counts).best;
 }
 
 /**
- * The best plan, and how easy the log is: the share of every head at every turn that would earn
- * 3 stars (high means nearly anything works).
+ * The best plan, and how the log plays: `easy` is the share of every head at every turn that
+ * would earn 3 stars (high means nearly anything works), and `leeway` the most degrees in a row
+ * any one head keeps 3 stars over (low means a sliver you have to hunt for).
  */
 export function survey(
   rules: Riving,
   log: RivingLog,
   counts: readonly number[],
-): { best: Plan; easy: number } {
-  const plans = everyPlan(rules, log, counts);
+): { best: Plan; easy: number; leeway: number } {
+  const byHead = counts.map((count) =>
+    Array.from({ length: turnsFor(rules, count) }, (_, step) =>
+      planFor(rules, log, count, step * rules.turnStep * DEG),
+    ),
+  );
   let best: Plan | undefined;
-  for (const plan of plans) if (!best || plan.worth > best.worth) best = plan;
+  for (const plans of byHead)
+    for (const plan of plans) if (!best || plan.worth > best.worth) best = plan;
   if (!best) throw new Error('No heads to rive with');
   const top = best.worth;
-  const easy = plans.filter((plan) => starsFor(rules, plan.worth, top) >= 3).length / plans.length;
-  return { best, easy };
+  let threeStar = 0;
+  let total = 0;
+  let longest = 0;
+  for (const plans of byHead) {
+    const good = plans.map((plan) => starsFor(rules, plan.worth, top) >= 3);
+    threeStar += good.filter(Boolean).length;
+    total += good.length;
+    longest = Math.max(longest, longestRun(good));
+  }
+  return { best, easy: threeStar / total, leeway: longest * rules.turnStep };
+}
+
+/** The most `true`s in a row, going round (the last step runs on into the first). */
+function longestRun(values: readonly boolean[]): number {
+  if (values.every(Boolean)) return values.length;
+  let longest = 0;
+  let run = 0;
+  for (const value of [...values, ...values]) {
+    run = value ? run + 1 : 0;
+    longest = Math.max(longest, run);
+  }
+  return Math.min(longest, values.length);
 }
 
 /** Stars for a log's worth against the best it could make: 0 to 3. */

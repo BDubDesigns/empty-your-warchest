@@ -1,31 +1,39 @@
 import { Rng, type EventLogger } from '../../../core';
 import type { Riving, RivingFeel, RivingLog } from '../../../data';
-import { Press } from './press';
-import { bestPlan, DEG, normalize, planFor, starsFor, worthOf, type Plan } from './pattern';
+import { Pump } from './pump';
+import {
+  bestPlan,
+  DEG,
+  normalize,
+  planFor,
+  snapTurn,
+  starsFor,
+  worthOf,
+  type Plan,
+} from './pattern';
 
-const degrees = (radians: number) => Math.round((normalize(radians) / DEG) * 10) / 10;
+const degrees = (radians: number) => Math.round(normalize(radians) / DEG);
 
 export type RivingPhase =
   /** Picking a head and turning the cuts. */
   | { kind: 'plan' }
   /** The head dropping onto the log. */
   | { kind: 'swing'; at: number }
-  /** Pulling the lever to drive the head through. */
-  | { kind: 'press'; press: Press }
+  /** Pumping the handle to drive the head through. */
+  | { kind: 'pump'; pump: Pump }
   | { kind: 'done' };
 
 /** Things a view plays effects for. */
 export type RivingEvent =
   | { type: 'strike' }
-  /** The head has landed: the pull starts. */
+  /** The head has landed: the pump starts. */
   | { type: 'landed' }
-  /** A piece split off badly during the pull: it's lost, with any grain in it. */
-  | { type: 'lost'; wedge: number }
+  /** A stroke of the pump drove the head one notch in (`stroke` of `strokes`). */
+  | { type: 'stroke'; stroke: number; strokes: number }
   | {
       type: 'done';
-      /** The plan as it came out (lost pieces and their grains gone). */
+      /** The plan as it came out. */
       plan: Plan;
-      lost: number[];
       /** The best this log could have made with these heads, and the stars for this one. */
       best: Plan;
       stars: number;
@@ -51,26 +59,25 @@ export interface RivingHooks {
 }
 
 /**
- * Riving one log, without any rendering: pick a head and turn its cuts, strike to drop it onto the
- * log, then pull the lever down to drive it through while keeping the bubble steady. Every wedge is
- * a stave; grains kept whole multiply the log; pieces lost to the bubble are gone. A view feeds it
- * input and time, and draws its state.
+ * Riving one log, without any rendering: pick a head and turn its cuts (in whole steps), strike
+ * to drop it onto the log, then pump the handle to drive it through. Every wedge is a stave, and
+ * grains kept whole multiply the log. A view feeds it input and time, and draws its state.
  */
 export class RivingRound {
   readonly log: RivingLog;
   readonly heads: readonly number[];
-  /** The best this log could make with these heads, pulled perfectly: what stars are out of. */
+  /** The best this log could make with these heads: what stars are out of. */
   readonly best: Plan;
-  /** The head chosen and how it's turned (radians). */
+  /** The head chosen and how it's turned (radians, always on a whole step). */
   count: number;
   rotation: number;
   phase: RivingPhase = { kind: 'plan' };
   now = 0;
-  /** Wedges (by index) lost during the pull. */
-  lost: number[] = [];
   readonly #hooks: RivingHooks;
   readonly #rng: Rng;
-  #pressStart = 0;
+  #pumpStart = 0;
+  #strokeAt = 0;
+  #strokeGaps: number[] = [];
   #headChanges = 0;
 
   constructor(log: RivingLog, hooks: RivingHooks, seed: number, count?: number) {
@@ -84,10 +91,11 @@ export class RivingRound {
     this.best = bestPlan(hooks.rules, log, hooks.heads);
     // The cuts start at a random turn well short of the best (under 2 stars if there is one), so
     // the first look always has work to do.
-    this.rotation = this.#rng.range(0, Math.PI * 2);
+    const randomTurn = () => snapTurn(hooks.rules, this.#rng.range(0, Math.PI * 2));
+    this.rotation = randomTurn();
     let start = { rotation: this.rotation, worth: this.plan.worth };
     for (let tries = 0; tries < 40 && this.starsNow >= 2; tries++) {
-      this.rotation = this.#rng.range(0, Math.PI * 2);
+      this.rotation = randomTurn();
       if (this.plan.worth < start.worth)
         start = { rotation: this.rotation, worth: this.plan.worth };
     }
@@ -112,12 +120,12 @@ export class RivingRound {
     return this.#hooks.rules;
   }
 
-  /** What the head as chosen and turned makes now (with any pieces lost so far). */
+  /** What the head as chosen and turned makes. */
   get plan(): Plan {
-    return planFor(this.rules, this.log, this.count, this.rotation, this.lost);
+    return planFor(this.rules, this.log, this.count, this.rotation);
   }
 
-  /** Stars the plan as it stands would earn, pulled cleanly. */
+  /** Stars the plan as it stands would earn. */
   get starsNow(): number {
     return starsFor(this.rules, this.plan.worth, this.best.worth);
   }
@@ -138,17 +146,17 @@ export class RivingRound {
     this.#headChanges += 1;
   }
 
-  /** Turns the cuts to `rotation` (radians). */
+  /** Turns the cuts to the step nearest `rotation` (radians). */
   turnTo(rotation: number): void {
-    if (this.phase.kind === 'plan') this.rotation = normalize(rotation);
+    if (this.phase.kind === 'plan') this.rotation = snapTurn(this.rules, rotation);
   }
 
-  /** Fine-tune buttons: −1 turns the cuts one way, +1 the other. */
+  /** The ↺ ↻ buttons: one step one way (+1) or the other (−1). */
   nudge(direction: 1 | -1): void {
-    this.turnTo(this.rotation + direction * this.feel.fineAimStep * DEG);
+    this.turnTo(this.rotation + direction * this.rules.turnStep * DEG);
   }
 
-  // Striking and pulling
+  // Striking and pumping
 
   /** Drops the head onto the log: commits the plan. */
   strike(): void {
@@ -169,14 +177,24 @@ export class RivingRound {
     this.phase = { kind: 'swing', at: this.now };
   }
 
-  /** The lever has been pulled down `pixels` since the pull began. */
-  drag(pixels: number): void {
-    if (this.phase.kind === 'press') this.phase.press.drag(pixels);
+  /** The finger on the handle is `pixels` down from where it went down. */
+  pull(pixels: number): void {
+    const phase = this.phase;
+    if (phase.kind !== 'pump') return;
+    const result = phase.pump.pull(pixels);
+    if (!result) return;
+    this.#strokeGaps.push(Math.round((this.now - this.#strokeAt) * 100) / 100);
+    this.#strokeAt = this.now;
+    if (result === 'through') {
+      this.#done(phase.pump);
+      return;
+    }
+    this.#hooks.onEvent?.({ type: 'stroke', stroke: phase.pump.done, strokes: phase.pump.strokes });
   }
 
-  /** Leaning on the lever, −1 to 1. */
-  lean(amount: number): void {
-    if (this.phase.kind === 'press') this.phase.press.lean(amount);
+  /** The finger lifted off the handle. */
+  release(): void {
+    if (this.phase.kind === 'pump') this.phase.pump.release();
   }
 
   // Time
@@ -185,20 +203,15 @@ export class RivingRound {
     this.now += dt;
     const phase = this.phase;
     if (phase.kind === 'swing' && this.now - phase.at >= this.feel.strikeSeconds) {
-      const plan = this.plan;
-      const press = new Press(() => this.feel, {
-        count: plan.count,
-        checkLines: plan.checkLines,
-        knotLines: plan.knotLines,
-        seed: Math.floor(this.#rng.range(0, 2 ** 31)),
-      });
-      this.#pressStart = this.now;
-      this.phase = { kind: 'press', press };
+      const pump = new Pump(
+        () => this.feel,
+        this.count,
+        Math.min(...this.rules.cutters.map((cutter) => cutter.count)),
+        Math.max(...this.rules.cutters.map((cutter) => cutter.count)),
+      );
+      this.#pumpStart = this.#strokeAt = this.now;
+      this.phase = { kind: 'pump', pump };
       this.#hooks.onEvent?.({ type: 'landed' });
-    } else if (phase.kind === 'press') {
-      const result = phase.press.tick(dt);
-      if (result === 'lost') this.#loseWedge(phase.press);
-      else if (result === 'through') this.#done(phase.press);
     }
   }
 
@@ -213,23 +226,7 @@ export class RivingRound {
     });
   }
 
-  /** A piece splits off badly: one still standing, picked from the seed. */
-  #loseWedge(press: Press): void {
-    const standing = this.plan.wedges
-      .map((wedge) => wedge.index)
-      .filter((index) => !this.lost.includes(index));
-    if (standing.length === 0) return;
-    const wedge = standing[Math.floor(this.#rng.range(0, standing.length))] ?? 0;
-    this.lost.push(wedge);
-    this.#log('riving.lost', {
-      log: this.log.id,
-      wedge,
-      progress: Math.round(press.progress * 100) / 100,
-    });
-    this.#hooks.onEvent?.({ type: 'lost', wedge });
-  }
-
-  #done(press: Press): void {
+  #done(pump: Pump): void {
     const plan = this.plan;
     const stars = starsFor(this.rules, plan.worth, this.best.worth);
     const share =
@@ -242,7 +239,6 @@ export class RivingRound {
       head: plan.count,
       turn: degrees(plan.rotation),
       staves: plan.staves,
-      lost: this.lost.length,
       knotted: plan.knotted.length,
       multiplier: plan.multiplier,
       worth: plan.worth,
@@ -253,14 +249,13 @@ export class RivingRound {
       grainsKept: plan.kept.map((entry) => this.log.grains[entry.grain]?.kind),
       grainsCut: plan.cut.map((index) => this.log.grains[index]?.kind),
       seconds: Math.round(this.now * 10) / 10,
-      pressSeconds: Math.round((this.now - this.#pressStart) * 100) / 100,
-      peakPressure: Math.round(press.peakPressure * 100) / 100,
-      peakOffset: Math.round(press.peakOffset * 100) / 100,
+      strokes: pump.strokes,
+      pumpSeconds: Math.round((this.now - this.#pumpStart) * 100) / 100,
+      strokeGaps: this.#strokeGaps,
     });
     this.#hooks.onEvent?.({
       type: 'done',
       plan,
-      lost: [...this.lost],
       best: this.best,
       stars,
       bonus,

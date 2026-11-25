@@ -6,19 +6,24 @@ import { survey } from './pattern';
  * A random log from `seed`: its size, rings, checks, knots and grains. Every log has good grains
  * to keep and bad ones to cut out (kinds picked by their weights, each as wide as its kind
  * allows), and most put a good grain close to a bad one. Each log is checked against the heads
- * the player has: one where nearly any turn earns 3 stars is usually made again, so most logs are
- * a real choice. The same seed and heads always give the same log.
+ * the player has: one where 3 stars hangs on a sliver of turn is always made again, and one
+ * where nearly any turn earns 3 stars usually is, so most logs are a real choice you can see. The
+ * same seed and heads always give the same log.
  */
 export function generateLog(rules: Riving, seed: number, heads: readonly number[]): RivingLog {
   const rng = new Rng(seed);
   const { generator } = rules;
+  let fair: RivingLog | undefined;
   let log = makeLog(rules, rng, seed);
-  for (let attempt = 1; attempt < generator.tries; attempt++) {
-    if (survey(rules, log, heads).easy <= generator.easyShare) break;
-    if (rng.chance(generator.easyChance)) break;
-    log = makeLog(rules, rng, seed);
+  for (let attempt = 1; attempt <= generator.tries; attempt++) {
+    const { easy, leeway } = survey(rules, log, heads);
+    if (leeway >= generator.leeway - 1e-9) {
+      if (easy <= generator.easyShare || rng.chance(generator.easyChance)) return log;
+      fair = log;
+    }
+    if (attempt < generator.tries) log = makeLog(rules, rng, seed);
   }
-  return log;
+  return fair ?? log;
 }
 
 function makeLog(rules: Riving, rng: Rng, seed: number): RivingLog {

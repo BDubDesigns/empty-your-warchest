@@ -5,7 +5,9 @@ export const riving = {
   recipe: 'rive_stave',
   // Grains multiply the whole log, high enough that every good grain kept counts.
   multiplierCap: 18,
-  checkTolerance: 8,
+  // Whole degrees: half-degree steps made the best split a sliver you could slip off lifting a
+  // finger.
+  turnStep: 1,
   // Three heads to start, then one more every few levels (a drip-feed), up to the 16-way.
   cutters: [
     { count: 4, level: 1 },
@@ -22,9 +24,9 @@ export const riving = {
     { count: 15, level: 30 },
     { count: 16, level: 35 },
   ],
-  // The best split is always within reach (you can see the total while you turn the cuts), so
-  // 3 stars asks for most of it. The bonus matches woodcutting's.
-  stars: { one: 0.4, two: 0.7, three: 0.9 },
+  // Playtest 6: 70% / 90% was too strict (0 or 1 star until the exact best). The bonus matches
+  // woodcutting's.
+  stars: { one: 0.25, two: 0.5, three: 0.8 },
   starBonus: { two: 0.1, three: 0.25 },
   // Good grains come narrow to wide: a 55° one won't fit an 8-way's 45° wedges, a 75° one
   // needs the 4-way. Rot is narrower, so cutting it out takes aim.
@@ -64,34 +66,27 @@ export const riving = {
     // The easiest logs (over 6%) are mostly made again; about 1 in 4 of them gets through.
     easyShare: 0.06,
     easyChance: 0.25,
+    // A 3-star split you can find without pixel-hunting.
+    leeway: 3,
     tries: 12,
   },
   feel: {
-    fineAimStep: 0.5,
     strikeSeconds: 0.22,
     hitStopMs: 70,
     shakeStrength: 1,
-    leverTravel: 300,
-    pressureAt: 0.3,
-    driveSeconds: 1.4,
-    slowDriveSeconds: 4,
-    pressurePull: 0.8,
-    wobble: 0.4,
-    wobbleFrom: 5,
-    wobblePerStave: 0.3,
-    wobbleSeconds: 0.6,
-    leanRate: 3.5,
-    leanTravel: 70,
-    knotJitter: 1.2,
-    checkEase: 0.5,
-    pieceSeconds: 0.45,
+    buzzTickMs: 4,
+    tickGapMs: 35,
+    liftMs: 120,
+    liftPx: 8,
+    pumpTravel: 70,
+    pumpsFew: 3,
+    pumpsMany: 5,
+    pumpSeconds: 0.12,
     burstSeconds: 1.1,
     heapSeconds: 0.6,
     buzzStrikeMs: 20,
-    buzzPressMs: 8,
-    pressPulseSlow: 0.35,
-    pressPulseFast: 0.07,
-    buzzLostMs: 40,
+    buzzPumpMs: 18,
+    buzzPumpBuildMs: 30,
     buzzBurstMs: 60,
   },
 } satisfies GameDataInput['riving'];

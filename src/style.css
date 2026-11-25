@@ -1396,6 +1396,24 @@ body:not([data-view='camp']) #build-label {
   font-variant-numeric: tabular-nums;
 }
 
+/* The turn of the cuts, in whole degrees: big, so you can see exactly where you are. */
+.rv-turn {
+  position: absolute;
+  top: calc(var(--safe-top) + 142px);
+  left: 50%;
+  transform: translateX(-50%);
+  min-width: 72px;
+  padding: 2px 14px 3px;
+  border-radius: 999px;
+  background: rgb(0 0 0 / 0.35);
+  text-align: center;
+  font:
+    800 26px system-ui,
+    sans-serif;
+  font-variant-numeric: tabular-nums;
+  text-shadow: 0 1px 3px rgb(0 0 0 / 0.7);
+}
+
 @media (max-width: 400px) {
   .rv-log-name {
     top: calc(var(--safe-top) + 120px);
@@ -1403,6 +1421,10 @@ body:not([data-view='camp']) #build-label {
 
   .rv-stars {
     top: calc(var(--safe-top) + 144px);
+  }
+
+  .rv-turn {
+    top: calc(var(--safe-top) + 196px);
   }
 }
 
@@ -1765,53 +1787,4 @@ body:not([data-view='camp']) #build-label {
     transform: translateY(-30px);
     opacity: 0;
   }
-}
-
-/*
- * Riving's bubble while pulling: it wanders; slide sideways to keep it in the middle. The rim
- * warms with the pressure (`--pressure`, 0–1).
- */
-.rv-level {
-  --pressure: 0;
-  position: absolute;
-  left: 50%;
-  bottom: calc(var(--safe-bottom) + 40px);
-  width: min(78%, 320px);
-  height: 34px;
-  transform: translateX(-50%);
-  border: 2px solid rgb(255 255 255 / 0.55);
-  border-radius: 17px;
-  background: linear-gradient(
-    90deg,
-    rgb(224 80 60 / 0.55) 0 8%,
-    rgb(0 0 0 / 0.45) 8% 92%,
-    rgb(224 80 60 / 0.55) 92%
-  );
-  box-shadow: 0 0 calc(var(--pressure) * 22px) rgb(240 150 60 / calc(var(--pressure) * 0.9));
-}
-
-.rv-level::after {
-  content: '';
-  position: absolute;
-  left: 50%;
-  top: 4px;
-  bottom: 4px;
-  width: 2px;
-  margin-left: -1px;
-  background: rgb(255 255 255 / 0.45);
-}
-
-.rv-level-bubble {
-  position: absolute;
-  top: 50%;
-  width: 26px;
-  height: 26px;
-  margin: -13px 0 0 -13px;
-  border-radius: 50%;
-  background: radial-gradient(circle at 35% 35%, #fff, #b9e3c2 60%, #6fae4f);
-  box-shadow: 0 0 8px rgb(0 0 0 / 0.4);
-}
-
-.rv-level-bubble.rv-level-danger {
-  background: radial-gradient(circle at 35% 35%, #fff, #f4b3a6 60%, #e0503c);
 }

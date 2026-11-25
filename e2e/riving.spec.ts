@@ -13,11 +13,6 @@ const feel = riving.feel;
 async function openWorkbench(page: Page, logs: number) {
   if (!bench) throw new Error('No riving station in data');
   await page.addInitScript((count) => {
-    // A steady test hand: no wander, so the test follows the flow (steering is unit tested).
-    localStorage.setItem(
-      'warchest.tuning.riving',
-      JSON.stringify({ wobble: 0, wobblePerStave: 0, knotJitter: 0 }),
-    );
     localStorage.setItem(
       'warchest.save',
       JSON.stringify({
@@ -43,24 +38,25 @@ async function openWorkbench(page: Page, logs: number) {
   await expect(page.locator('body')).toHaveAttribute('data-view', `station:${bench.id}`);
 }
 
-/** Pulls the lever down the whole way in about a second (the head follows at its own pace). */
-async function pullDown(page: Page) {
+/** One stroke of the pump: a quick swipe down past the stroke, then the finger lifts. */
+async function pump(page: Page) {
   const box = await page.locator('#screen-rive3d .rv-canvas').boundingBox();
   if (!box) throw new Error('No riving canvas');
   const session = await page.context().newCDPSession(page);
   const x = box.x + box.width / 2;
   const y = box.y + box.height * 0.3;
-  const steps = 12;
-  const travel = feel.leverTravel * 1.1;
+  const steps = 5;
+  const travel = feel.pumpTravel * 1.3;
   await session.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y }] });
   for (let step = 1; step <= steps; step++) {
-    await page.waitForTimeout(1000 / steps);
+    await page.waitForTimeout(30);
     await session.send('Input.dispatchTouchEvent', {
       type: 'touchMove',
       touchPoints: [{ x, y: y + (travel * step) / steps }],
     });
   }
   await session.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  await page.waitForTimeout(150);
 }
 
 test('rives a log into staves that land in the chest', async ({ page }) => {
@@ -70,14 +66,22 @@ test('rives a log into staves that land in the chest', async ({ page }) => {
   await openWorkbench(page, 3);
   const body = page.locator('body');
   await expect(body).toHaveAttribute('data-riving', 'plan', { timeout: 20_000 });
-  // Pick the 4-way head, then strike and pull it through.
+  // Pick the 4-way head, turn the cuts a step, then strike and pump it through.
   const fourWay = page.getByRole('radio', { name: '4-way head', exact: true });
   await fourWay.tap();
   await expect(fourWay).toHaveAttribute('aria-checked', 'true');
   await expect(page.locator('.rv-sum')).toContainText('4 staves');
+  const turn = page.locator('.rv-turn');
+  await expect(turn).toHaveText(/^\d+°$/);
+  const before = Number((await turn.textContent())?.replace('°', ''));
+  await page.getByRole('button', { name: 'Turn the cuts counter-clockwise' }).tap();
+  await expect(turn).toHaveText(`${String((before + 1) % 360)}°`);
   await page.getByRole('button', { name: 'Strike', exact: true }).tap();
-  await expect(body).toHaveAttribute('data-riving', 'press');
-  await pullDown(page);
+  await expect(body).toHaveAttribute('data-riving', 'pump');
+  for (let stroke = 0; stroke < feel.pumpsMany + 2; stroke++) {
+    if ((await body.getAttribute('data-riving')) !== 'pump') break;
+    await pump(page);
+  }
   await expect(body).toHaveAttribute('data-riving', 'done', { timeout: 15_000 });
   await expect(page.locator('.rv-card')).toContainText(/\d+ staves?( ×\S+)* = \d+/, {
     timeout: 10_000,
