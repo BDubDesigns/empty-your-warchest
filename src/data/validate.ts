@@ -76,6 +76,39 @@ function checkReferences(data: GameData, ctx: z.RefinementCtx): void {
     }
   });
 
+  const firemaking = data.firemaking;
+  if (!data.recipes.some((recipe) => recipe.id === firemaking.recipe)) {
+    issue(['firemaking', 'recipe'], `Unknown recipe "${firemaking.recipe}"`);
+  }
+  if (!itemIds.has(firemaking.fuel)) {
+    issue(['firemaking', 'fuel'], `Unknown item "${firemaking.fuel}"`);
+  }
+  const sizes = firemaking.rack.sizes;
+  if (!sizes.some((size) => size.level === 1)) {
+    issue(['firemaking', 'rack', 'sizes'], 'At least one rack size must be open from level 1');
+  }
+  sizes.forEach((size, index) => {
+    const before = sizes[index - 1];
+    if (before && (size.spots <= before.spots || size.level < before.level)) {
+      issue(['firemaking', 'rack', 'sizes', index], 'Sizes must grow, in level order');
+    }
+    if (size.answerLogs.min > size.answerLogs.max) {
+      issue(['firemaking', 'rack', 'sizes', index, 'answerLogs'], 'min must not be more than max');
+    }
+    if (size.answerLogs.max > size.spots * firemaking.rack.maxLogs) {
+      issue(
+        ['firemaking', 'rack', 'sizes', index, 'answerLogs', 'max'],
+        'More logs than the spots can hold',
+      );
+    }
+  });
+  if (firemaking.generator.minHeat >= firemaking.generator.flat) {
+    issue(['firemaking', 'generator', 'minHeat'], 'Must be under the flat fire');
+  }
+  if (firemaking.feel.smokeWisps >= firemaking.feel.smokeThick) {
+    issue(['firemaking', 'feel', 'smokeWisps'], 'Wisps must come before thick smoke');
+  }
+
   const splitting = data.splitting;
   if (!data.recipes.some((recipe) => recipe.id === splitting.recipe)) {
     issue(['splitting', 'recipe'], `Unknown recipe "${splitting.recipe}"`);

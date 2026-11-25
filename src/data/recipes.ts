@@ -20,11 +20,12 @@ export const recipes = [
     xp: 5,
   },
   {
-    // Fire-hardening one stave into a spear (M5). XP is a placeholder until rack sizes are tuned.
+    // Fire-hardening one stave into a spear, XP per spear hardened. About 6 spears a 20 s rack is
+    // about 100 XP a minute, like the other stations; a guess until rack sizes are tuned.
     id: 'harden_spear',
     station: 'fire_pit',
     inputs: [{ item: 'stave', count: 1 }],
     outputs: [{ item: 'spear', count: 1 }],
-    xp: 15,
+    xp: 5,
   },
 ] satisfies GameDataInput['recipes'];

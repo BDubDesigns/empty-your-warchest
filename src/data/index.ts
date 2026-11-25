@@ -2,6 +2,7 @@
 // Code reads these; it never repeats them.
 
 import { camp } from './camp';
+import { firemaking } from './firemaking';
 import { items } from './items';
 import { levels } from './levels';
 import { recipes } from './recipes';
@@ -29,6 +30,7 @@ export const rawGameData: GameDataInput = {
   camp,
   woodcutting,
   splitting,
+  firemaking,
   warchest,
   tuning,
 };

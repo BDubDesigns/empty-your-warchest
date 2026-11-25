@@ -268,6 +268,17 @@ body:not([data-view='camp']) #build-label {
   font-size: 13px;
 }
 
+.debug-more {
+  margin: 8px 0;
+}
+
+.debug-more > summary {
+  padding: 8px 0;
+  color: var(--muted);
+  font-weight: 700;
+  cursor: pointer;
+}
+
 .debug-tune {
   display: block;
   margin-bottom: 10px;
@@ -1787,4 +1798,354 @@ body:not([data-view='camp']) #build-label {
     transform: translateY(-30px);
     opacity: 0;
   }
+}
+
+/* Firemaking (src/stations/firemaking/three/firemaking3dView.ts). */
+.fm-canvas {
+  display: block;
+  touch-action: none;
+}
+
+.fm-ui {
+  --fm-width: min(92vw, 380px);
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  font-family: system-ui, sans-serif;
+  color: var(--fg);
+}
+
+.fm-ui button {
+  pointer-events: auto;
+}
+
+.fm-ui [hidden] {
+  display: none !important;
+}
+
+/* The rack sizes: one per size open, and the next one locked with the level it opens at. */
+.fm-sizes {
+  position: absolute;
+  top: calc(var(--safe-top) + 100px);
+  left: 0;
+  right: 0;
+  display: flex;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 12px;
+}
+
+.fm-size {
+  display: grid;
+  justify-items: center;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 3px 4px;
+  border: 2px solid transparent;
+  border-radius: 12px;
+  background: rgb(22 14 10 / 0.62);
+  color: var(--fg);
+  touch-action: manipulation;
+}
+
+.fm-size:active {
+  transform: scale(0.92);
+}
+
+.fm-size[aria-checked='true'] {
+  border-color: #f39a3b;
+  background: rgb(80 34 12 / 0.8);
+  box-shadow: 0 0 10px rgb(243 154 59 / 0.5);
+}
+
+.fm-size-locked {
+  opacity: 0.55;
+}
+
+.fm-size-count {
+  font:
+    800 17px system-ui,
+    sans-serif;
+}
+
+.fm-size-label {
+  font:
+    600 10px system-ui,
+    sans-serif;
+  color: var(--muted);
+}
+
+.fm-streak {
+  position: absolute;
+  top: calc(var(--safe-top) + 66px);
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, #f39a3b, #c0471c);
+  box-shadow: 0 0 14px rgb(243 154 59 / 0.55);
+  font:
+    800 14px system-ui,
+    sans-serif;
+  white-space: nowrap;
+}
+
+.fm-hint {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: calc(var(--safe-bottom) + 316px);
+  text-align: center;
+  font-size: 14px;
+  text-shadow: 0 1px 3px rgb(0 0 0 / 0.8);
+}
+
+.fm-hint[data-phase='cook'] {
+  top: calc(var(--safe-top) + 112px);
+  bottom: auto;
+}
+
+/*
+ * The heat under each stave, like an equalizer: a bar per stave, coloured and marked for how it
+ * would come out at the best pull (gold with a tick, blue with an arrow for underdone, red with a
+ * cross for charred), so it reads without colour too.
+ */
+.fm-heat {
+  position: absolute;
+  left: 50%;
+  bottom: calc(var(--safe-bottom) + 178px);
+  transform: translateX(-50%);
+  width: var(--fm-width);
+  padding: 8px 10px 6px;
+  border-radius: 14px;
+  background: rgb(22 14 10 / 0.72);
+  box-shadow: 0 4px 14px rgb(0 0 0 / 0.35);
+}
+
+.fm-heat-bars,
+.fm-heat-marks {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(var(--fm-columns, 6), 1fr);
+  /* Tighter as the rack grows: 8px between 6 bars, about 3px between 18. */
+  gap: clamp(2px, calc(48px / var(--fm-columns, 6)), 8px);
+}
+
+.fm-heat-bars {
+  height: 72px;
+}
+
+.fm-bar {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+}
+
+.fm-bar-fill {
+  width: 100%;
+  border-radius: 6px 6px 2px 2px;
+  background: linear-gradient(0deg, #8a1f0a, #ff6a1a 60%, #ffd27a);
+  box-shadow: 0 0 10px rgb(255 106 26 / 0.45);
+  transition: height 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+/* Hardened at the best pull: gold. Too cold: blue. Too hot: red. */
+.fm-bar[data-finish='hardened'] .fm-bar-fill {
+  background: linear-gradient(0deg, #9a5a10, #f2b63a 60%, #ffe7a0);
+  box-shadow: 0 0 12px rgb(242 182 58 / 0.55);
+}
+
+.fm-bar[data-finish='under'] .fm-bar-fill {
+  background: linear-gradient(0deg, #1f3c6a, #4f86c8 60%, #a8cdf5);
+  box-shadow: none;
+}
+
+.fm-bar[data-finish='charred'] .fm-bar-fill {
+  background: linear-gradient(0deg, #5a0c06, #d8321c 60%, #ff8a66);
+  box-shadow: 0 0 12px rgb(216 50 28 / 0.55);
+}
+
+.fm-bar-mark {
+  margin-top: 2px;
+  text-align: center;
+  font:
+    900 14px system-ui,
+    sans-serif;
+}
+
+.fm-bar-mark[data-finish='hardened'] {
+  color: #9be07a;
+}
+
+.fm-bar-mark[data-finish='under'] {
+  color: #9cc8ff;
+}
+
+.fm-bar-mark[data-finish='charred'] {
+  color: #ff7a66;
+}
+
+.fm-best {
+  margin-top: 4px;
+  text-align: center;
+  color: var(--muted);
+  font:
+    700 12px system-ui,
+    sans-serif;
+  font-variant-numeric: tabular-nums;
+}
+
+/* A fuel spot per pair of staves, lined up under them: tap to add a log, past full to empty. */
+.fm-spots {
+  position: absolute;
+  left: 50%;
+  bottom: calc(var(--safe-bottom) + 108px);
+  transform: translateX(-50%);
+  display: flex;
+  gap: clamp(4px, calc(30px / var(--fm-spots, 3)), 10px);
+  width: var(--fm-width);
+}
+
+.fm-spot {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-content: center;
+  align-items: center;
+  justify-content: center;
+  gap: 4px 6px;
+  min-height: 60px;
+  border: 2px dashed rgb(255 196 140 / 0.55);
+  border-radius: 14px;
+  background: rgb(22 14 10 / 0.62);
+  touch-action: manipulation;
+}
+
+.fm-spot:active {
+  transform: scale(0.95);
+}
+
+.fm-spot[data-logs='0'] {
+  border-style: dashed;
+}
+
+.fm-spot:not([data-logs='0']) {
+  border-style: solid;
+  border-color: #f39a3b;
+  background: rgb(80 34 12 / 0.75);
+}
+
+.fm-log {
+  width: min(30px, 80%);
+  height: 14px;
+  border-radius: 7px;
+  border: 2px solid rgb(255 255 255 / 0.25);
+}
+
+.fm-log-on {
+  border-color: #5b3e27;
+  background: linear-gradient(180deg, #a87a4e, #6b4426);
+  box-shadow: 0 0 8px rgb(255 106 26 / 0.7);
+}
+
+.fm-controls {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(var(--safe-bottom) + 20px);
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+}
+
+.fm-fuel {
+  font:
+    700 13px system-ui,
+    sans-serif;
+  text-shadow: 0 1px 3px rgb(0 0 0 / 0.8);
+}
+
+.fm-button {
+  min-width: 64px;
+  min-height: 60px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--accent);
+  color: var(--bg);
+  font:
+    700 22px system-ui,
+    sans-serif;
+  touch-action: manipulation;
+}
+
+.fm-button:active {
+  background: var(--accent-pressed);
+}
+
+.fm-lay {
+  min-width: 200px;
+}
+
+.fm-button.fm-secondary {
+  border: 2px solid var(--accent);
+  background: transparent;
+  color: var(--accent);
+  font-size: 18px;
+}
+
+/* The grab ring round the rack's handle while it cooks: grab anywhere inside it. */
+.fm-grab {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  border: 3px dashed rgb(255 255 255 / 0.8);
+  border-radius: 50%;
+  animation: fm-grab 1.2s ease-in-out infinite;
+}
+
+@keyframes fm-grab {
+  0%,
+  100% {
+    transform: translate(-50%, -50%) scale(0.92);
+    opacity: 0.55;
+  }
+  50% {
+    transform: translate(-50%, -50%) scale(1.05);
+    opacity: 1;
+  }
+}
+
+.fm-card {
+  position: absolute;
+  inset: 22% 16px auto;
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+  padding: 20px;
+  border-radius: 14px;
+  background: rgb(20 24 18 / 0.88);
+  pointer-events: auto;
+}
+
+.fm-card-stars:empty {
+  display: none;
+}
+
+.fm-card-title {
+  font:
+    800 28px system-ui,
+    sans-serif;
+}
+
+.fm-card-text {
+  color: var(--muted);
+  text-align: center;
+  white-space: pre-line;
+  line-height: 1.45;
+}
+
+.fm-card-buttons {
+  display: flex;
+  gap: 12px;
 }

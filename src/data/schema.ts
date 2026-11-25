@@ -557,6 +557,114 @@ const splittingSchema = z.object({
   feel: splittingFeelSchema,
 });
 
+/** Feel numbers for fire-hardening. The debug menu can override them live. */
+export const firemakingFeelSchema = z.object({
+  /**
+   * The fire: heat a log adds to the two staves over its own spot, and the little it spills onto
+   * the nearest stave each side. Fires are generated with these, so a change applies from the
+   * next fire.
+   */
+  heatPerLog: positive,
+  spill: nonNegative,
+  /**
+   * Cooking: seconds a stave at the flat fire's heat takes to harden (hotter staves are quicker,
+   * colder ones slower), and how far past that it chars, as a share of the time it took to harden:
+   * 1.3 chars at 1.3 times it. So every stave's pull window is the same share of its cook, and a
+   * hotter one's is shorter in seconds.
+   */
+  cookSeconds: positive,
+  charRatio: z.number().gt(1),
+  /**
+   * Smoke off the points, as a share of the way to hardened: thin white wisps from `smokeWisps`,
+   * thicker from `smokeThick`; thick grey once hardened (pull now), black once charring.
+   */
+  smokeWisps: fraction,
+  smokeThick: fraction,
+  /** The hot streak: how deep racks can stack (1 = no streak). */
+  streakCap: positiveInt,
+  /**
+   * The pull: a touch within `grabPx` of the handle grabs it (forgiving), and the pull counts once
+   * it has moved `dragPx`; the rack slides out over `pullSeconds`.
+   */
+  grabPx: positive,
+  dragPx: positive,
+  pullSeconds: positive,
+  /** The payoff: spears plunged into the trough (seconds), then a wait before they pour in. */
+  plungeSeconds: positive,
+  pourDelaySeconds: nonNegative,
+  hitStopMs: nonNegative,
+  shakeStrength: nonNegative,
+  /**
+   * Vibration (ms): a log dropping onto a spot, laying the rack, the first point starting to char
+   * (you're late), the pull, the plunge. Nothing buzzes when it's ready: reading the smoke is the
+   * skill.
+   */
+  buzzLogMs: nonNegative,
+  buzzLayMs: nonNegative,
+  buzzCharMs: nonNegative,
+  buzzPullMs: nonNegative,
+  buzzPlungeMs: nonNegative,
+});
+
+/**
+ * Fire-hardening: a rack of staves over a trench of coals that never burns evenly. Drop logs into
+ * the fuel spots under it to even out the heat, lay the rack, and pull it out when the points
+ * smoke thick grey. Hardened staves become spears; underdone ones go back as staves; charred ones
+ * are lost.
+ */
+const firemakingSchema = z.object({
+  /** The recipe a hardened stave runs, and the item burned as fuel. */
+  recipe: id,
+  fuel: id,
+  /**
+   * The rack: staves over each fuel spot, logs a spot holds, and its sizes by Firemaking level
+   * (each a number of fuel spots, opening at a level, and how many logs a fire of that size takes
+   * to even out). The biggest open size is the default; any smaller open one can be picked.
+   */
+  rack: z.object({
+    stavesPerSpot: positiveInt,
+    maxLogs: positiveInt,
+    sizes: z
+      .array(
+        z.object({
+          spots: positiveInt,
+          level: positiveInt,
+          answerLogs: z.object({ min: positiveInt, max: positiveInt }),
+        }),
+      )
+      .min(1),
+  }),
+  /**
+   * Stars count the staves (in a layer) that didn't harden: 3 for none, 2 for up to
+   * `twoMissedShare` of the layer, else 1.
+   */
+  stars: z.object({ twoMissedShare: fraction }),
+  /**
+   * Bonus spears for 2 and 3 stars, as a share of the spears hardened (rounded), as at every
+   * station: stars multiply output. XP is paid on the spears hardened, not the bonus.
+   */
+  starBonus: z.object({ two: nonNegative, three: nonNegative }),
+  /**
+   * Fires, from a seed, built backwards from a flat fire at `flat` heat so one always has a full
+   * answer: a random answer of the rack size's `answerLogs` logs is taken off, plus `noise` (heat)
+   * of lumps, and no coal under `minHeat`. A fire is made again (up to `tries` times) if it needs
+   * no fuel, if filling every spot also hardens the whole rack, or if its answer's pull window is
+   * under `minWindow` seconds. Racks of up to `searchSpots` spots also log every full-rack answer
+   * (the search grows threefold a spot).
+   */
+  generator: z.object({
+    flat: positive,
+    noise: nonNegative,
+    minHeat: positive,
+    minWindow: nonNegative,
+    tries: positiveInt,
+    searchSpots: positiveInt,
+  }),
+  /** Grass round the fire pit, trodden bare round the trench. */
+  yard: z.object({ radius: positive, wear: fraction }),
+  feel: firemakingFeelSchema,
+});
+
 export const gameDataShape = z.object({
   skills: z.array(skillSchema).min(1),
   items: z.array(itemSchema).min(1),
@@ -568,6 +676,7 @@ export const gameDataShape = z.object({
   camp: campSchema,
   woodcutting: woodcuttingSchema,
   splitting: splittingSchema,
+  firemaking: firemakingSchema,
   warchest: warchestSchema,
   tuning: tuningSchema,
 });
@@ -593,3 +702,5 @@ export type SceneryPlantKind = (typeof sceneryPlantKinds)[number];
 export type Splitting = GameData['splitting'];
 export type SplittingLog = Splitting['tutorialLog'];
 export type SplittingFeel = Splitting['feel'];
+export type Firemaking = GameData['firemaking'];
+export type FiremakingFeel = Firemaking['feel'];

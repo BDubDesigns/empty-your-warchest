@@ -344,7 +344,7 @@ export function mountDebugMenu(root: HTMLElement, deps: DebugDeps): void {
         el('span', { className: 'debug-tune-label' }, [tunable.label, value]),
         input,
       ]);
-      return { row, show };
+      return { row, show, more: tunable.more === true };
     });
     const showAll = (): void => {
       for (const slider of sliders) slider.show();
@@ -378,7 +378,20 @@ export function mountDebugMenu(root: HTMLElement, deps: DebugDeps): void {
         textContent:
           'Changes apply instantly and stay on this phone until reset. • = changed from data.',
       }),
-      ...sliders.map((slider) => slider.row),
+      ...sliders.filter((slider) => !slider.more).map((slider) => slider.row),
+      // The juice and timing sliders, folded away so the ones that change how it plays stand out.
+      ...(sliders.some((slider) => slider.more)
+        ? [
+            el('details', { className: 'debug-more' }, [
+              el('summary', {
+                textContent: `More: juice and timing (${String(
+                  sliders.filter((slider) => slider.more).length,
+                )})`,
+              }),
+              ...sliders.filter((slider) => slider.more).map((slider) => slider.row),
+            ]),
+          ]
+        : []),
       el('div', { className: 'debug-row' }, [copy, reset]),
     );
   });
