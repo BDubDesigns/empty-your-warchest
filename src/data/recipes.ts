@@ -11,11 +11,13 @@ export const recipes = [
     xp: 5,
   },
   {
+    // Riving one log: its yield is the staves it's worth (staves × grains), and XP is per stave
+    // split. About 6 staves a 15 s log is about 120 XP a minute, like woodcutting.
     id: 'rive_stave',
     station: 'workbench',
     inputs: [{ item: 'log', count: 1 }],
     outputs: [{ item: 'stave', count: 1 }],
-    xp: 10,
+    xp: 5,
   },
   {
     // The spear's quality tier comes from when the rack is pulled from the fire.

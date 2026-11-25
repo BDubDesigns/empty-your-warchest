@@ -28,11 +28,22 @@ describe('recipes', () => {
     expect(result.xp).toBe(recipe('harden_spear').xp * 5);
   });
 
-  it('multiplies outputs for a perfect result, without extra XP', () => {
+  it('yields what the mini game gave, with XP per output, down to nothing', () => {
+    const inventory = new Inventory(data, [{ item: 'log', count: 2 }]);
+    const result = craft(inventory, recipe('rive_stave'), { yield: 6 });
+    expect(inventory.count('stave')).toBe(6);
+    expect(result.xp).toBe(recipe('rive_stave').xp * 6);
+    const none = craft(inventory, recipe('rive_stave'), { yield: 0 });
+    expect(inventory.count('log')).toBe(0);
+    expect(inventory.count('stave')).toBe(6);
+    expect(none.xp).toBe(0);
+  });
+
+  it('can pay XP on fewer outputs than it yields', () => {
     const inventory = new Inventory(data, [{ item: 'log', count: 1 }]);
-    const result = craft(inventory, recipe('rive_stave'), { outputMultiplier: 2 });
-    expect(inventory.count('stave')).toBe(2);
-    expect(result.xp).toBe(recipe('rive_stave').xp);
+    const result = craft(inventory, recipe('rive_stave'), { yield: 24, xpYield: 8 });
+    expect(inventory.count('stave')).toBe(24);
+    expect(result.xp).toBe(recipe('rive_stave').xp * 8);
   });
 
   it('changes nothing when inputs are missing', () => {

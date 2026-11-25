@@ -322,6 +322,132 @@ export const warchestSchema = z.object({
   haptics: z.object({ openMs: nonNegative, slamMs: nonNegative }),
 });
 
+/** Feel numbers for riving. The debug menu can override them live. */
+export const rivingFeelSchema = z.object({
+  /** Seconds the splitting head takes to drop onto the log, and the freeze when it lands (ms). */
+  strikeSeconds: positive,
+  hitStopMs: nonNegative,
+  shakeStrength: nonNegative,
+  /**
+   * Turning the cuts: a buzz (ms) when turning makes a line start or stop cutting a grain, and a
+   * soft click for each step of turn, at most one every `tickGapMs`. A finger that moved under
+   * `liftPx` in its last `liftMs` before lifting was holding still: the turn goes back to where
+   * it was, so lifting off can't nudge it.
+   */
+  buzzCutMs: nonNegative,
+  tickGapMs: nonNegative,
+  liftMs: nonNegative,
+  liftPx: nonNegative,
+  /**
+   * The pump: a swipe of `pumpTravel` pixels down is one stroke (back up halfway, or lift, for
+   * the next). The fewest-piece head takes `pumpsFew` strokes to go through, the most-piece head
+   * `pumpsMany`, the rest in between. Each stroke drives the head in over `pumpSeconds`.
+   */
+  pumpTravel: positive,
+  pumpsFew: positiveInt,
+  pumpsMany: positiveInt,
+  pumpSeconds: positive,
+  /** Seconds the staves take to burst out and land, then sit in a heap before pouring in. */
+  burstSeconds: positive,
+  heapSeconds: nonNegative,
+  /**
+   * Vibration (ms): the head landing, each stroke of the pump (plus up to `buzzPumpBuildMs` more
+   * by the last), and the burst.
+   */
+  buzzStrikeMs: nonNegative,
+  buzzPumpMs: nonNegative,
+  buzzPumpBuildMs: nonNegative,
+  buzzBurstMs: nonNegative,
+});
+
+/** A log to rive: its size, end grain, and the grains on its end face. */
+const rivingLogSchema = z.object({
+  id,
+  /** Size in world units, for drawing it. */
+  radius: positive,
+  height: positive,
+  rings: positiveInt,
+  /** Grains: patches of the end face, each `width` degrees wide centred on `angle`. */
+  grains: z.array(z.object({ kind: id, angle: z.number(), width: positive })),
+  /** Knots: arcs of the end face (as grains are) that spoil any stave they touch. */
+  knots: z.array(z.object({ angle: z.number(), width: positive })),
+});
+
+/**
+ * Riving a log into staves with a splitting head: a star of blades that splits the whole log
+ * into `count` equal wedges at once, each one a stave. You pick a head (more open up with
+ * levels) and turn the cuts, then pump the handle to drive it through. Grains multiply the
+ * whole log's staves if they end up whole in a stave; a cut line through a grain cancels it, good
+ * or bad. Knots spoil the staves they touch.
+ */
+const rivingSchema = z.object({
+  /** The recipe a riven log runs: its yield is the staves it's worth. */
+  recipe: id,
+  multiplierCap: positive,
+  /** Degrees the cuts turn in steps of (dragging and ↺ ↻ alike): whole steps round a turn. */
+  turnStep: positive,
+  /** The splitting heads: how many staves each makes, and the Fletching level it opens up at. */
+  cutters: z.array(z.object({ count: z.number().int().min(2), level: positiveInt })).min(1),
+  /**
+   * Stars, by the share of the best a log could make with the heads you have (every head at
+   * every step of turn), and the bonus staves for 2 and 3 stars, as a share of the log.
+   */
+  stars: z.object({ one: fraction, two: fraction, three: fraction }),
+  starBonus: z.object({ two: nonNegative, three: nonNegative }),
+  /**
+   * The kinds of grain: what each multiplies the whole log's staves by when it ends up whole in
+   * a stave (they multiply together, up to `multiplierCap`; under 1 is a bad grain), how often
+   * each turns up among the good or bad ones, and how wide (degrees) it can be. A grain must fit
+   * inside one wedge to count, so a wide one can only be kept by a head with few pieces.
+   */
+  grainKinds: z
+    .array(
+      z.object({
+        id,
+        name: z.string().min(1),
+        multiplier: positive,
+        weight: positive,
+        width: z.object({ min: positive, max: positive }),
+      }),
+    )
+    .min(1),
+  /** The first log ever: to learn the controls on, with a grain to keep and one to cut. */
+  tutorialLog: rivingLogSchema,
+  /** Random logs: sizes, rings and grains, from a seed. */
+  generator: z.object({
+    radius: z.object({ min: positive, max: positive }),
+    height: z.object({ min: positive, max: positive }),
+    rings: z.object({ min: positiveInt, max: positiveInt }),
+    /** Good grains (multiplier over 1) and bad ones on every log. */
+    good: z.object({ min: z.number().int().min(0), max: z.number().int().min(0) }),
+    bad: z.object({ min: z.number().int().min(0), max: z.number().int().min(0) }),
+    knots: z.object({ min: z.number().int().min(0), max: z.number().int().min(0) }),
+    knotWidth: z.object({ min: positive, max: positive }),
+    /** Least gap (degrees) between two grains or knots, so each reads on its own. */
+    grainGap: nonNegative,
+    /**
+     * How often the first good grain sits close to the first bad one (`nearGap` degrees from its
+     * edge), so a line through the bad one lands its neighbours near the good one.
+     */
+    nearChance: fraction,
+    nearGap: z.object({ min: nonNegative, max: positive }),
+    /**
+     * Logs are checked with the best-split search: a log is easy when more than `easyShare` of
+     * every head at every turn would earn 3 stars. Only `easyChance` of easy logs are kept; the
+     * rest are made again (up to `tries` times), so most logs are a real choice.
+     */
+    easyShare: fraction,
+    easyChance: fraction,
+    /**
+     * And a log is fiddly when no head keeps 3 stars over `leeway` degrees of turn in a row:
+     * those are always made again (the last fair one is used if every try is fiddly).
+     */
+    leeway: nonNegative,
+    tries: positiveInt,
+  }),
+  feel: rivingFeelSchema,
+});
+
 export const gameDataShape = z.object({
   /** Ordered worst to best. */
   qualities: z.array(qualitySchema).min(1),
@@ -334,6 +460,7 @@ export const gameDataShape = z.object({
   levels: z.array(levelSchema),
   camp: campSchema,
   woodcutting: woodcuttingSchema,
+  riving: rivingSchema,
   warchest: warchestSchema,
   tuning: tuningSchema,
 });
@@ -355,3 +482,6 @@ export type CampSpot = Camp['chest'];
 export type Clearing = GameData['woodcutting']['clearings'][number];
 export type ClearingTree = Clearing['trees'][number];
 export type WoodcuttingFeel = GameData['woodcutting']['feel'];
+export type Riving = GameData['riving'];
+export type RivingLog = Riving['tutorialLog'];
+export type RivingFeel = Riving['feel'];

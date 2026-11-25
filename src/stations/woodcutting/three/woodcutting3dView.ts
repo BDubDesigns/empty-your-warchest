@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { TrunkCarver } from './carve';
 import type { ScreenView } from '../../../app/screen';
 import type { BackButton } from '../../../app/backButton';
+import { groundMesh } from '../../../app/ground';
 import type { Haptics } from '../../../app/haptics';
 import { loadModel } from '../../../app/models';
 import { Sfx } from '../../../app/sfx';
@@ -90,8 +91,6 @@ const SOUNDS: Record<string, string> = Object.fromEntries(
 const COMBO_COLORS = ['#ffffff', '#fbe7a6', '#f6cf5a', '#f4a63a', '#f07f2c', '#ee5b2a'];
 const COLORS = {
   sky: 0xa9cfe0,
-  grass: 0x5d8c46,
-  clearing: 0x77a457,
   accent: 0xc8873a,
   guide: 0xf2ead3,
   gold: 0xe8c04f,
@@ -473,20 +472,14 @@ export class Woodcutting3DView implements ScreenView {
     shadow.bottom = -13;
     this.#scene.add(sun);
 
-    const ground = new THREE.Mesh(
-      new THREE.PlaneGeometry(80, 80),
-      new THREE.MeshLambertMaterial({ color: COLORS.grass }),
+    // Forest floor all round; the clearing being worked is trodden earth.
+    this.#scene.add(groundMesh('forestGrass', 80, 80));
+    const patch = groundMesh(
+      'troddenDirt',
+      this.#clearing.width * SCALE + 1,
+      this.#clearing.height * SCALE + 1,
     );
-    ground.rotation.x = -Math.PI / 2;
-    ground.receiveShadow = true;
-    this.#scene.add(ground);
-    const patch = new THREE.Mesh(
-      new THREE.PlaneGeometry(this.#clearing.width * SCALE + 1, this.#clearing.height * SCALE + 1),
-      new THREE.MeshLambertMaterial({ color: COLORS.clearing }),
-    );
-    patch.rotation.x = -Math.PI / 2;
     patch.position.y = 0.005;
-    patch.receiveShadow = true;
     this.#scene.add(patch);
     this.#scene.add(this.#hazards);
   }

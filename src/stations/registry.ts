@@ -4,7 +4,7 @@ import { GameDataError, type GameData } from '../data';
 export const PLACEHOLDER_SCENE = 'station-placeholder';
 
 /** Full-screen views outside Phaser (three.js), by id. */
-export type ScreenId = 'runner' | 'woodcutting3d';
+export type ScreenId = 'runner' | 'woodcutting3d' | 'rive3d';
 
 /** Where a station's mini game runs: a Phaser scene, or its own (three.js) screen. */
 export type StationScreen =
@@ -22,10 +22,7 @@ export interface MechanicModule {
  */
 export const mechanics: Readonly<Record<string, MechanicModule>> = {
   woodcutting3d: { screen: { kind: 'screen', screen: 'woodcutting3d' } },
-  rive: {
-    screen: { kind: 'phaser', scene: PLACEHOLDER_SCENE },
-    placeholderNote: 'Riving arrives in M4',
-  },
+  rive: { screen: { kind: 'screen', screen: 'rive3d' } },
   harden: {
     screen: { kind: 'phaser', scene: PLACEHOLDER_SCENE },
     placeholderNote: 'Fire-hardening arrives in M5',

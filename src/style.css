@@ -1319,3 +1319,472 @@ body:not([data-view='camp']) #build-label {
     top: calc(var(--safe-top) + 180px);
   }
 }
+
+/* Riving (src/stations/rive/three/rive3dView.ts). */
+.rv-canvas {
+  display: block;
+  touch-action: none;
+}
+
+.rv-ui {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  font-family: system-ui, sans-serif;
+  color: var(--fg);
+}
+
+.rv-ui button {
+  pointer-events: auto;
+}
+
+.rv-ui [hidden] {
+  display: none !important;
+}
+
+.rv-log-name {
+  position: absolute;
+  top: calc(var(--safe-top) + 66px);
+  left: 0;
+  right: 0;
+  text-align: center;
+  font-weight: 800;
+  font-size: 16px;
+  text-shadow: 0 1px 3px rgb(0 0 0 / 0.7);
+}
+
+/* The stars this plan would earn, lighting up as you turn the cuts (like woodcutting's). */
+.rv-stars {
+  position: absolute;
+  top: calc(var(--safe-top) + 90px);
+  left: 50%;
+  transform: translateX(-50%);
+  display: grid;
+  justify-items: center;
+  gap: 1px;
+  padding: 4px 12px 5px;
+  border-radius: 10px;
+  background: rgb(0 0 0 / 0.4);
+}
+
+.rv-star-row {
+  display: flex;
+  gap: 6px;
+  font-size: 20px;
+  line-height: 1;
+}
+
+.rv-star {
+  display: inline-block;
+  color: rgb(255 255 255 / 0.25);
+}
+
+.rv-star-on {
+  color: #f0cd5c;
+  text-shadow: 0 0 8px rgb(240 205 92 / 0.6);
+}
+
+.rv-star-pop {
+  animation: w3d-live-star-pop 0.6s ease-out;
+}
+
+.rv-star-text {
+  font:
+    700 11px system-ui,
+    sans-serif;
+  text-shadow: 0 1px 2px rgb(0 0 0 / 0.7);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The turn of the cuts, in whole degrees: big, so you can see exactly where you are. */
+.rv-turn {
+  position: absolute;
+  top: calc(var(--safe-top) + 142px);
+  left: 50%;
+  transform: translateX(-50%);
+  min-width: 72px;
+  padding: 2px 14px 3px;
+  border-radius: 999px;
+  background: rgb(0 0 0 / 0.35);
+  text-align: center;
+  font:
+    800 26px system-ui,
+    sans-serif;
+  font-variant-numeric: tabular-nums;
+  text-shadow: 0 1px 3px rgb(0 0 0 / 0.7);
+}
+
+@media (max-width: 400px) {
+  .rv-log-name {
+    top: calc(var(--safe-top) + 120px);
+  }
+
+  .rv-stars {
+    top: calc(var(--safe-top) + 144px);
+  }
+
+  .rv-turn {
+    top: calc(var(--safe-top) + 196px);
+  }
+}
+
+.rv-hint {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: calc(var(--safe-bottom) + 236px);
+  text-align: center;
+  font-size: 14px;
+  text-shadow: 0 1px 3px rgb(0 0 0 / 0.8);
+}
+
+/* The plan as a sum: staves × each kept grain (cut ones struck through) = the total. */
+.rv-sum {
+  position: absolute;
+  left: 50%;
+  bottom: calc(var(--safe-bottom) + 182px);
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px 6px 14px;
+  border-radius: 999px;
+  background: rgb(22 18 12 / 0.78);
+  box-shadow:
+    0 4px 14px rgb(0 0 0 / 0.35),
+    inset 0 1px 0 rgb(255 255 255 / 0.08);
+  font:
+    800 16px system-ui,
+    sans-serif;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.rv-sum-staves {
+  color: var(--fg);
+}
+
+.rv-sum-factor {
+  padding: 2px 8px;
+  border-radius: 8px;
+  color: #1b1f1a;
+}
+
+.rv-sum-rot {
+  background: #8a6a3e;
+  color: #fff;
+}
+
+.rv-sum-silver {
+  background: #d9e1e4;
+}
+
+.rv-sum-gold {
+  background: #f2c037;
+}
+
+/* A cut grain: struck through; green when cutting it out helps, red when it hurts. */
+.rv-sum-factor.rv-sum-cut-good,
+.rv-sum-factor.rv-sum-cut-bad {
+  background: transparent;
+  text-decoration: line-through 3px;
+}
+
+.rv-sum-factor.rv-sum-cut-good {
+  box-shadow: inset 0 0 0 2px #7fd65a;
+  color: #a6e88a;
+}
+
+.rv-sum-factor.rv-sum-cut-bad {
+  box-shadow: inset 0 0 0 2px #ff6a5a;
+  color: #ff9a8c;
+}
+
+.rv-sum-equals {
+  color: var(--muted);
+}
+
+.rv-sum-total {
+  min-width: 44px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--bg);
+  font-size: 20px;
+  text-align: center;
+}
+
+.rv-sum-up {
+  animation: rv-sum-up 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.rv-sum-down {
+  animation: rv-sum-down 0.3s ease-out;
+}
+
+@keyframes rv-sum-up {
+  0% {
+    transform: scale(1.35);
+    background: #f0cd5c;
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+@keyframes rv-sum-down {
+  0% {
+    transform: translateY(3px);
+    background: #c0392b;
+    color: #fff;
+  }
+  100% {
+    transform: none;
+  }
+}
+
+.rv-sum-cap {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/*
+ * The head picker: each head drawn as the cut it makes. The chosen one lifts, glows gold and
+ * shows its blades in steel; the next one to open waits, dimmed, with its level.
+ */
+.rv-heads {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(var(--safe-bottom) + 100px);
+  display: flex;
+  justify-content: safe center;
+  gap: 6px;
+  padding: 10px 14px 6px;
+  overflow-x: auto;
+  scroll-snap-type: x proximity;
+  scrollbar-width: none;
+  pointer-events: auto;
+  mask-image: linear-gradient(90deg, transparent, #000 16px, #000 calc(100% - 16px), transparent);
+}
+
+.rv-heads::-webkit-scrollbar {
+  display: none;
+}
+
+.rv-head {
+  flex: none;
+  display: grid;
+  justify-items: center;
+  gap: 2px;
+  width: 50px;
+  padding: 5px 0 3px;
+  border: 0;
+  border-radius: 14px;
+  background: rgb(22 18 12 / 0.62);
+  box-shadow: 0 3px 8px rgb(0 0 0 / 0.3);
+  color: var(--fg);
+  scroll-snap-align: center;
+  touch-action: manipulation;
+  transition:
+    transform 0.18s cubic-bezier(0.34, 1.56, 0.64, 1),
+    background 0.18s,
+    box-shadow 0.18s;
+}
+
+.rv-head:active {
+  transform: scale(0.92);
+}
+
+.rv-head-icon {
+  width: 36px;
+  height: 36px;
+  transition: transform 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.rv-head-bark {
+  fill: #5b3e27;
+}
+
+.rv-head-wood {
+  fill: #e2c08c;
+}
+
+.rv-head-ring {
+  fill: none;
+  stroke: #c99d64;
+  stroke-width: 1.5;
+}
+
+.rv-head-cuts {
+  stroke: #3b2415;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+}
+
+.rv-head-hub {
+  fill: #5d666b;
+}
+
+.rv-head-label {
+  font:
+    900 15px system-ui,
+    sans-serif;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+
+.rv-head-on {
+  transform: translateY(-6px);
+  background: linear-gradient(180deg, #f6dc8a, #c8873a);
+  box-shadow:
+    0 0 0 2px #fff4cf,
+    0 6px 16px rgb(240 205 92 / 0.45);
+  color: #2a1d0e;
+}
+
+.rv-head-on .rv-head-icon {
+  transform: rotate(30deg) scale(1.08);
+}
+
+.rv-head-on .rv-head-cuts {
+  stroke: #e9eef0;
+  stroke-width: 2.2;
+}
+
+.rv-head-on .rv-head-hub {
+  fill: #e9eef0;
+}
+
+.rv-head-locked {
+  opacity: 0.5;
+}
+
+.rv-head-locked .rv-head-icon {
+  filter: grayscale(1);
+}
+
+.rv-head-locked .rv-head-label {
+  font-size: 12px;
+}
+
+.rv-controls {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(var(--safe-bottom) + 28px);
+  display: flex;
+  justify-content: center;
+  gap: 12px;
+}
+
+.rv-button {
+  min-width: 64px;
+  min-height: 60px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--accent);
+  color: var(--bg);
+  font:
+    700 22px system-ui,
+    sans-serif;
+  touch-action: manipulation;
+}
+
+.rv-button:active {
+  background: var(--accent-pressed);
+}
+
+.rv-strike {
+  min-width: 160px;
+}
+
+.rv-button.rv-secondary {
+  border: 2px solid var(--accent);
+  background: transparent;
+  color: var(--accent);
+  font-size: 18px;
+}
+
+.rv-card {
+  position: absolute;
+  inset: 22% 16px auto;
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+  padding: 20px;
+  border-radius: 14px;
+  background: rgb(20 24 18 / 0.88);
+  pointer-events: auto;
+}
+
+.rv-card-stars:empty {
+  display: none;
+}
+
+.rv-card-title {
+  font:
+    800 28px system-ui,
+    sans-serif;
+}
+
+.rv-card-text {
+  color: var(--muted);
+  text-align: center;
+  white-space: pre-line;
+  line-height: 1.45;
+}
+
+.rv-card-buttons {
+  display: flex;
+  gap: 12px;
+}
+
+.rv-flashes {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 34%;
+  display: grid;
+  justify-items: center;
+}
+
+.rv-flash {
+  grid-area: 1 / 1;
+  font:
+    900 26px system-ui,
+    sans-serif;
+  text-shadow: 0 2px 5px rgb(0 0 0 / 0.8);
+  animation: rv-rise 1.1s ease-out forwards;
+}
+
+.rv-good {
+  color: #8fd16f;
+}
+
+.rv-bad {
+  color: #f0705c;
+}
+
+.rv-warn {
+  color: #f0cd5c;
+}
+
+@keyframes rv-rise {
+  0% {
+    transform: translateY(8px) scale(1.2);
+    opacity: 0;
+  }
+  15% {
+    transform: translateY(0) scale(1);
+    opacity: 1;
+  }
+  75% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(-30px);
+    opacity: 0;
+  }
+}

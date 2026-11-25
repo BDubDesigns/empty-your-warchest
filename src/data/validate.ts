@@ -105,6 +105,73 @@ function checkReferences(data: GameData, ctx: z.RefinementCtx): void {
 
   coversAllQualities(['tuning', 'weaponRecoveryOnWin'], data.tuning.weaponRecoveryOnWin);
 
+  const riving = data.riving;
+  if (!data.recipes.some((recipe) => recipe.id === riving.recipe)) {
+    issue(['riving', 'recipe'], `Unknown recipe "${riving.recipe}"`);
+  }
+  const counts = new Set<number>();
+  riving.cutters.forEach((cutter, index) => {
+    if (counts.has(cutter.count)) {
+      issue(['riving', 'cutters', index, 'count'], `Duplicate head ${String(cutter.count)}`);
+    }
+    counts.add(cutter.count);
+  });
+  if (!riving.cutters.some((cutter) => cutter.level === 1)) {
+    issue(['riving', 'cutters'], 'At least one head must be open from level 1');
+  }
+  const steps = 360 / riving.turnStep;
+  if (Math.abs(steps - Math.round(steps)) > 1e-9) {
+    issue(['riving', 'turnStep'], 'Must go into 360 a whole number of times');
+  }
+  if (riving.feel.pumpsFew > riving.feel.pumpsMany) {
+    issue(['riving', 'feel', 'pumpsFew'], 'The fewest-piece head must not need more strokes');
+  }
+  if (riving.stars.one > riving.stars.two || riving.stars.two > riving.stars.three) {
+    issue(['riving', 'stars'], 'More stars must not need less');
+  }
+  const kinds = new Set<string>();
+  riving.grainKinds.forEach((kind, index) => {
+    if (kinds.has(kind.id))
+      issue(['riving', 'grainKinds', index, 'id'], `Duplicate id "${kind.id}"`);
+    kinds.add(kind.id);
+  });
+  riving.tutorialLog.grains.forEach((grain, index) => {
+    if (!kinds.has(grain.kind)) {
+      issue(['riving', 'tutorialLog', 'grains', index, 'kind'], `Unknown grain "${grain.kind}"`);
+    }
+  });
+  const rivingGenerator = riving.generator;
+  for (const key of [
+    'radius',
+    'height',
+    'rings',
+    'good',
+    'bad',
+    'knots',
+    'knotWidth',
+    'nearGap',
+  ] as const) {
+    if (rivingGenerator[key].min > rivingGenerator[key].max) {
+      issue(['riving', 'generator', key], 'min must not be more than max');
+    }
+  }
+  // A grain wider than the fewest-piece head's wedges could never be kept.
+  const widest = 360 / Math.min(...riving.cutters.map((cutter) => cutter.count));
+  riving.grainKinds.forEach((kind, index) => {
+    if (kind.width.min > kind.width.max) {
+      issue(['riving', 'grainKinds', index, 'width'], 'min must not be more than max');
+    }
+    if (kind.width.max >= widest) {
+      issue(['riving', 'grainKinds', index, 'width', 'max'], 'Too wide for any head to keep');
+    }
+  });
+  if (rivingGenerator.good.max > 0 && !riving.grainKinds.some((kind) => kind.multiplier > 1)) {
+    issue(['riving', 'generator', 'good'], 'Good grains need a kind with a multiplier over 1');
+  }
+  if (rivingGenerator.bad.max > 0 && !riving.grainKinds.some((kind) => kind.multiplier < 1)) {
+    issue(['riving', 'generator', 'bad'], 'Bad grains need a kind with a multiplier under 1');
+  }
+
   const woodcutting = data.woodcutting;
   if (!data.recipes.some((recipe) => recipe.id === woodcutting.recipe)) {
     issue(['woodcutting', 'recipe'], `Unknown recipe "${woodcutting.recipe}"`);

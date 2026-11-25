@@ -2,6 +2,10 @@ import { readFile } from 'node:fs/promises';
 import { expect, test, type Page } from '@playwright/test';
 import { stations } from '../src/data/stations';
 
+// CI draws 3D in software: a pixel ratio of 1 keeps it fast enough (this tests the flow, not the
+// pixels).
+test.use({ deviceScaleFactor: 1 });
+
 const tile = stations.find((station) => station.id === 'tree_line');
 
 async function touch(
