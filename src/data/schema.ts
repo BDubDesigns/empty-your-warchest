@@ -294,6 +294,8 @@ export const woodcuttingScenerySchema = z.object({
    * sees the near and far sides most (on a phone the long sides are mostly off screen).
    */
   sides: z.object({ far: nonNegative, near: nonNegative, left: nonNegative, right: nonNegative }),
+  /** Share of the clearing (inside the fence) worn through the grass to bare earth. */
+  clearingWear: fraction,
   /** Wind gusts per second. */
   windSpeed: positive,
   /**
@@ -559,6 +561,11 @@ const rivingSchema = z.object({
     leeway: nonNegative,
     tries: positiveInt,
   }),
+  /**
+   * The yard round the chopping block: grass, worn to bare earth in an oval `radius` (world units)
+   * across the middle, `wear` of it bare.
+   */
+  yard: z.object({ radius: positive, wear: fraction }),
   feel: rivingFeelSchema,
 });
 

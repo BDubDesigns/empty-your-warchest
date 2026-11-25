@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { groundMesh } from '../../../app/ground';
+import { groundMesh, wornGround } from '../../../app/ground';
 import type { ScreenView } from '../../../app/screen';
 import type { Haptics } from '../../../app/haptics';
 import { Sfx } from '../../../app/sfx';
@@ -120,6 +120,8 @@ interface StaveFlight {
   height: number;
   spin: THREE.Vector3;
   yaw: number;
+  /** Gone from the heap: it has set off into the chest. */
+  left?: boolean;
 }
 
 /**
@@ -316,8 +318,16 @@ export class Rive3DView implements ScreenView {
     sun.castShadow = true;
     sun.shadow.mapSize.set(1024, 1024);
     this.#scene.add(sun);
-    // The workbench yard: trodden earth where the work happens.
-    this.#scene.add(groundMesh('troddenDirt', 40, 40));
+    // The workbench yard: grass, trodden bare round the block where the work happens.
+    this.#scene.add(groundMesh('meadowGrass', 40, 40));
+    const { yard } = this.#deps.game.data.riving;
+    this.#scene.add(
+      wornGround('troddenDirt', yard.radius * 2, yard.radius * 2, {
+        cover: yard.wear,
+        round: true,
+        seed: 5,
+      }),
+    );
     this.#scene.add(this.#buildBlock());
     this.#logRoot.position.y = BLOCK_HEIGHT;
     this.#scene.add(this.#logRoot);
@@ -834,18 +844,28 @@ export class Rive3DView implements ScreenView {
     this.#heap = { event, at: round.now + feel.burstSeconds + feel.heapSeconds };
   }
 
-  /** The heap's staves fly into the chest, and the log's XP ticks in with them. */
+  /**
+   * The heap's staves fly into the chest, off the top of the heap first, each one leaving the heap
+   * as it sets off; the log's XP ticks in with them.
+   */
   #pourStaves(): void {
     const deposit = this.#deposit;
     this.#deposit = undefined;
     if (!deposit) return;
     const { clientWidth: width, clientHeight: height } = this.#element;
-    const points: ScreenPoint[] = this.#flights.map((flight) => {
-      const projected = flight.to.clone().project(this.#camera);
+    const flights = this.#flights;
+    const order = flights
+      .map((flight, index) => ({ index, y: flight.to.y }))
+      .sort((a, b) => b.y - a.y)
+      .map((entry) => entry.index);
+    const points: ScreenPoint[] = order.map((index) => {
+      const projected = (flights[index]?.to ?? new THREE.Vector3()).clone().project(this.#camera);
       return { x: ((projected.x + 1) / 2) * width, y: ((1 - projected.y) / 2) * height };
     });
-    deposit.pour(points);
-    this.#clearBurst();
+    deposit.pour(points, (source) => {
+      const flight = flights[order[source] ?? -1];
+      if (flight) flight.left = true;
+    });
   }
 
   #clearBurst(): void {
@@ -980,7 +1000,7 @@ export class Rive3DView implements ScreenView {
     const hidden = new THREE.Vector3(0, 0, 0);
     this.#flights.forEach((flight, index) => {
       const t = (round.now - flight.launchAt) / flight.seconds;
-      if (t < 0) {
+      if (t < 0 || flight.left) {
         matrix.compose(flight.from, rotation.identity(), hidden);
       } else {
         const done = Math.min(t, 1);

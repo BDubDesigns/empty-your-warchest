@@ -69,6 +69,8 @@ export const riving = {
     leeway: 3,
     tries: 12,
   },
+  // Grass round the block, trodden bare in the middle where the work happens.
+  yard: { radius: 2.6, wear: 0.6 },
   feel: {
     strikeSeconds: 0.22,
     hitStopMs: 70,

@@ -6,7 +6,7 @@ import { Scenery } from './scenery';
 import { Wreck } from './wreck';
 import type { ScreenView } from '../../../app/screen';
 import type { BackButton } from '../../../app/backButton';
-import { groundMesh } from '../../../app/ground';
+import { groundMesh, wornGround } from '../../../app/ground';
 import type { Haptics } from '../../../app/haptics';
 import { loadModel } from '../../../app/models';
 import { windTime } from '../../../app/scatter';
@@ -582,15 +582,15 @@ export class Woodcutting3DView implements ScreenView {
     shadow.bottom = -13;
     this.#scene.add(sun);
 
-    // Thick grass all round; the clearing being worked is trodden earth.
+    // Thick grass all round; inside the fence it's worn to bare earth in places.
     this.#scene.add(groundMesh('meadowGrass', 80, 80));
-    const patch = groundMesh(
-      'troddenDirt',
-      this.#clearing.width * SCALE + 1,
-      this.#clearing.height * SCALE + 1,
+    this.#scene.add(
+      wornGround('troddenDirt', this.#clearing.width * SCALE, this.#clearing.height * SCALE, {
+        cover: this.#deps.game.data.woodcutting.scenery.clearingWear,
+        round: false,
+        seed: 3,
+      }),
     );
-    patch.position.y = 0.005;
-    this.#scene.add(patch);
     this.#scene.add(this.#hazards);
     const { scenery } = this.#deps.game.data.woodcutting;
     this.#scenery = new Scenery(

@@ -114,6 +114,8 @@ export const woodcutting = {
       { kind: 'mushroom', count: 24, height: { min: 3, max: 5 }, reach: 200, bunch: 1.8, sway: 0 },
     ],
     sides: { far: 1, near: 1.6, left: 0.5, right: 0.5 },
+    // A forest clearing worked by hand: grass with bare earth worn through in places.
+    clearingWear: 0.45,
     windSpeed: 0.6,
     forest: {
       trees: 44,
