@@ -1,8 +1,14 @@
-import type { Gate, GateOp } from '../../data';
+import type { GateOp } from '../../data';
 import type { Squad } from './squad';
 
+/** A gate's effect on the count, once its value is rolled for the run. */
+export interface GateEffect {
+  op: GateOp;
+  value: number;
+}
+
 /** The squad count after passing a gate. Never below zero; dividing rounds up. */
-export function applyGate(count: number, gate: Pick<Gate, 'op' | 'value'>): number {
+export function applyGate(count: number, gate: GateEffect): number {
   switch (gate.op) {
     case 'add':
       return count + gate.value;
@@ -23,7 +29,7 @@ export function isGoodOp(op: GateOp): boolean {
 const SYMBOLS: Record<GateOp, string> = { add: '+', subtract: '−', multiply: '×', divide: '÷' };
 
 /** "+15", "×2", "−5", "÷2". */
-export function gateLabel(gate: Pick<Gate, 'op' | 'value'>): string {
+export function gateLabel(gate: GateEffect): string {
   return `${SYMBOLS[gate.op]}${gate.value}`;
 }
 
@@ -35,7 +41,7 @@ export interface GatePreview {
 }
 
 /** What passing `gate` would do to the squad, without changing it. */
-export function previewGate(squad: Squad, gate: Pick<Gate, 'op' | 'value'>): GatePreview {
+export function previewGate(squad: Squad, gate: GateEffect): GatePreview {
   const after = squad.clone();
   after.resize(applyGate(squad.count, gate));
   return { from: squad.count, to: after.count, armedTo: after.armedCount };

@@ -73,9 +73,16 @@ export const enemySchema = z.object({ id, name, unit: id, weaponQuality: id });
 
 const gateOp = z.enum(['add', 'subtract', 'multiply', 'divide']);
 
+/**
+ * A number rolled for each run (decided Nov 25: random maps, scaled by Command level): a whole
+ * number from `min` to `min + perLevel × (level − 1)`, rounded down. A plain number is fixed.
+ * Brandon's "between 1 and your Command level" is `{ min: 1, perLevel: 1 }`.
+ */
+const rollSchema = z.union([positiveInt, z.object({ min: positiveInt, perLevel: nonNegative })]);
+
 const gateSchema = z.object({
   op: gateOp,
-  value: positiveInt,
+  value: rollSchema,
   /**
    * A guarded gate: enemies stand in front of it in its lane, and a squad on that side has to
    * fight through them to reach it (decided Nov 24: a blue gate behind enemies reads as "fight for
@@ -84,30 +91,37 @@ const gateSchema = z.object({
   guards: z
     .object({
       enemy: id,
-      count: positiveInt,
-      /** How many of them carry spears; the armed lead and fall first. */
-      armed: z.number().int().nonnegative(),
+      count: rollSchema,
+      /** Share of them carrying spears (rounded); the armed lead and fall first. */
+      armedShare: fraction,
     })
     .optional(),
 });
 
 /** `at` is how far along the track the event happens, from 0 (start) to 1 (end). */
 const levelEventSchema = z.discriminatedUnion('type', [
-  z.object({ type: z.literal('gates'), at: fraction, left: gateSchema, right: gateSchema }),
+  z.object({
+    type: z.literal('gates'),
+    at: fraction,
+    left: gateSchema,
+    right: gateSchema,
+    /** Swap the two sides at random each run, so the greedy side isn't always the same. */
+    shuffle: z.boolean().default(true),
+  }),
   z.object({
     type: z.literal('enemies'),
     at: fraction,
     enemy: id,
-    count: positiveInt,
-    /** How many of them carry spears; the rest are unarmed and stand in front. */
-    armed: z.number().int().nonnegative(),
+    count: rollSchema,
+    /** Share of them carrying spears (rounded); the armed lead and fall first. */
+    armedShare: fraction,
     /** A group in one lane only blocks a squad on that side; `both` blocks the whole track. */
     lane: z.enum(['both', 'left', 'right']).default('both'),
   }),
   z.object({
     type: z.literal('wall'),
     at: fraction,
-    hp: positiveInt,
+    hp: rollSchema,
     /** Archers on the walkway: every `volleySeconds` a volley drops `perVolley` units. */
     archers: z.object({ volleySeconds: positive, perVolley: positiveInt }),
   }),
@@ -120,7 +134,9 @@ export const levelSchema = z.object({
   durationSeconds: positive,
   /** The unit every recruit becomes. */
   unit: id,
+  /** Decided Nov 25: always 1, so every run shows the growth from one guy to an army. */
   startingRecruits: positiveInt,
+  /** A template: its rolls are made fresh for each run from the run's seed and Command level. */
   events: z.array(levelEventSchema).min(1),
   rewards: z.object({ xpPerEnemy: nonNegative, xpPerSurvivor: nonNegative }),
 });
@@ -461,6 +477,7 @@ export type Clearing = GameData['woodcutting']['clearings'][number];
 export type ClearingTree = Clearing['trees'][number];
 export type WoodcuttingFeel = GameData['woodcutting']['feel'];
 export type Gate = z.output<typeof gateSchema>;
+export type Roll = z.output<typeof rollSchema>;
 export type GateOp = Gate['op'];
 export type LevelEvent = Level['events'][number];
 export type RunnerData = GameData['runner'];

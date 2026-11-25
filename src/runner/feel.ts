@@ -1,4 +1,4 @@
-import { LiveTuning, type KeyValueStore, type Tunable } from '../core';
+import { LiveChoice, LiveTuning, type KeyValueStore, type Tunable } from '../core';
 import type { RunnerFeel } from '../data';
 
 /** Slider ranges for the debug menu's live tuning panel. */
@@ -32,4 +32,23 @@ export const runnerTunables: readonly Tunable[] = [
 
 export function runnerFeel(defaults: RunnerFeel, store: KeyValueStore): LiveTuning<RunnerFeel> {
   return new LiveTuning('runner', defaults, runnerTunables, store);
+}
+
+export type SpearSource = 'warchest' | 'sliders';
+
+/**
+ * Where a run's spears come from, kept on this phone: the warchest (spent for real, part of them
+ * recovered on a win) or the debug sliders (free, nothing spent), for quick feel tests.
+ */
+export function spearSourceChoice(store: KeyValueStore): LiveChoice<SpearSource> {
+  return new LiveChoice<SpearSource>(
+    'warchest.runner.spears',
+    'Runner spears',
+    [
+      { value: 'warchest', label: 'Warchest' },
+      { value: 'sliders', label: 'Debug sliders' },
+    ],
+    'warchest',
+    store,
+  );
 }

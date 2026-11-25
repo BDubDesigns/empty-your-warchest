@@ -92,7 +92,7 @@
   position: absolute;
   left: 16px;
   right: 16px;
-  bottom: calc(var(--safe-bottom) + 18%);
+  bottom: calc(var(--safe-bottom) + 38%);
   text-align: center;
   pointer-events: none;
   font:
@@ -107,6 +107,14 @@
   50% {
     opacity: 0.55;
   }
+}
+
+.runner-hint-info {
+  margin-top: 6px;
+  font-size: 15px;
+  font-weight: 700;
+  animation: none;
+  opacity: 0.9;
 }
 
 .runner-callout {

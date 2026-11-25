@@ -35,7 +35,7 @@ export async function startApp(): Promise<void> {
     mountDebugMenu(byId('app'), {
       ...booted,
       tuning: [booted.feel.woodcutting, booted.feel.runner],
-      choices: [booted.choices.treeStyle, booted.choices.vibration],
+      choices: [booted.choices.treeStyle, booted.choices.vibration, booted.choices.runnerSpears],
       clearings: booted.clearings,
       buildLabel: __BUILD_LABEL__,
     });
@@ -89,6 +89,8 @@ export async function startApp(): Promise<void> {
       three: lazyScreen(threeElement, async () => {
         const { RunnerView } = await import('../runner/view');
         return RunnerView.create(threeElement, {
+          game,
+          spearSource: choices.runnerSpears,
           data: game.data,
           logger,
           feel: feel.runner,

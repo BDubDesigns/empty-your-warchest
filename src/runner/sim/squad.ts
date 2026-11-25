@@ -25,6 +25,7 @@ export class Squad {
   #unarmed = 0;
   readonly #armed = new Map<string, number>();
   readonly #supply = new Map<string, number>();
+  readonly #used = new Map<string, number>();
   #spearsUsed = 0;
 
   constructor(qualities: readonly string[], supply: Readonly<Record<string, number>>) {
@@ -54,6 +55,13 @@ export class Squad {
     return this.#spearsUsed;
   }
 
+  /** Spears handed out so far, by quality: what the run spends from the warchest. */
+  get usedByQuality(): Readonly<Record<string, number>> {
+    return Object.fromEntries(
+      this.qualities.map((quality) => [quality, this.#used.get(quality) ?? 0]),
+    );
+  }
+
   /** Spears not yet handed out, by quality. */
   get supply(): Readonly<Record<string, number>> {
     return Object.fromEntries(this.#supply);
@@ -75,6 +83,7 @@ export class Squad {
       if (take === 0) continue;
       this.#supply.set(quality, (this.#supply.get(quality) ?? 0) - take);
       this.#armed.set(quality, this.armed(quality) + take);
+      this.#used.set(quality, (this.#used.get(quality) ?? 0) + take);
       this.#spearsUsed += take;
       left -= take;
     }
@@ -127,6 +136,7 @@ export class Squad {
     copy.#unarmed = this.#unarmed;
     for (const [quality, count] of this.#armed) copy.#armed.set(quality, count);
     copy.#spearsUsed = this.#spearsUsed;
+    for (const [quality, count] of this.#used) copy.#used.set(quality, count);
     return copy;
   }
 }

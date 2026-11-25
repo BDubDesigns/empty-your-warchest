@@ -2,13 +2,13 @@ import {
   byId,
   type Enemy,
   type GameData,
-  type Gate,
   type Level,
   type RunnerData,
   type RunnerFeel,
   type Unit,
 } from '../../data';
-import { applyGate, isGoodOp, previewGate, type GatePreview } from './gates';
+import { applyGate, isGoodOp, previewGate, type GateEffect, type GatePreview } from './gates';
+import { rollLevel, type RolledGate } from './roll';
 import { Squad, UNARMED, type Fighter } from './squad';
 
 /** The simulation's fixed time step (s). The view runs as many steps as real time needs. */
@@ -19,7 +19,7 @@ export type Lane = Side | 'both';
 
 /** One gate of a pair, as it stands on the track. */
 export interface TrackGate {
-  readonly base: Gate;
+  readonly base: RolledGate;
 }
 
 export interface TrackGates {
@@ -67,7 +67,7 @@ export type RunnerEvent =
       type: 'gate';
       index: number;
       side: Side;
-      gate: Pick<Gate, 'op' | 'value'>;
+      gate: GateEffect;
       good: boolean;
       before: number;
       after: number;
@@ -107,6 +107,8 @@ export interface RunResult {
   /** Armed survivors. */
   armed: number;
   spearsUsed: number;
+  /** Spears handed out, by quality. */
+  spearsUsedByQuality: Readonly<Record<string, number>>;
   enemiesBeaten: number;
   /** Units lost, by what took them. */
   losses: Record<LossCause, number>;
@@ -123,8 +125,12 @@ export interface RunnerConfig {
   feel: RunnerFeel;
   /** Spear qualities, worst to best. */
   qualities: readonly string[];
-  /** Logged so a run can be found again; the rules themselves have no randomness yet. */
+  /** Rolls the track from the level template; the same seed always gives the same run. */
   seed: number | string;
+  /** Command level: scales the level template's rolls (bigger gates, bigger groups). */
+  commandLevel: number;
+  /** Spears the run can hand out, by quality: from the warchest, or the debug sliders. */
+  spears: Readonly<Record<string, number>>;
 }
 
 /** Wall hit points between `wallHit` events, as a share of the wall, so the view can crack it. */
@@ -163,13 +169,13 @@ export class RunnerSim {
     this.#config = config;
     this.#feel = config.feel;
     this.seed = config.seed;
-    const { feel, level, runner } = config;
-    this.squad = new Squad(config.qualities, spearSupply(config.qualities, feel));
+    const { level, runner } = config;
+    this.squad = new Squad(config.qualities, config.spears);
     this.squad.recruit(level.startingRecruits);
     this.length = level.durationSeconds * runner.trackMetersPerSecond;
     this.halfWidth = runner.trackWidth / 2;
     const track: TrackEvent[] = [];
-    for (const event of level.events) {
+    for (const event of rollLevel(level, config.commandLevel, config.seed)) {
       const at = event.at * this.length;
       switch (event.type) {
         case 'gates': {
@@ -276,7 +282,7 @@ export class RunnerSim {
   }
 
   /** What a gate does to the squad. */
-  activeGate(gate: TrackGate): Pick<Gate, 'op' | 'value'> {
+  activeGate(gate: TrackGate): GateEffect {
     return gate.base;
   }
 
@@ -531,6 +537,7 @@ export class RunnerSim {
       survivors: this.squad.count,
       armed: this.squad.armedCount,
       spearsUsed: this.squad.spearsUsed,
+      spearsUsedByQuality: this.squad.usedByQuality,
       enemiesBeaten: this.#enemiesBeaten,
       losses: { ...this.#losses },
       seconds: this.seconds,
@@ -558,6 +565,7 @@ export function runnerConfig(
   data: GameData,
   feel: RunnerFeel,
   seed: number | string,
+  options: { commandLevel: number; spears: Readonly<Record<string, number>> },
 ): RunnerConfig {
   const level = byId(data.levels, data.runner.level);
   return {
@@ -570,5 +578,20 @@ export function runnerConfig(
     feel,
     qualities: data.qualities.map((quality) => quality.id),
     seed,
+    ...options,
   };
+}
+
+/** Spears recovered after a run, by quality: a share of those handed out on a win, none on a loss. */
+export function recoveredSpears(
+  used: Readonly<Record<string, number>>,
+  won: boolean,
+  recoveryOnWin: Readonly<Record<string, number>>,
+): Record<string, number> {
+  return Object.fromEntries(
+    Object.entries(used).map(([quality, count]) => [
+      quality,
+      won ? Math.floor(count * (recoveryOnWin[quality] ?? 0)) : 0,
+    ]),
+  );
 }

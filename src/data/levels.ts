@@ -1,8 +1,11 @@
 import type { GameDataInput } from './schema';
 
-// The M7a test skirmish. Gates are decisions, not tests (decided Nov 24): after one obvious
-// teaching pair, each choice is safe vs greedy. Counts, hit points and timings are first guesses,
-// tuned in data.
+// The test skirmish, as a template rolled fresh each run (decided Nov 25). You always start with
+// one guy and grow through gates. Rolls with `perLevel` grow with Command level, so a higher level
+// means bigger gates and bigger enemy groups, never a bigger start. Gates are decisions, not tests:
+// a clear gate, or a bigger one you fight through guards for, with the sides swapped at random.
+// Every fight is paid for in spearmen, and extra bodies are only worth what you can arm. All numbers
+// are first guesses, tuned in data.
 export const levels = [
   {
     id: 'skirmish_1',
@@ -10,35 +13,61 @@ export const levels = [
     kind: 'skirmish',
     durationSeconds: 30,
     unit: 'spearman',
-    startingRecruits: 10,
+    startingRecruits: 1,
     events: [
-      // Teaches colour and shape: the one obvious pair.
+      // The first recruits: a few for free, or more behind unarmed guards (a spear beats them).
       {
         type: 'gates',
-        at: 0.1,
-        left: { op: 'add', value: 10 },
-        right: { op: 'subtract', value: 3 },
+        at: 0.08,
+        left: { op: 'add', value: { min: 3, perLevel: 0.3 } },
+        right: {
+          op: 'add',
+          value: { min: 6, perLevel: 0.5 },
+          guards: { enemy: 'bandit', count: { min: 2, perLevel: 0.2 }, armedShare: 0 },
+        },
       },
       // A warm-up: mostly unarmed, so spearmen tear through them.
-      { type: 'enemies', at: 0.26, enemy: 'bandit', count: 8, armed: 2 },
-      // Safe vs greedy, twice, each riskier than the last: fight through the guards for a bigger gate,
-      // or take the clear one. Every fight is paid for in spearmen, and the extra bodies are only
-      // worth what you can arm.
       {
-        type: 'gates',
-        at: 0.49,
-        left: { op: 'add', value: 10 },
-        right: { op: 'multiply', value: 2, guards: { enemy: 'bandit', count: 3, armed: 1 } },
+        type: 'enemies',
+        at: 0.22,
+        enemy: 'bandit',
+        count: { min: 4, perLevel: 0.4 },
+        armedShare: 0.25,
       },
       {
         type: 'gates',
-        at: 0.65,
-        left: { op: 'add', value: 5 },
-        right: { op: 'multiply', value: 3, guards: { enemy: 'bandit', count: 6, armed: 5 } },
+        at: 0.38,
+        left: { op: 'add', value: { min: 4, perLevel: 0.5 } },
+        right: {
+          op: 'multiply',
+          value: 2,
+          guards: { enemy: 'bandit', count: { min: 3, perLevel: 0.3 }, armedShare: 0 },
+        },
+      },
+      {
+        type: 'gates',
+        at: 0.55,
+        left: { op: 'add', value: { min: 6, perLevel: 0.6 } },
+        right: {
+          op: 'multiply',
+          value: 3,
+          guards: { enemy: 'bandit', count: { min: 4, perLevel: 0.4 }, armedShare: 0.5 },
+        },
       },
       // The real test: mostly armed.
-      { type: 'enemies', at: 0.82, enemy: 'bandit', count: 22, armed: 13 },
-      { type: 'wall', at: 1, hp: 120, archers: { volleySeconds: 1.2, perVolley: 2 } },
+      {
+        type: 'enemies',
+        at: 0.78,
+        enemy: 'bandit',
+        count: { min: 10, perLevel: 1 },
+        armedShare: 0.5,
+      },
+      {
+        type: 'wall',
+        at: 1,
+        hp: { min: 40, perLevel: 4 },
+        archers: { volleySeconds: 1.2, perVolley: 2 },
+      },
     ],
     rewards: { xpPerEnemy: 10, xpPerSurvivor: 5 },
   },

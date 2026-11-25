@@ -20,16 +20,12 @@ test('Attack Run: steer through gates, clash, break the wall, see results, run a
   if (!tent) throw new Error('No runner station in data');
   const errors: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));
-  // A fast run with plenty of spears, through live-tuning overrides like the debug sliders.
+  // A fast run with plenty of free debug spears, through the debug options and sliders.
   await page.addInitScript(() => {
+    localStorage.setItem('warchest.runner.spears', 'sliders');
     localStorage.setItem(
       'warchest.tuning.runner',
-      JSON.stringify({
-        runSpeed: 25,
-        spearsPerfect: 100,
-        tradeSeconds: 0.05,
-        wallHitSeconds: 0.05,
-      }),
+      JSON.stringify({ runSpeed: 25, spearsPerfect: 100, tradeSeconds: 0.05 }),
     );
   });
   await page.goto('/');
@@ -37,7 +33,9 @@ test('Attack Run: steer through gates, clash, break the wall, see results, run a
   await expect(page.locator('body')).toHaveAttribute('data-screen', 'three');
   await expect(page.locator('.runner-hint')).toBeVisible();
   await expect.poll(() => phase(page)).toBe('ready');
-  await expect(page.locator('.runner-label')).toContainText('10');
+  // Every run starts with one guy.
+  await expect(page.locator('.runner-label')).toHaveText('1 (1 armed)');
+  await expect(page.locator('.runner-hint')).toContainText('spears from debug');
 
   // Touch and slide left: relative drag steers toward the left gates.
   const canvas = await page.locator('#screen-three canvas').boundingBox();
@@ -56,13 +54,14 @@ test('Attack Run: steer through gates, clash, break the wall, see results, run a
     });
   }
   await expect(page.locator('.runner-hint')).toBeHidden();
-  // The first gate on the left adds 10.
-  await expect(page.locator('.runner-label')).toContainText('20', { timeout: 30_000 });
+  // The first gate recruits more.
+  await expect(page.locator('.runner-label')).not.toHaveText('1 (1 armed)', { timeout: 30_000 });
   await client.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
 
   const results = page.locator('.runner-results');
   await expect(results).toBeVisible({ timeout: 120_000 });
   await expect(results).toContainText('Survivors');
+  await expect(results).toContainText('Spears used');
   await results.getByRole('button', { name: 'Run again' }).tap();
   await expect(results).toBeHidden();
   await expect.poll(() => phase(page)).toBe('running');
@@ -87,4 +86,14 @@ test('Attack Run: steer through gates, clash, break the wall, see results, run a
     expect(types).toContain(type);
   }
   expect(errors).toEqual([]);
+});
+
+test('Attack Run: with an empty warchest, it says your recruits will fight unarmed', async ({
+  page,
+}) => {
+  if (!tent) throw new Error('No runner station in data');
+  await page.goto('/');
+  await tapCampSpot(page, tent.camp);
+  await expect(page.locator('.runner-hint')).toContainText('No spears in the warchest');
+  await expect(page.locator('.runner-label')).toHaveText('1 (0 armed)');
 });

@@ -3,11 +3,13 @@ import './runner.css';
 import type { Haptics } from '../../app/haptics';
 import type { ScreenView } from '../../app/screen';
 import { Sfx } from '../../app/sfx';
-import { Rng, type EventLogger, type LiveTuning } from '../../core';
-import type { GameData, RunnerFeel } from '../../data';
+import { Rng, type Choice, type EventLogger, type Game, type LiveTuning } from '../../core';
+import type { SpearSource } from '../feel';
+import { byId, type GameData, type RunnerFeel } from '../../data';
 import {
   gateLabel,
   isGoodOp,
+  recoveredSpears,
   runnerConfig,
   RunnerSim,
   STEP_SECONDS,
@@ -22,6 +24,9 @@ import {
 } from '../sim';
 
 export interface RunnerViewDeps {
+  game: Game;
+  /** Where spears come from: the warchest (spent for real) or the debug sliders (free). */
+  spearSource: Choice<SpearSource>;
   data: GameData;
   logger: EventLogger;
   feel: LiveTuning<RunnerFeel>;
@@ -160,6 +165,8 @@ export class RunnerView implements ScreenView {
   #nextCountLog = 0;
   #resultAt: number | undefined;
   #lastLabel = '';
+  /** True once this run's spears have been spent from the warchest. */
+  #settled = false;
   readonly #ui: RunnerUi;
 
   private constructor(element: HTMLElement, deps: RunnerViewDeps) {
@@ -228,6 +235,8 @@ export class RunnerView implements ScreenView {
         phase: this.#sim.phase,
         count: this.#sim.squad.count,
       });
+      // Leaving mid-run is a retreat: the spears handed out are lost.
+      this.#settleSpears(false);
     }
     this.#renderer.setAnimationLoop(null);
   }
@@ -237,7 +246,13 @@ export class RunnerView implements ScreenView {
   #newRun(startNow: boolean): void {
     const { data, feel } = this.#deps;
     this.#seed = Date.now() >>> 0;
-    this.#sim = new RunnerSim(runnerConfig(data, feel.values, this.#seed));
+    this.#settled = false;
+    this.#sim = new RunnerSim(
+      runnerConfig(data, feel.values, this.#seed, {
+        commandLevel: this.#commandLevel(),
+        spears: this.#spearsAvailable(),
+      }),
+    );
     this.#targetX = 0;
     this.#accumulator = 0;
     this.#slowMoLeft = 0;
@@ -256,18 +271,83 @@ export class RunnerView implements ScreenView {
     this.#ui.label.hidden = false;
     this.#started = startNow;
     this.#ui.hint.hidden = startNow;
+    this.#showHint();
     if (startNow) this.#logStart();
   }
 
   #logStart(): void {
-    const { data, feel, logger } = this.#deps;
-    const qualities = data.qualities.map((quality) => quality.id);
+    const { data, feel, logger, spearSource } = this.#deps;
     logger.log('runner.start', {
       seed: this.#seed,
       level: data.runner.level,
-      spears: spearSupply(qualities, feel.values),
+      commandLevel: this.#commandLevel(),
+      spearSource: spearSource.value,
+      spears: this.#spearsAvailable(),
       feel: feel.values,
     });
+  }
+
+  /** The Command level, from the War tent station's skill. */
+  #commandLevel(): number {
+    const { data, game } = this.#deps;
+    const station = data.stations.find((entry) => entry.mechanic === 'runner');
+    return station ? game.level(station.skill) : 1;
+  }
+
+  /** The spear item the run's unit fights with. */
+  #spearItem(): string {
+    const { data } = this.#deps;
+    return byId(data.units, byId(data.levels, data.runner.level).unit).weapon.item;
+  }
+
+  /** Spears this run can hand out, by quality. */
+  #spearsAvailable(): Record<string, number> {
+    const { data, feel, game, spearSource } = this.#deps;
+    const qualities = data.qualities.map((quality) => quality.id);
+    if (spearSource.value === 'sliders') return spearSupply(qualities, feel.values);
+    const item = this.#spearItem();
+    return Object.fromEntries(
+      qualities.map((quality) => [quality, game.inventory.count(item, quality)]),
+    );
+  }
+
+  /**
+   * Spends the run's spears from the warchest: a share of those handed out comes back on a win,
+   * none on a loss or a retreat. Debug-slider spears are free.
+   */
+  #settleSpears(won: boolean): { used: number; recovered: number } {
+    const { data, game, logger, spearSource } = this.#deps;
+    const used = this.#sim.squad.usedByQuality;
+    const recovered = recoveredSpears(used, won, data.tuning.weaponRecoveryOnWin);
+    const sum = (record: Readonly<Record<string, number>>): number =>
+      Object.values(record).reduce((total, count) => total + count, 0);
+    const totals = { used: sum(used), recovered: sum(recovered) };
+    if (this.#settled) return totals;
+    this.#settled = true;
+    if (spearSource.value !== 'warchest') return totals;
+    const item = this.#spearItem();
+    for (const [quality, count] of Object.entries(used)) {
+      const lost = count - (recovered[quality] ?? 0);
+      if (lost > 0) game.removeItems(item, lost, quality);
+    }
+    logger.log('runner.spears', { won, used, recovered });
+    return totals;
+  }
+
+  #showHint(): void {
+    const { hint } = this.#ui;
+    const spears = Object.values(this.#spearsAvailable()).reduce((total, n) => total + n, 0);
+    const source = this.#deps.spearSource.value === 'warchest' ? 'in the warchest' : 'from debug';
+    hint.replaceChildren();
+    const steer = document.createElement('div');
+    steer.textContent = 'Touch and slide to steer';
+    const info = document.createElement('div');
+    info.className = 'runner-hint-info';
+    info.textContent =
+      spears > 0
+        ? `${spears} spears ${source} · Command ${this.#commandLevel()}`
+        : 'No spears in the warchest: your recruits will fight unarmed';
+    hint.append(steer, info);
   }
 
   // World
@@ -704,7 +784,7 @@ export class RunnerView implements ScreenView {
     const preview = make('runner-preview');
     preview.hidden = true;
     const hint = make('runner-hint');
-    hint.textContent = 'Touch and slide to steer';
+
     const results = make('runner-results');
     results.hidden = true;
     return { label, preview, hint, results };
@@ -725,8 +805,13 @@ export class RunnerView implements ScreenView {
     title.className = `runner-results-title ${result.won ? 'runner-results-won' : 'runner-results-lost'}`;
     title.textContent = result.won ? 'Wall broken!' : 'Retreat';
     results.append(title);
+    const spears = this.#settleSpears(result.won);
     line('Survivors', `${result.survivors} (${result.armed} armed)`);
-    line('Spears used', String(result.spearsUsed));
+    line('Spears used', `${spears.used}, ${spears.recovered} recovered`);
+    if (this.#deps.spearSource.value === 'warchest') {
+      const left = Object.values(this.#spearsAvailable()).reduce((total, n) => total + n, 0);
+      line('Spears in the warchest', String(left));
+    }
     line('Bandits beaten', String(result.enemiesBeaten));
     const again = document.createElement('button');
     again.type = 'button';
@@ -1173,6 +1258,7 @@ export class RunnerView implements ScreenView {
         break;
       case 'won':
         logger.log('runner.result', { seed: this.#seed, ...event.result });
+        this.#settleSpears(true);
         this.#breakWall();
         this.#slowMoLeft = feel.slowMoSeconds;
         this.#shake = 1;
@@ -1186,6 +1272,7 @@ export class RunnerView implements ScreenView {
         break;
       case 'lost':
         logger.log('runner.result', { seed: this.#seed, ...event.result });
+        this.#settleSpears(false);
         this.#callout('Retreat!', true);
         this.#sound('land-3', 1, -900, 0);
         haptics.pulse(feel.buzzLoseMs);

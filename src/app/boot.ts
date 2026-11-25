@@ -13,7 +13,7 @@ import {
 } from '../core';
 import type { RunnerFeel, WoodcuttingFeel } from '../data';
 import { loadGameData } from '../data';
-import { runnerFeel } from '../runner/feel';
+import { runnerFeel, spearSourceChoice, type SpearSource } from '../runner/feel';
 import { checkMechanics } from '../stations';
 import {
   ClearingPicker,
@@ -32,7 +32,11 @@ export interface Booted {
   saves: SaveStore;
   feel: { woodcutting: LiveTuning<WoodcuttingFeel>; runner: LiveTuning<RunnerFeel> };
   /** Picks kept on this phone, shown in the debug menu. */
-  choices: { treeStyle: LiveChoice<TreeStyle>; vibration: LiveChoice<Vibration> };
+  choices: {
+    treeStyle: LiveChoice<TreeStyle>;
+    vibration: LiveChoice<Vibration>;
+    runnerSpears: LiveChoice<SpearSource>;
+  };
   haptics: Haptics;
   /** Which clearing each woodcutting round plays. */
   clearings: ClearingPicker;
@@ -100,6 +104,7 @@ export async function bootGame(buildLabel: string): Promise<Booted> {
   const choices = {
     treeStyle: treeStyleChoice(localStorageStore()),
     vibration: vibrationChoice(localStorageStore()),
+    runnerSpears: spearSourceChoice(localStorageStore()),
   };
   const haptics = new Haptics(choices.vibration);
   const clearings = new ClearingPicker(game);

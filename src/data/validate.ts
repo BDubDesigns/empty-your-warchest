@@ -88,9 +88,6 @@ function checkReferences(data: GameData, ctx: z.RefinementCtx): void {
       if (event.type === 'enemies' && !enemies.has(event.enemy)) {
         issue([...eventPath, 'enemy'], `Unknown enemy "${event.enemy}"`);
       }
-      if (event.type === 'enemies' && event.armed > event.count) {
-        issue([...eventPath, 'armed'], 'More armed enemies than the group has');
-      }
       if (event.type === 'gates') {
         for (const side of ['left', 'right'] as const) {
           const gate = event[side];
@@ -98,9 +95,6 @@ function checkReferences(data: GameData, ctx: z.RefinementCtx): void {
           if (!guards) continue;
           if (!enemies.has(guards.enemy)) {
             issue([...eventPath, side, 'guards', 'enemy'], `Unknown enemy "${guards.enemy}"`);
-          }
-          if (guards.armed > guards.count) {
-            issue([...eventPath, side, 'guards', 'armed'], 'More armed guards than guards');
           }
         }
       }
