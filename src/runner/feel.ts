@@ -21,6 +21,7 @@ export const runnerTunables: readonly Tunable[] = [
   { key: 'cameraDistance', label: 'Camera distance (m)', min: 6, max: 40, step: 0.5 },
   { key: 'cameraPullback', label: 'Camera pull-back per crowd m', min: 0, max: 4, step: 0.1 },
   { key: 'slowMoScale', label: 'Wall break slow-mo speed', min: 0.05, max: 1, step: 0.05 },
+  { key: 'liftSlowMoScale', label: 'Finger lifted: speed', min: 0.05, max: 1, step: 0.05 },
   { key: 'slowMoSeconds', label: 'Wall break slow-mo (s)', min: 0, max: 2, step: 0.1 },
   { key: 'buzzGoodGateMs', label: 'Vibrate: good gate (ms)', min: 0, max: 100, step: 1 },
   { key: 'buzzBadGateMs', label: 'Vibrate: bad gate (ms)', min: 0, max: 150, step: 1 },
@@ -49,6 +50,27 @@ export function spearSourceChoice(store: KeyValueStore): LiveChoice<SpearSource>
       { value: 'sliders', label: 'Debug sliders' },
     ],
     'warchest',
+    store,
+  );
+}
+
+export type LiftMode = 'run' | 'slow' | 'pause';
+
+/**
+ * What the run does while no finger is on the screen, kept on this phone (Nov 25, to try all three
+ * by feel): keep running, slow down (`liftSlowMoScale`), or stop until you touch again. Fights and
+ * the wall always play at full speed.
+ */
+export function liftModeChoice(store: KeyValueStore): LiveChoice<LiftMode> {
+  return new LiveChoice<LiftMode>(
+    'warchest.runner.lift',
+    'Runner: finger lifted',
+    [
+      { value: 'run', label: 'Keep running' },
+      { value: 'slow', label: 'Slow down' },
+      { value: 'pause', label: 'Pause' },
+    ],
+    'slow',
     store,
   );
 }

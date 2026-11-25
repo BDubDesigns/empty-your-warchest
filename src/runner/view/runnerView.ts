@@ -4,7 +4,7 @@ import type { Haptics } from '../../app/haptics';
 import type { ScreenView } from '../../app/screen';
 import { Sfx } from '../../app/sfx';
 import { Rng, type Choice, type EventLogger, type Game, type LiveTuning } from '../../core';
-import type { SpearSource } from '../feel';
+import type { LiftMode, SpearSource } from '../feel';
 import { byId, type GameData, type RunnerFeel } from '../../data';
 import {
   gateLabel,
@@ -27,6 +27,8 @@ export interface RunnerViewDeps {
   game: Game;
   /** Where spears come from: the warchest (spent for real) or the debug sliders (free). */
   spearSource: Choice<SpearSource>;
+  /** What the run does while no finger is down: keep running, slow down or pause. */
+  liftMode: Choice<LiftMode>;
   data: GameData;
   logger: EventLogger;
   feel: LiveTuning<RunnerFeel>;
@@ -88,6 +90,8 @@ interface GateVisual {
 }
 
 interface RunnerUi {
+  pause: HTMLButtonElement;
+  paused: HTMLElement;
   label: HTMLElement;
   preview: HTMLElement;
   hint: HTMLElement;
@@ -165,6 +169,10 @@ export class RunnerView implements ScreenView {
   #nextCountLog = 0;
   #resultAt: number | undefined;
   #lastLabel = '';
+  /** Time speed from the finger-lifted option, eased (1 = full speed). */
+  #liftScale = 1;
+  /** Stopped by the pause button. */
+  #paused = false;
   /** True once this run's spears have been spent from the warchest. */
   #settled = false;
   readonly #ui: RunnerUi;
@@ -247,6 +255,8 @@ export class RunnerView implements ScreenView {
     const { data, feel } = this.#deps;
     this.#seed = Date.now() >>> 0;
     this.#settled = false;
+    this.#liftScale = 1;
+    this.#setPausedQuietly();
     this.#sim = new RunnerSim(
       runnerConfig(data, feel.values, this.#seed, {
         commandLevel: this.#commandLevel(),
@@ -282,6 +292,7 @@ export class RunnerView implements ScreenView {
       level: data.runner.level,
       commandLevel: this.#commandLevel(),
       spearSource: spearSource.value,
+      liftMode: this.#deps.liftMode.value,
       spears: this.#spearsAvailable(),
       feel: feel.values,
     });
@@ -332,6 +343,20 @@ export class RunnerView implements ScreenView {
     }
     logger.log('runner.spears', { won, used, recovered });
     return totals;
+  }
+
+  #setPausedQuietly(): void {
+    this.#paused = false;
+    this.#ui.paused.hidden = true;
+  }
+
+  #setPaused(paused: boolean): void {
+    if (this.#paused === paused) return;
+    this.#paused = paused;
+    this.#ui.paused.hidden = !paused;
+    this.#deps.logger.log(paused ? 'runner.pause' : 'runner.resume', {
+      seconds: round2(this.#sim.seconds),
+    });
   }
 
   #showHint(): void {
@@ -787,7 +812,24 @@ export class RunnerView implements ScreenView {
 
     const results = make('runner-results');
     results.hidden = true;
-    return { label, preview, hint, results };
+    // A real pause for interruptions: everything stops until you tap to resume.
+    const pause = document.createElement('button');
+    pause.type = 'button';
+    pause.className = 'runner-pause';
+    pause.setAttribute('aria-label', 'Pause');
+    pause.textContent = '❚❚';
+    pause.hidden = true;
+    pause.addEventListener('click', () => {
+      this.#setPaused(true);
+    });
+    this.#element.append(pause);
+    const paused = make('runner-paused');
+    paused.textContent = 'Paused · tap to resume';
+    paused.hidden = true;
+    paused.addEventListener('click', () => {
+      this.#setPaused(false);
+    });
+    return { pause, paused, label, preview, hint, results };
   }
 
   #showResults(result: RunResult): void {
@@ -890,11 +932,19 @@ export class RunnerView implements ScreenView {
     const sim = this.#sim;
     sim.setFeel(this.#deps.feel.values);
     const feel = sim.feel;
-    let scale = 1;
-    if (this.#slowMoLeft > 0) {
+    let scale = this.#paused ? 0 : 1;
+    if (this.#slowMoLeft > 0 && !this.#paused) {
       this.#slowMoLeft -= realDt;
       scale = feel.slowMoScale;
     }
+    // Finger lifted while running: slow down or stop, easing so it never jolts.
+    const lifted = this.#started && !sim.done && sim.phase === 'running' && !this.#drag;
+    const mode = this.#deps.liftMode.value;
+    const liftTarget = !lifted || mode === 'run' ? 1 : mode === 'slow' ? feel.liftSlowMoScale : 0;
+    this.#liftScale += (liftTarget - this.#liftScale) * (1 - Math.exp(-realDt * 10));
+    if (Math.abs(liftTarget - this.#liftScale) < 0.01) this.#liftScale = liftTarget;
+    scale *= this.#liftScale;
+    this.#ui.pause.hidden = !this.#started || sim.done || this.#paused;
     const dt = realDt * scale;
     this.#clock += dt;
     if (this.#started && !sim.done) {

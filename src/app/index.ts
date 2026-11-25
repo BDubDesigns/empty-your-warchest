@@ -35,7 +35,12 @@ export async function startApp(): Promise<void> {
     mountDebugMenu(byId('app'), {
       ...booted,
       tuning: [booted.feel.woodcutting, booted.feel.runner],
-      choices: [booted.choices.treeStyle, booted.choices.vibration, booted.choices.runnerSpears],
+      choices: [
+        booted.choices.treeStyle,
+        booted.choices.vibration,
+        booted.choices.runnerSpears,
+        booted.choices.runnerLift,
+      ],
       clearings: booted.clearings,
       buildLabel: __BUILD_LABEL__,
     });
@@ -91,6 +96,7 @@ export async function startApp(): Promise<void> {
         return RunnerView.create(threeElement, {
           game,
           spearSource: choices.runnerSpears,
+          liftMode: choices.runnerLift,
           data: game.data,
           logger,
           feel: feel.runner,

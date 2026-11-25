@@ -27,6 +27,7 @@ export const runner = {
     spearsGood: 15,
     spearsPerfect: 5,
     slowMoScale: 0.25,
+    liftSlowMoScale: 0.25,
     slowMoSeconds: 0.6,
     buzzGoodGateMs: 25,
     buzzBadGateMs: 60,

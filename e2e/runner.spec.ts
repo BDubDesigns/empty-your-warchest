@@ -23,6 +23,7 @@ test('Attack Run: steer through gates, clash, break the wall, see results, run a
   // A fast run with plenty of free debug spears, through the debug options and sliders.
   await page.addInitScript(() => {
     localStorage.setItem('warchest.runner.spears', 'sliders');
+    localStorage.setItem('warchest.runner.lift', 'run');
     localStorage.setItem(
       'warchest.tuning.runner',
       JSON.stringify({ runSpeed: 25, spearsPerfect: 100, tradeSeconds: 0.05 }),
@@ -57,6 +58,15 @@ test('Attack Run: steer through gates, clash, break the wall, see results, run a
   // The first gate recruits more.
   await expect(page.locator('.runner-label')).not.toHaveText('1 (1 armed)', { timeout: 30_000 });
   await client.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+
+  // The pause button stops everything until you tap to resume.
+  await page.getByRole('button', { name: 'Pause' }).tap();
+  await expect(page.locator('.runner-paused')).toBeVisible();
+  const label = await page.locator('.runner-label').textContent();
+  await page.waitForTimeout(600);
+  await expect(page.locator('.runner-label')).toHaveText(label ?? '');
+  await page.locator('.runner-paused').tap();
+  await expect(page.locator('.runner-paused')).toBeHidden();
 
   const results = page.locator('.runner-results');
   await expect(results).toBeVisible({ timeout: 120_000 });

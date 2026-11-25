@@ -394,6 +394,11 @@ const runnerFeelSchema = z.object({
   spearsPerfect: z.number().int().nonnegative(),
   /** Time runs at this speed for `slowMoSeconds` when the wall breaks. */
   slowMoScale: z.number().positive().max(1),
+  /**
+   * With the "Slow down" lift option, time runs at this speed while no finger is on the screen
+   * (decided Nov 25: time to think without stalling a re-grip). Fights and the wall ignore it.
+   */
+  liftSlowMoScale: z.number().positive().max(1),
   slowMoSeconds: nonNegative,
   /** Vibration pulses (ms). */
   buzzGoodGateMs: nonNegative,
