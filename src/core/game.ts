@@ -81,6 +81,12 @@ export class Game {
     this.#changed();
   }
 
+  /** Takes items out of the warchest (e.g. logs burned as fuel). Throws if there aren't enough. */
+  removeItems(itemId: string, count: number): void {
+    this.#inventory.remove(itemId, count);
+    this.#changed();
+  }
+
   /**
    * Runs a recipe and pays its XP to the station's skill.
    * `awardXp: false` skips the XP, for mini games still in their feel-test stage.

@@ -11,9 +11,10 @@ import {
   type LiveChoice,
   type LiveTuning,
 } from '../core';
-import type { SplittingFeel, WoodcuttingFeel } from '../data';
+import type { FiremakingFeel, SplittingFeel, WoodcuttingFeel } from '../data';
 import { loadGameData } from '../data';
 import { checkMechanics } from '../stations';
+import { firemakingFeel } from '../stations/firemaking/feel';
 import { splittingFeel } from '../stations/splitting/feel';
 import {
   ClearingPicker,
@@ -32,7 +33,11 @@ export interface Booted {
   clock: Clock;
   logger: EventLogger;
   saves: SaveStore;
-  feel: { woodcutting: LiveTuning<WoodcuttingFeel>; splitting: LiveTuning<SplittingFeel> };
+  feel: {
+    woodcutting: LiveTuning<WoodcuttingFeel>;
+    splitting: LiveTuning<SplittingFeel>;
+    firemaking: LiveTuning<FiremakingFeel>;
+  };
   /** Picks kept on this phone, shown in the debug menu. */
   choices: {
     treeStyle: LiveChoice<TreeStyle>;
@@ -102,6 +107,7 @@ export async function bootGame(buildLabel: string): Promise<Booted> {
   const feel = {
     woodcutting: woodcuttingFeel(data.woodcutting.feel, localStorageStore()),
     splitting: splittingFeel(data.splitting.feel, localStorageStore()),
+    firemaking: firemakingFeel(data.firemaking.feel, localStorageStore()),
   };
   const choices = {
     treeStyle: treeStyleChoice(localStorageStore()),

@@ -15,8 +15,8 @@ async function tapCampSpot(page: Page, spot: { x: number; y: number }): Promise<
 }
 
 test('every station and the chest can be entered and exited by touch', async ({ page }) => {
-  // Two 3D stations to open, rendered in software on CI.
-  test.setTimeout(90_000);
+  // Three 3D stations to open, rendered in software on CI.
+  test.setTimeout(120_000);
   const errors: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));
   // The simpler trees in the tree line: the detailed ones are slow in software rendering, and this
@@ -37,6 +37,7 @@ test('every station and the chest can be entered and exited by touch', async ({ 
       runner: 'three',
       woodcutting3d: 'wood3d',
       splitting: 'splitting3d',
+      firemaking: 'firemaking3d',
     };
     const screen = screens[station.mechanic] ?? 'phaser';
     await expect(page.locator('body')).toHaveAttribute('data-screen', screen);

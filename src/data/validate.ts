@@ -76,6 +76,29 @@ function checkReferences(data: GameData, ctx: z.RefinementCtx): void {
     }
   });
 
+  const firemaking = data.firemaking;
+  if (!data.recipes.some((recipe) => recipe.id === firemaking.recipe)) {
+    issue(['firemaking', 'recipe'], `Unknown recipe "${firemaking.recipe}"`);
+  }
+  if (!itemIds.has(firemaking.fuel)) {
+    issue(['firemaking', 'fuel'], `Unknown item "${firemaking.fuel}"`);
+  }
+  if (firemaking.rack.staves % firemaking.rack.spots !== 0) {
+    issue(['firemaking', 'rack'], 'Every fuel spot must sit under the same number of staves');
+  }
+  if (firemaking.generator.answerLogs.min > firemaking.generator.answerLogs.max) {
+    issue(['firemaking', 'generator', 'answerLogs'], 'min must not be more than max');
+  }
+  if (firemaking.generator.answerLogs.max > firemaking.rack.spots * firemaking.rack.maxLogs) {
+    issue(['firemaking', 'generator', 'answerLogs', 'max'], 'More logs than the spots can hold');
+  }
+  if (firemaking.generator.minHeat >= firemaking.generator.flat) {
+    issue(['firemaking', 'generator', 'minHeat'], 'Must be under the flat fire');
+  }
+  if (firemaking.feel.smokeWisps >= firemaking.feel.smokeThick) {
+    issue(['firemaking', 'feel', 'smokeWisps'], 'Wisps must come before thick smoke');
+  }
+
   const splitting = data.splitting;
   if (!data.recipes.some((recipe) => recipe.id === splitting.recipe)) {
     issue(['splitting', 'recipe'], `Unknown recipe "${splitting.recipe}"`);

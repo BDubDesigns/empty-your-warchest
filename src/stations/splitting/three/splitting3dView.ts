@@ -1208,6 +1208,8 @@ export class Splitting3DView implements ScreenView {
   #listen(): void {
     const canvas = this.#renderer.domElement;
     canvas.addEventListener('pointerdown', (event) => {
+      // The audio can only start from a touch.
+      this.#sfx.unlock();
       const round = this.#round;
       if (!round || this.#pointer) return;
       canvas.setPointerCapture(event.pointerId);
@@ -1313,6 +1315,9 @@ export class Splitting3DView implements ScreenView {
     const button = (label: string, className: string, onTap: () => void) => {
       const element = el('button', className, label);
       element.type = 'button';
+      element.addEventListener('pointerdown', () => {
+        this.#sfx.unlock();
+      });
       element.addEventListener('click', onTap);
       return element;
     };
