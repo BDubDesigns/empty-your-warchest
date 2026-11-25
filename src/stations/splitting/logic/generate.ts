@@ -1,5 +1,5 @@
 import { Rng } from '../../../core';
-import type { Riving, RivingLog } from '../../../data';
+import type { Splitting, SplittingLog } from '../../../data';
 import { survey } from './pattern';
 
 /**
@@ -10,10 +10,14 @@ import { survey } from './pattern';
  * where nearly any turn earns 3 stars usually is, so most logs are a real choice you can see. The
  * same seed and heads always give the same log.
  */
-export function generateLog(rules: Riving, seed: number, heads: readonly number[]): RivingLog {
+export function generateLog(
+  rules: Splitting,
+  seed: number,
+  heads: readonly number[],
+): SplittingLog {
   const rng = new Rng(seed);
   const { generator } = rules;
-  let fair: RivingLog | undefined;
+  let fair: SplittingLog | undefined;
   let log = makeLog(rules, rng, seed);
   for (let attempt = 1; attempt <= generator.tries; attempt++) {
     const { easy, leeway } = survey(rules, log, heads);
@@ -26,9 +30,9 @@ export function generateLog(rules: Riving, seed: number, heads: readonly number[
   return fair ?? log;
 }
 
-function makeLog(rules: Riving, rng: Rng, seed: number): RivingLog {
+function makeLog(rules: Splitting, rng: Rng, seed: number): SplittingLog {
   const { generator } = rules;
-  const pickKind = (kinds: Riving['grainKinds']) => {
+  const pickKind = (kinds: Splitting['grainKinds']) => {
     const total = kinds.reduce((sum, kind) => sum + kind.weight, 0);
     let roll = rng.range(0, total);
     for (const kind of kinds) {
@@ -59,14 +63,14 @@ function makeLog(rules: Riving, rng: Rng, seed: number): RivingLog {
     }
     return undefined;
   };
-  const knots: RivingLog['knots'] = [];
+  const knots: SplittingLog['knots'] = [];
   for (let index = rng.int(generator.knots.min, generator.knots.max); index > 0; index--) {
     const width = Math.round(rng.range(generator.knotWidth.min, generator.knotWidth.max));
     const angle = place(width);
     if (angle !== undefined) knots.push({ angle, width });
   }
-  const grains: RivingLog['grains'] = [];
-  const add = (kinds: Riving['grainKinds'], near?: { angle: number; width: number }) => {
+  const grains: SplittingLog['grains'] = [];
+  const add = (kinds: Splitting['grainKinds'], near?: { angle: number; width: number }) => {
     const kind = pickKind(kinds);
     if (!kind) return undefined;
     const width = Math.round(rng.range(kind.width.min, kind.width.max));

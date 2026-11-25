@@ -9,11 +9,11 @@ export interface CraftOutcome {
   outputQuality?: string;
   /**
    * How many times the outputs come out this time, e.g. the staves one log gave (0 allowed: a log
-   * riven into nothing usable). The recipe's XP is per output, so it scales too. Default 1.
+   * split into nothing usable). The recipe's XP is per output, so it scales too. Default 1.
    */
   yield?: number;
   /**
-   * How many outputs the XP counts, when it shouldn't be all of them (e.g. riving pays XP on the
+   * How many outputs the XP counts, when it shouldn't be all of them (e.g. splitting pays XP on the
    * staves split, not on what a grain multiplied them to). Default: the yield.
    */
   xpYield?: number;

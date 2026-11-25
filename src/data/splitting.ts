@@ -1,8 +1,8 @@
 import type { GameDataInput } from './schema';
 
-// Riving (M4a feel prototype). All numbers are first guesses, meant to be tuned on a phone.
-export const riving = {
-  recipe: 'rive_stave',
+// Splitting (M4a feel prototype). All numbers are first guesses, meant to be tuned on a phone.
+export const splitting = {
+  recipe: 'split_stave',
   // Grains multiply the whole log, high enough that every good grain kept counts.
   multiplierCap: 18,
   // Whole degrees: half-degree steps made the best split a sliver you could slip off lifting a
@@ -90,4 +90,4 @@ export const riving = {
     buzzPumpBuildMs: 30,
     buzzBurstMs: 60,
   },
-} satisfies GameDataInput['riving'];
+} satisfies GameDataInput['splitting'];

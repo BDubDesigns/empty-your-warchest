@@ -8,10 +8,10 @@ const recipe = (id: string, source = data) => byId(source.recipes, id);
 describe('recipes', () => {
   it('turns a log into a stave at the workbench', () => {
     const inventory = new Inventory(data, [{ item: 'log', count: 3 }]);
-    const result = craft(inventory, recipe('rive_stave'));
+    const result = craft(inventory, recipe('split_stave'));
     expect(inventory.count('log')).toBe(2);
     expect(inventory.count('stave')).toBe(1);
-    expect(result.xp).toBe(recipe('rive_stave').xp);
+    expect(result.xp).toBe(recipe('split_stave').xp);
   });
 
   it('gathers from nothing at the tree line', () => {
@@ -30,10 +30,10 @@ describe('recipes', () => {
 
   it('yields what the mini game gave, with XP per output, down to nothing', () => {
     const inventory = new Inventory(data, [{ item: 'log', count: 2 }]);
-    const result = craft(inventory, recipe('rive_stave'), { yield: 6 });
+    const result = craft(inventory, recipe('split_stave'), { yield: 6 });
     expect(inventory.count('stave')).toBe(6);
-    expect(result.xp).toBe(recipe('rive_stave').xp * 6);
-    const none = craft(inventory, recipe('rive_stave'), { yield: 0 });
+    expect(result.xp).toBe(recipe('split_stave').xp * 6);
+    const none = craft(inventory, recipe('split_stave'), { yield: 0 });
     expect(inventory.count('log')).toBe(0);
     expect(inventory.count('stave')).toBe(6);
     expect(none.xp).toBe(0);
@@ -41,9 +41,9 @@ describe('recipes', () => {
 
   it('can pay XP on fewer outputs than it yields', () => {
     const inventory = new Inventory(data, [{ item: 'log', count: 1 }]);
-    const result = craft(inventory, recipe('rive_stave'), { yield: 24, xpYield: 8 });
+    const result = craft(inventory, recipe('split_stave'), { yield: 24, xpYield: 8 });
     expect(inventory.count('stave')).toBe(24);
-    expect(result.xp).toBe(recipe('rive_stave').xp * 8);
+    expect(result.xp).toBe(recipe('split_stave').xp * 8);
   });
 
   it('changes nothing when inputs are missing', () => {
@@ -64,11 +64,11 @@ describe('recipes', () => {
 
   it('follows the counts in data', () => {
     const tuned = dataWith((raw) => {
-      const rive = raw.recipes.find((r) => r.id === 'rive_stave');
-      if (rive) rive.outputs = [{ item: 'stave', count: 3 }];
+      const recipe = raw.recipes.find((r) => r.id === 'split_stave');
+      if (recipe) recipe.outputs = [{ item: 'stave', count: 3 }];
     });
     const inventory = new Inventory(tuned, [{ item: 'log', count: 1 }]);
-    craft(inventory, recipe('rive_stave', tuned));
+    craft(inventory, recipe('split_stave', tuned));
     expect(inventory.count('stave')).toBe(3);
   });
 });

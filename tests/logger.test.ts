@@ -8,7 +8,7 @@ describe('EventLogger', () => {
     const { logger, clock } = testLogger();
     logger.log('session.start');
     clock.advance(250);
-    logger.log('recipe.craft', { recipe: 'rive_stave' });
+    logger.log('recipe.craft', { recipe: 'split_stave' });
     expect(await logger.readAll()).toEqual([
       { seq: 0, t: 1_000, session: 'test-session', type: 'session.start' },
       {
@@ -16,7 +16,7 @@ describe('EventLogger', () => {
         t: 1_250,
         session: 'test-session',
         type: 'recipe.craft',
-        data: { recipe: 'rive_stave' },
+        data: { recipe: 'split_stave' },
       },
     ]);
   });

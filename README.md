@@ -29,7 +29,7 @@ src/
   data/       single source of truth: skills, items, recipes, stations, units, levels, tuning
   core/       state, inventory, recipes, XP curve, idle engine, save/load, event logger, seeded RNG
   camp/       Phaser camp scene (stations built from data)
-  stations/   one folder per mini game (woodcutting, rive, harden)
+  stations/   one folder per mini game (woodcutting, splitting, harden)
   runner/
     sim/      pure TS, deterministic, no rendering imports (enforced by ESLint)
     view/     three.js rendering + input

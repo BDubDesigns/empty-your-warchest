@@ -1,4 +1,4 @@
-import type { Riving, RivingLog } from '../../../data';
+import type { Splitting, SplittingLog } from '../../../data';
 
 const TAU = Math.PI * 2;
 export const DEG = Math.PI / 180;
@@ -27,7 +27,7 @@ export function arcsOverlap(
 }
 
 /** A turn brought onto the rules' steps (whole degrees), in 0 to 2π. */
-export function snapTurn(rules: Riving, rotation: number): number {
+export function snapTurn(rules: Splitting, rotation: number): number {
   const step = rules.turnStep * DEG;
   return normalize(Math.round(normalize(rotation) / step) * step);
 }
@@ -73,7 +73,11 @@ export interface Plan {
 }
 
 /** What a set of grains multiplies the log's staves by, together, up to the rules' cap. */
-export function multiplierOf(rules: Riving, log: RivingLog, grains: readonly number[]): number {
+export function multiplierOf(
+  rules: Splitting,
+  log: SplittingLog,
+  grains: readonly number[],
+): number {
   const product = grains.reduce((total, index) => {
     const kind = rules.grainKinds.find((entry) => entry.id === log.grains[index]?.kind);
     return total * (kind?.multiplier ?? 1);
@@ -87,7 +91,12 @@ export function worthOf(staves: number, multiplier: number): number {
 }
 
 /** What a `count`-way head turned to `rotation` makes of `log`. */
-export function planFor(rules: Riving, log: RivingLog, count: number, rotation: number): Plan {
+export function planFor(
+  rules: Splitting,
+  log: SplittingLog,
+  count: number,
+  rotation: number,
+): Plan {
   const lines = cutLines(count, rotation);
   const wedges = wedgesOf(count, rotation);
   const through = (arc: { start: number; width: number }) =>
@@ -127,7 +136,7 @@ export function planFor(rules: Riving, log: RivingLog, count: number, rotation: 
  * Every turn a head can be at, step by step, until its cuts come round to where they started
  * (a 7-way's 51.4° never lands on a whole step again, so it's tried all the way round).
  */
-function turnsFor(rules: Riving, count: number): number {
+function turnsFor(rules: Splitting, count: number): number {
   const steps = 360 / count / rules.turnStep;
   return Math.abs(steps - Math.round(steps)) < 1e-9 ? Math.round(steps) : 360 / rules.turnStep;
 }
@@ -136,7 +145,7 @@ function turnsFor(rules: Riving, count: number): number {
  * The best a log could make with these heads: every head tried at every step of turn. The first
  * best found wins ties, so the answer is the same every time.
  */
-export function bestPlan(rules: Riving, log: RivingLog, counts: readonly number[]): Plan {
+export function bestPlan(rules: Splitting, log: SplittingLog, counts: readonly number[]): Plan {
   return survey(rules, log, counts).best;
 }
 
@@ -146,8 +155,8 @@ export function bestPlan(rules: Riving, log: RivingLog, counts: readonly number[
  * any one head keeps 3 stars over (low means a sliver you have to hunt for).
  */
 export function survey(
-  rules: Riving,
-  log: RivingLog,
+  rules: Splitting,
+  log: SplittingLog,
   counts: readonly number[],
 ): { best: Plan; easy: number; leeway: number } {
   const byHead = counts.map((count) =>
@@ -158,7 +167,7 @@ export function survey(
   let best: Plan | undefined;
   for (const plans of byHead)
     for (const plan of plans) if (!best || plan.worth > best.worth) best = plan;
-  if (!best) throw new Error('No heads to rive with');
+  if (!best) throw new Error('No heads to split with');
   const top = best.worth;
   let threeStar = 0;
   let total = 0;
@@ -185,14 +194,14 @@ function longestRun(values: readonly boolean[]): number {
 }
 
 /** Stars for a log's worth against the best it could make: 0 to 3. */
-export function starsFor(rules: Riving, worth: number, best: number): number {
+export function starsFor(rules: Splitting, worth: number, best: number): number {
   const share = best > 0 ? worth / best : 1;
   const { one, two, three } = rules.stars;
   return share >= three - 1e-9 ? 3 : share >= two - 1e-9 ? 2 : share >= one - 1e-9 ? 1 : 0;
 }
 
-/** The heads open at a Fletching level, fewest pieces first. */
-export function openHeads(rules: Riving, level: number): number[] {
+/** The heads open at a Splitting level, fewest pieces first. */
+export function openHeads(rules: Splitting, level: number): number[] {
   return rules.cutters
     .filter((cutter) => cutter.level <= level)
     .map((cutter) => cutter.count)

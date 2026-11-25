@@ -438,8 +438,8 @@ export const warchestSchema = z.object({
   haptics: z.object({ openMs: nonNegative, slamMs: nonNegative }),
 });
 
-/** Feel numbers for riving. The debug menu can override them live. */
-export const rivingFeelSchema = z.object({
+/** Feel numbers for splitting. The debug menu can override them live. */
+export const splittingFeelSchema = z.object({
   /** Seconds the press takes to swing over and slam the head onto the log, and the freeze then (ms). */
   strikeSeconds: positive,
   hitStopMs: nonNegative,
@@ -476,8 +476,8 @@ export const rivingFeelSchema = z.object({
   buzzBurstMs: nonNegative,
 });
 
-/** A log to rive: its size, end grain, and the grains on its end face. */
-const rivingLogSchema = z.object({
+/** A log to split: its size, end grain, and the grains on its end face. */
+const splittingLogSchema = z.object({
   id,
   /** Size in world units, for drawing it. */
   radius: positive,
@@ -490,19 +490,19 @@ const rivingLogSchema = z.object({
 });
 
 /**
- * Riving a log into staves with a splitting head: a star of blades that splits the whole log
+ * Splitting a log into staves with a splitting head: a star of blades that splits the whole log
  * into `count` equal wedges at once, each one a stave. You pick a head (more open up with
  * levels) and turn the cuts, then pump the handle to drive it through. Grains multiply the
  * whole log's staves if they end up whole in a stave; a cut line through a grain cancels it, good
  * or bad. Knots spoil the staves they touch.
  */
-const rivingSchema = z.object({
-  /** The recipe a riven log runs: its yield is the staves it's worth. */
+const splittingSchema = z.object({
+  /** The recipe a split log runs: its yield is the staves it's worth. */
   recipe: id,
   multiplierCap: positive,
   /** Degrees the cuts turn in steps of (dragging and ↺ ↻ alike): whole steps round a turn. */
   turnStep: positive,
-  /** The splitting heads: how many staves each makes, and the Fletching level it opens up at. */
+  /** The splitting heads: how many staves each makes, and the Splitting level it opens up at. */
   cutters: z.array(z.object({ count: z.number().int().min(2), level: positiveInt })).min(1),
   /**
    * Stars, by the share of the best a log could make with the heads you have (every head at
@@ -528,7 +528,7 @@ const rivingSchema = z.object({
     )
     .min(1),
   /** The first log ever: to learn the controls on, with a grain to keep and one to cut. */
-  tutorialLog: rivingLogSchema,
+  tutorialLog: splittingLogSchema,
   /** Random logs: sizes, rings and grains, from a seed. */
   generator: z.object({
     radius: z.object({ min: positive, max: positive }),
@@ -566,7 +566,7 @@ const rivingSchema = z.object({
    * across the middle, `wear` of it bare.
    */
   yard: z.object({ radius: positive, wear: fraction }),
-  feel: rivingFeelSchema,
+  feel: splittingFeelSchema,
 });
 
 export const gameDataShape = z.object({
@@ -581,7 +581,7 @@ export const gameDataShape = z.object({
   levels: z.array(levelSchema),
   camp: campSchema,
   woodcutting: woodcuttingSchema,
-  riving: rivingSchema,
+  splitting: splittingSchema,
   warchest: warchestSchema,
   tuning: tuningSchema,
 });
@@ -605,6 +605,6 @@ export type ClearingTree = Clearing['trees'][number];
 export type WoodcuttingFeel = GameData['woodcutting']['feel'];
 export type WoodcuttingScenery = GameData['woodcutting']['scenery'];
 export type SceneryPlantKind = (typeof sceneryPlantKinds)[number];
-export type Riving = GameData['riving'];
-export type RivingLog = Riving['tutorialLog'];
-export type RivingFeel = Riving['feel'];
+export type Splitting = GameData['splitting'];
+export type SplittingLog = Splitting['tutorialLog'];
+export type SplittingFeel = Splitting['feel'];

@@ -21,7 +21,7 @@ async function openTreeLineAt(page: Page, level: number) {
         savedAt: 1,
         state: {
           inventory: [],
-          skills: { woodcutting: xp, fletching: 0, command: 0 },
+          skills: { woodcutting: xp, splitting: 0, command: 0 },
           lastSeenAt: 1,
           done: ['tutorial.woodcutting'],
         },

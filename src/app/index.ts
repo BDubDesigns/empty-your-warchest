@@ -7,13 +7,13 @@ import { lazyScreen } from './screen';
 import { ScreenSwitcher } from './screenSwitcher';
 import type { ScreenId as StationScreenId } from '../stations/registry';
 
-type ScreenId = 'phaser' | 'three' | 'wood3d' | 'rive3d';
+type ScreenId = 'phaser' | 'three' | 'wood3d' | 'splitting3d';
 
 /** The shell screen each station screen runs on. */
 const SCREENS: Record<StationScreenId, ScreenId> = {
   runner: 'three',
   woodcutting3d: 'wood3d',
-  rive3d: 'rive3d',
+  splitting3d: 'splitting3d',
 };
 
 function byId(id: string): HTMLElement {
@@ -42,7 +42,7 @@ export async function startApp(): Promise<void> {
     booted = await bootGame(__BUILD_LABEL__);
     mountDebugMenu(byId('app'), {
       ...booted,
-      tuning: [booted.feel.woodcutting, booted.feel.riving],
+      tuning: [booted.feel.woodcutting, booted.feel.splitting],
       choices: [booted.choices.treeStyle, booted.choices.scenery, booted.choices.vibration],
       clearings: booted.clearings,
       buildLabel: __BUILD_LABEL__,
@@ -57,7 +57,7 @@ export async function startApp(): Promise<void> {
   const phaserElement = byId('screen-phaser');
   const threeElement = byId('screen-three');
   const wood3dElement = byId('screen-wood3d');
-  const rive3dElement = byId('screen-rive3d');
+  const splitting3dElement = byId('screen-splitting3d');
   const backButton = new BackButton(byId('back-button'), () => {
     run(() => navigation.back())();
   });
@@ -96,12 +96,12 @@ export async function startApp(): Promise<void> {
           backButton,
         });
       }),
-      rive3d: lazyScreen(rive3dElement, async () => {
-        const { Rive3DView } = await import('../stations/rive/three/rive3dView');
-        return Rive3DView.create(rive3dElement, {
+      splitting3d: lazyScreen(splitting3dElement, async () => {
+        const { Splitting3DView } = await import('../stations/splitting/three/splitting3dView');
+        return Splitting3DView.create(splitting3dElement, {
           game,
           logger,
-          feel: feel.riving,
+          feel: feel.splitting,
           haptics,
           onLeave: run((): Promise<void> => navigation.back()),
         });

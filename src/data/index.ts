@@ -6,7 +6,7 @@ import { items } from './items';
 import { levels } from './levels';
 import { qualities } from './qualities';
 import { recipes } from './recipes';
-import { riving } from './riving';
+import { splitting } from './splitting';
 import type { GameData, GameDataInput } from './schema';
 import { skills } from './skills';
 import { stations } from './stations';
@@ -30,7 +30,7 @@ export const rawGameData: GameDataInput = {
   levels,
   camp,
   woodcutting,
-  riving,
+  splitting,
   warchest,
   tuning,
 };

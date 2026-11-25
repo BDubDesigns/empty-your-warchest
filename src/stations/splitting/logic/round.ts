@@ -1,5 +1,5 @@
 import { Rng, type EventLogger } from '../../../core';
-import type { Riving, RivingFeel, RivingLog } from '../../../data';
+import type { Splitting, SplittingFeel, SplittingLog } from '../../../data';
 import { Pump } from './pump';
 import {
   bestPlan,
@@ -14,7 +14,7 @@ import {
 
 const degrees = (radians: number) => Math.round(normalize(radians) / DEG);
 
-export type RivingPhase =
+export type SplittingPhase =
   /** Picking a head and turning the cuts. */
   | { kind: 'plan' }
   /** The head dropping onto the log. */
@@ -24,7 +24,7 @@ export type RivingPhase =
   | { kind: 'done' };
 
 /** Things a view plays effects for. */
-export type RivingEvent =
+export type SplittingEvent =
   | { type: 'strike' }
   /** The head has landed: the pump starts. */
   | { type: 'landed' }
@@ -42,47 +42,47 @@ export type RivingEvent =
       banked: number;
     };
 
-export interface RivingHooks {
+export interface SplittingHooks {
   logger: EventLogger;
   /** Read every time, so live tuning applies at once. */
-  feel: () => RivingFeel;
-  rules: Riving;
+  feel: () => SplittingFeel;
+  rules: Splitting;
   /** The heads open to choose from, fewest pieces first. */
   heads: readonly number[];
   /**
-   * Banks a finished log: runs the riving recipe for `worth` staves (its staves × its grains,
+   * Banks a finished log: runs the splitting recipe for `worth` staves (its staves × its grains,
    * plus any star bonus; uses up the log), paying XP on the `staves` split. Returns the staves
    * banked.
    */
   bank: (worth: number, staves: number) => number;
-  onEvent?: (event: RivingEvent) => void;
+  onEvent?: (event: SplittingEvent) => void;
 }
 
 /**
- * Riving one log, without any rendering: pick a head and turn its cuts (in whole steps), strike
+ * Splitting one log, without any rendering: pick a head and turn its cuts (in whole steps), strike
  * to drop it onto the log, then pump the handle to drive it through. Every wedge is a stave, and
  * grains kept whole multiply the log. A view feeds it input and time, and draws its state.
  */
-export class RivingRound {
-  readonly log: RivingLog;
+export class SplittingRound {
+  readonly log: SplittingLog;
   readonly heads: readonly number[];
   /** The best this log could make with these heads: what stars are out of. */
   readonly best: Plan;
   /** The head chosen and how it's turned (radians, always on a whole step). */
   count: number;
   rotation: number;
-  phase: RivingPhase = { kind: 'plan' };
+  phase: SplittingPhase = { kind: 'plan' };
   now = 0;
-  readonly #hooks: RivingHooks;
+  readonly #hooks: SplittingHooks;
   readonly #rng: Rng;
   #pumpStart = 0;
   #strokeAt = 0;
   #strokeGaps: number[] = [];
   #headChanges = 0;
 
-  constructor(log: RivingLog, hooks: RivingHooks, seed: number, count?: number) {
+  constructor(log: SplittingLog, hooks: SplittingHooks, seed: number, count?: number) {
     const first = hooks.heads[0];
-    if (first === undefined) throw new Error('No heads to rive with');
+    if (first === undefined) throw new Error('No heads to split with');
     this.log = log;
     this.heads = hooks.heads;
     this.#hooks = hooks;
@@ -100,7 +100,7 @@ export class RivingRound {
         start = { rotation: this.rotation, worth: this.plan.worth };
     }
     this.rotation = start.rotation;
-    this.#log('riving.logStart', {
+    this.#log('splitting.logStart', {
       log: log.id,
       seed,
       grains: log.grains.map((grain) => grain.kind),
@@ -111,11 +111,11 @@ export class RivingRound {
     });
   }
 
-  get feel(): RivingFeel {
+  get feel(): SplittingFeel {
     return this.#hooks.feel();
   }
 
-  get rules(): Riving {
+  get rules(): Splitting {
     return this.#hooks.rules;
   }
 
@@ -161,7 +161,7 @@ export class RivingRound {
   strike(): void {
     if (this.phase.kind !== 'plan') return;
     const plan = this.plan;
-    this.#log('riving.strike', {
+    this.#log('splitting.strike', {
       log: this.log.id,
       head: plan.count,
       turn: degrees(plan.rotation),
@@ -217,7 +217,7 @@ export class RivingRound {
   /** Leaving mid-log: nothing is banked and the log isn't used up. */
   exit(): void {
     if (this.phase.kind === 'done') return;
-    this.#log('riving.leave', {
+    this.#log('splitting.leave', {
       log: this.log.id,
       phase: this.phase.kind,
       head: this.count,
@@ -233,7 +233,7 @@ export class RivingRound {
     const bonus = worthOf(plan.worth, share);
     this.phase = { kind: 'done' };
     const banked = this.#hooks.bank(plan.worth + bonus, plan.staves);
-    this.#log('riving.logEnd', {
+    this.#log('splitting.logEnd', {
       log: this.log.id,
       head: plan.count,
       turn: degrees(plan.rotation),

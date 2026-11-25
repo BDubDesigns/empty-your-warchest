@@ -15,7 +15,7 @@ const state: GameState = {
     { item: 'spear', count: 2, quality: 'poor' },
     { item: 'spear', count: 3, quality: 'perfect' },
   ],
-  skills: { woodcutting: 1_154, fletching: 83, command: 0 },
+  skills: { woodcutting: 1_154, splitting: 83, command: 0 },
   lastSeenAt: 5_000,
   done: ['tutorial.woodcutting'],
 };
@@ -39,7 +39,7 @@ describe('save/load', () => {
     expect(result.status).toBe('new');
     expect(result.state).toEqual({
       inventory: [],
-      skills: { woodcutting: 0, fletching: 0, command: 0 },
+      skills: { woodcutting: 0, splitting: 0, command: 0 },
       lastSeenAt: 10_000,
       done: [],
     });

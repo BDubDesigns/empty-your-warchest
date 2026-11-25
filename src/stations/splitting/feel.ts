@@ -1,8 +1,8 @@
 import { LiveTuning, type KeyValueStore, type Tunable } from '../../core';
-import type { RivingFeel } from '../../data';
+import type { SplittingFeel } from '../../data';
 
 /** Slider ranges for the debug menu's live tuning panel. */
-export const rivingTunables: readonly Tunable[] = [
+export const splittingTunables: readonly Tunable[] = [
   { key: 'strikeSeconds', label: 'Press swings over (s)', min: 0.05, max: 1, step: 0.01 },
   { key: 'hitStopMs', label: 'Hit-stop (ms)', min: 0, max: 200, step: 10 },
   { key: 'shakeStrength', label: 'Shake strength', min: 0, max: 3, step: 0.1 },
@@ -34,6 +34,9 @@ export const rivingTunables: readonly Tunable[] = [
   { key: 'buzzBurstMs', label: 'Vibrate: burst (ms)', min: 0, max: 150, step: 1 },
 ];
 
-export function rivingFeel(defaults: RivingFeel, store: KeyValueStore): LiveTuning<RivingFeel> {
-  return new LiveTuning('riving', defaults, rivingTunables, store);
+export function splittingFeel(
+  defaults: SplittingFeel,
+  store: KeyValueStore,
+): LiveTuning<SplittingFeel> {
+  return new LiveTuning('splitting', defaults, splittingTunables, store);
 }
