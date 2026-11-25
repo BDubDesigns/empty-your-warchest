@@ -47,8 +47,12 @@ export interface ScreenPoint {
 
 /** Items already in the warchest that the chest holds back from its count until they fly in. */
 export interface Deposit {
-  /** Sends the items flying into the chest from these points (e.g. each stump on screen). */
-  pour(from: ScreenPoint[]): void;
+  /**
+   * Sends the items flying into the chest from these points (e.g. each stump on screen), one piece
+   * after another. `onLeave` hears each piece set off, with the index of the point it left from,
+   * so the station can take that item away right then (e.g. a stave off the top of a heap).
+   */
+  pour(from: ScreenPoint[], onLeave?: (source: number) => void): void;
 }
 
 interface Flight {
@@ -60,6 +64,10 @@ interface Flight {
   amount: number;
   launchAt: number;
   spin: THREE.Vector3;
+  /** Which of the pour's points it leaves from, told to `onLeave` once as it sets off. */
+  source: number;
+  onLeave: ((source: number) => void) | undefined;
+  left: boolean;
 }
 
 /**
@@ -205,10 +213,10 @@ export class WarchestHud {
     this.#showCount();
     let poured = false;
     return {
-      pour: (from) => {
+      pour: (from, onLeave) => {
         if (poured) return;
         poured = true;
-        this.#startPour(amount, from, onArrive);
+        this.#startPour(amount, from, onArrive, onLeave);
       },
     };
   }
@@ -246,6 +254,7 @@ export class WarchestHud {
     amount: number,
     from: ScreenPoint[],
     onArrive: ((share: number) => void) | undefined,
+    onLeave: ((source: number) => void) | undefined,
   ): void {
     const sources = from.length > 0 ? from : [this.#chestPoint()];
     const pieces = splitDeposit(amount, sources.length, this.#pour.maxPieces, this.#pour.stagger);
@@ -262,6 +271,9 @@ export class WarchestHud {
         onArrive,
         amount,
         launchAt: now + piece.delay,
+        source: piece.from,
+        onLeave,
+        left: false,
         spin: new THREE.Vector3(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5)
           .normalize()
           .multiplyScalar(6 + Math.random() * 4),
@@ -330,12 +342,7 @@ export class WarchestHud {
   #rows() {
     const { inventory } = this.#game;
     return warchestRows(this.#game.data, {
-      count: (item, quality) =>
-        Math.max(
-          inventory.count(item, quality) -
-            (item === this.#item && quality === undefined ? this.#held : 0),
-          0,
-        ),
+      count: (item) => Math.max(inventory.count(item) - (item === this.#item ? this.#held : 0), 0),
     });
   }
 
@@ -350,6 +357,10 @@ export class WarchestHud {
     for (const flight of [...this.#flights]) {
       const t = now - flight.launchAt;
       if (t < 0) continue;
+      if (!flight.left) {
+        flight.left = true;
+        flight.onLeave?.(flight.source);
+      }
       const mesh = flight.mesh;
       mesh.visible = true;
       let x: number;

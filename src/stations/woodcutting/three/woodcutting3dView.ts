@@ -1,15 +1,22 @@
 import * as THREE from 'three';
+import { Birds } from './birds';
+import { CabinModel } from './cabin';
 import { TrunkCarver } from './carve';
+import { Scenery } from './scenery';
+import { Wreck } from './wreck';
 import type { ScreenView } from '../../../app/screen';
 import type { BackButton } from '../../../app/backButton';
+import { groundMesh, wornGround } from '../../../app/ground';
 import type { Haptics } from '../../../app/haptics';
 import { loadModel } from '../../../app/models';
+import { windTime } from '../../../app/scatter';
 import { Sfx } from '../../../app/sfx';
 import { SkillBar, type XpDeposit } from '../../../app/skillBar';
 import { WarchestHud, type Deposit, type ScreenPoint } from '../../../app/warchestHud';
 import { Rng, type EventLogger, type Game, type LiveChoice, type LiveTuning } from '../../../core';
-import type { Clearing, ClearingTree, WoodcuttingFeel } from '../../../data';
+import type { Clearing, ClearingTree, SceneryPlantKind, WoodcuttingFeel } from '../../../data';
 import {
+  cabinSagTilt,
   fallTip,
   previewFelling,
   type BoulderRoll,
@@ -23,7 +30,7 @@ import type { ClearingPicker } from '../clearingPicker';
 import type { FastFall } from '../fastFall';
 import { fastFallUnlocked, unlocksBetween, woodcuttingSkill } from '../logic/unlocks';
 import type { ClearingPlan } from '../logic/generate';
-import type { TreeStyle } from '../treeStyle';
+import type { SceneryDetail, TreeStyle } from '../treeStyle';
 
 export interface Woodcutting3DDeps {
   game: Game;
@@ -31,6 +38,8 @@ export interface Woodcutting3DDeps {
   feel: LiveTuning<WoodcuttingFeel>;
   /** Which trees to draw; picked in the debug menu. */
   treeStyle: LiveChoice<TreeStyle>;
+  /** Whether to draw the grass, plants and forest outside the fence. */
+  scenery: LiveChoice<SceneryDetail>;
   haptics: Haptics;
   /** Picks each round's clearing: the tutorial first, then random ones. */
   clearings: ClearingPicker;
@@ -47,6 +56,7 @@ interface Models {
   quaternius: THREE.Object3D[];
   stump: THREE.Object3D;
   axe: THREE.Object3D;
+  plants: Record<SceneryPlantKind, THREE.Object3D>;
 }
 
 /** World units per clearing unit: the 360×640 clearing becomes 12×21 units. */
@@ -66,6 +76,16 @@ const MODELS = {
   ),
   stump: 'models/kenney/stump_round.glb',
   axe: 'models/kenney/tool-axe.glb',
+  plants: {
+    grassTall: 'Grass_Common_Tall',
+    grassShort: 'Grass_Common_Short',
+    fern: 'Fern_1',
+    plant: 'Plant_1_Big',
+    bush: 'Bush_Common',
+    flowers: 'Flower_3_Group',
+    rock: 'Rock_Medium_1',
+    mushroom: 'Mushroom_Common',
+  } satisfies Record<SceneryPlantKind, string>,
 };
 const SOUNDS: Record<string, string> = Object.fromEntries(
   [
@@ -84,23 +104,18 @@ const SOUNDS: Record<string, string> = Object.fromEntries(
     'rock-2',
     'crash-wood',
     'crash-glass',
+    'crash-rumble',
   ].map((name) => [name, `audio/woodcutting/${name}.mp3`]),
 );
 /** The chain counter's colour by length: 2 trees, 3, 4, 5, 6, 7+. */
 const COMBO_COLORS = ['#ffffff', '#fbe7a6', '#f6cf5a', '#f4a63a', '#f07f2c', '#ee5b2a'];
 const COLORS = {
   sky: 0xa9cfe0,
-  grass: 0x5d8c46,
-  clearing: 0x77a457,
   accent: 0xc8873a,
   guide: 0xf2ead3,
   gold: 0xe8c04f,
   wood: 0xe0c089,
-  chip: 0xd8b483,
-  dust: 0xcbbd9a,
   danger: 0xe0503c,
-  logWall: 0x9a6a3e,
-  logWallDark: 0x83552f,
   roof: 0x6b3a2c,
   door: 0x4a2f1f,
   window: 0xf3e2a0,
@@ -113,9 +128,14 @@ const FENCE_HEIGHT = 0.42;
 const FENCE_POST_SPACING = 60;
 /** Boulders are drawn a little less tall than wide. */
 const BOULDER_SQUAT = 0.8;
-/** Seconds a hit cabin rocks for, and the summary waits after the crash callout. */
-const CABIN_SHAKE_SECONDS = 0.6;
-const CRASH_SUMMARY_DELAY = 1.1;
+/** Real seconds the camera's punch in toward a cabin crash lasts, and the share spent going in. */
+const PUNCH_SECONDS = 0.7;
+const PUNCH_IN = 0.12;
+/** Quietest wreck knock that makes a sound or a puff (world units a second), and their spacing (ms). */
+const KNOCK_SPEED = 1.2;
+const KNOCK_GAP_MS = 55;
+/** The trunk's box in the wreck's physics: this thick (world units). */
+const PUSHER_THICKNESS = 0.3;
 /** One-time hint the first time a clearing has a cabin. */
 const HAZARD_HINT = 'hint.woodcutting.hazards';
 /** Screen space the overlay uses: buttons and logs above, the chop panel below. */
@@ -141,6 +161,8 @@ const CHASE_FOLLOW = 5;
 const CHASE_MIN_DISTANCE = 6;
 const CHASE_LOOKAHEAD = 0.3;
 const CHASE_HOLD = 0.9;
+/** Room (world units) the camera leaves round a crashing cabin for its flying parts. */
+const CRASH_VIEW_MARGIN = 1.6;
 /** How far ahead (seconds) the chase frames a rolling boulder: where it's about to be. */
 const CHASE_ROLL_AHEAD = 0.6;
 /** Seconds a banked tree takes to sink away (hauled off). */
@@ -175,6 +197,8 @@ interface TreeVisual {
    * the cabin), and when it started sinking away.
    */
   fallen?: { trunks: number[]; tilts: number[]; sinkAt?: number };
+  /** Once it has crashed into the cabin: when the cabin caved in, and how far each trunk sinks. */
+  sag?: { at: number; tilts: (number | undefined)[] };
   /** Set once the chopped tree has broken at its notch: the trunks tip from this height. */
   brokenAt?: number;
 }
@@ -201,8 +225,70 @@ interface Particle {
   velocity: THREE.Vector3;
   life: number;
   age: number;
-  kind: 'chip' | 'dust';
+  kind: ParticleKind;
 }
+
+/** Wood chips, a puff of dust, the cabin's billowing cloud of dust, its window's glass. */
+type ParticleKind = 'chip' | 'dust' | 'cloud' | 'glass';
+
+/**
+ * How each kind of particle looks and moves: colour, opacity (below 1 fades and grows by `grow`
+ * a second), launch speed (plus up to `speedRange`), seconds it lasts, gravity and air drag.
+ */
+const PARTICLES: Record<
+  ParticleKind,
+  {
+    color: number;
+    opacity: number;
+    grow: number;
+    speed: number;
+    speedRange: number;
+    life: number;
+    gravity: number;
+    drag: number;
+  }
+> = {
+  chip: {
+    color: 0xd8b483,
+    opacity: 1,
+    grow: 0,
+    speed: 2.4,
+    speedRange: 2,
+    life: 0.6,
+    gravity: 9,
+    drag: 0,
+  },
+  dust: {
+    color: 0xcbbd9a,
+    opacity: 0.6,
+    grow: 2.5,
+    speed: 0.6,
+    speedRange: 0.8,
+    life: 0.9,
+    gravity: 0,
+    drag: 0,
+  },
+  cloud: {
+    color: 0xc4b596,
+    opacity: 0.55,
+    grow: 1.6,
+    speed: 1.6,
+    speedRange: 1.4,
+    life: 2.6,
+    gravity: -0.25,
+    drag: 1.4,
+  },
+  glass: {
+    color: 0xdfeef2,
+    opacity: 1,
+    grow: 0,
+    speed: 2,
+    speedRange: 2.2,
+    life: 1.4,
+    gravity: 9,
+    drag: 0,
+  },
+};
 
 function treeSeed(id: string): number {
   let hash = 0;
@@ -284,7 +370,18 @@ export class Woodcutting3DView implements ScreenView {
   #frame = 0;
   /** This round's boulders, cabin and the fence. */
   readonly #hazards = new THREE.Group();
-  #cabin: { group: THREE.Group; hitAt: number | undefined } | undefined;
+  /** This round's cabin, and once it's hit, its wreck and the trunk that hit it. */
+  #cabin: { model: CabinModel; wreck?: Wreck; tree?: string; trunk?: number } | undefined;
+  /** Grass, undergrowth, forest and props outside the fence, and the birds in that forest. */
+  #scenery!: Scenery;
+  readonly #birds: Birds;
+  /** Random for the looks only (wreck, birds), seeded by the round so a crash replays alike. */
+  #fxRng = new Rng(0);
+  /** Slow motion until this time (performance.now ms), and the camera's punch in toward a crash. */
+  #slowUntil = 0;
+  #punch: { at: THREE.Vector3; start: number } | undefined;
+  /** When the wreck last made a knock sound and a dust puff (performance.now ms). */
+  #knockAt = 0;
   /**
    * This round's boulders: where each sits (`holder`), its tumble (`spinner`, `turned` once it's
    * stopped), and an outline shown while aiming.
@@ -310,6 +407,7 @@ export class Woodcutting3DView implements ScreenView {
     hud: WarchestHud,
   ) {
     this.#hud = hud;
+    this.#birds = new Birds(deps.game.data.woodcutting.scenery.birds.seconds);
     this.#skill = woodcuttingSkill(deps.game.data);
     this.#skillBar = new SkillBar(element, { game: deps.game, skill: this.#skill });
     this.#element = element;
@@ -353,14 +451,21 @@ export class Woodcutting3DView implements ScreenView {
     const recipe = game.data.recipes.find((entry) => entry.id === game.data.woodcutting.recipe);
     const item = recipe?.outputs[0]?.item;
     if (!item) throw new Error('The woodcutting recipe makes nothing');
-    const [kenney, quaternius, stump, axe, hud] = await Promise.all([
+    const plantKinds = Object.keys(MODELS.plants) as SceneryPlantKind[];
+    const [kenney, quaternius, stump, axe, plantModels, hud] = await Promise.all([
       Promise.all(MODELS.kenney.map(loadModel)),
       Promise.all(MODELS.quaternius.map(loadModel)),
       loadModel(MODELS.stump),
       loadModel(MODELS.axe),
+      Promise.all(
+        plantKinds.map((kind) => loadModel(`models/quaternius/${MODELS.plants[kind]}.gltf`)),
+      ),
       WarchestHud.create(element, { game, item, haptics: deps.haptics }),
     ]);
-    return new Woodcutting3DView(element, deps, { kenney, quaternius, stump, axe }, hud);
+    const plants = Object.fromEntries(
+      plantKinds.map((kind, index) => [kind, plantModels[index]]),
+    ) as Record<SceneryPlantKind, THREE.Object3D>;
+    return new Woodcutting3DView(element, deps, { kenney, quaternius, stump, axe, plants }, hud);
   }
 
   // ScreenView
@@ -400,6 +505,10 @@ export class Woodcutting3DView implements ScreenView {
       },
       Date.now() >>> 0,
     );
+    this.#fxRng = new Rng(plan.seed ?? 0);
+    this.#slowUntil = 0;
+    this.#punch = undefined;
+    this.#birds.clear();
     this.#buildTrees({ keepFallen: false });
     this.#buildHazards();
     this.#hazardHint = this.#clearing.cabin !== undefined && !game.hasDone(HAZARD_HINT);
@@ -473,22 +582,34 @@ export class Woodcutting3DView implements ScreenView {
     shadow.bottom = -13;
     this.#scene.add(sun);
 
-    const ground = new THREE.Mesh(
-      new THREE.PlaneGeometry(80, 80),
-      new THREE.MeshLambertMaterial({ color: COLORS.grass }),
+    // Thick grass all round; inside the fence it's worn to bare earth in places.
+    this.#scene.add(groundMesh('meadowGrass', 80, 80));
+    this.#scene.add(
+      wornGround('troddenDirt', this.#clearing.width * SCALE, this.#clearing.height * SCALE, {
+        cover: this.#deps.game.data.woodcutting.scenery.clearingWear,
+        round: false,
+        seed: 3,
+      }),
     );
-    ground.rotation.x = -Math.PI / 2;
-    ground.receiveShadow = true;
-    this.#scene.add(ground);
-    const patch = new THREE.Mesh(
-      new THREE.PlaneGeometry(this.#clearing.width * SCALE + 1, this.#clearing.height * SCALE + 1),
-      new THREE.MeshLambertMaterial({ color: COLORS.clearing }),
-    );
-    patch.rotation.x = -Math.PI / 2;
-    patch.position.y = 0.005;
-    patch.receiveShadow = true;
-    this.#scene.add(patch);
     this.#scene.add(this.#hazards);
+    const { scenery } = this.#deps.game.data.woodcutting;
+    this.#scenery = new Scenery(
+      scenery,
+      { width: this.#clearing.width, height: this.#clearing.height, scale: SCALE },
+      this.#models.plants,
+      this.#models.axe,
+    );
+    this.#scenery.setForest(this.#models[this.#style]);
+    this.#scenery.group.visible = this.#deps.scenery.value === 'full';
+    this.#deps.scenery.onChange((detail) => {
+      this.#scenery.group.visible = detail === 'full';
+    });
+    this.#scene.add(this.#scenery.group);
+    this.#scene.add(this.#birds.group);
+    this.#deps.logger.log('woodcutting3d.scenery', {
+      triangles: this.#scenery.triangles,
+      forestTrees: this.#scenery.treetops.length,
+    });
   }
 
   /**
@@ -536,10 +657,10 @@ export class Woodcutting3DView implements ScreenView {
     });
     const cabin = this.#clearing.cabin;
     if (cabin) {
-      const group = this.#buildCabin(cabin);
-      group.position.copy(this.#world(cabin));
-      this.#hazards.add(group);
-      this.#cabin = { group, hitAt: undefined };
+      const model = this.#buildCabin(cabin);
+      model.group.position.copy(this.#world(cabin));
+      this.#hazards.add(model.group);
+      this.#cabin = { model };
     }
   }
 
@@ -619,78 +740,29 @@ export class Woodcutting3DView implements ScreenView {
   }
 
   /**
-   * A small log cabin, built from boxes in the flat low-poly style: log walls, a gabled roof along
-   * its long side, a door and a lit window facing into the clearing, and a chimney.
+   * The cabin, built from parts that can come apart (see CabinModel), its long side along the
+   * longer of its footprint's sides and its door and window facing into the clearing.
    */
-  #buildCabin(cabin: NonNullable<Clearing['cabin']>): THREE.Group {
-    const group = new THREE.Group();
-    const material = (color: number) => new THREE.MeshLambertMaterial({ color });
+  #buildCabin(cabin: NonNullable<Clearing['cabin']>): CabinModel {
     const long = Math.max(cabin.width, cabin.depth) * SCALE;
     const short = Math.min(cabin.width, cabin.depth) * SCALE;
-    const height = cabin.height * SCALE;
-    const wall = height * 0.55;
-    // Built with its long side along x and the front toward +z, then turned to face the clearing.
-    const body = new THREE.Group();
-    const courses = 6;
-    for (let course = 0; course < courses; course++) {
-      const log = new THREE.Mesh(
-        new THREE.BoxGeometry(long, wall / courses, short),
-        material(course % 2 === 0 ? COLORS.logWall : COLORS.logWallDark),
-      );
-      log.position.y = (course + 0.5) * (wall / courses);
-      body.add(log);
-    }
-    const roofShape = new THREE.Shape();
-    const overhang = short * 0.12;
-    roofShape.moveTo(-short / 2 - overhang, 0);
-    roofShape.lineTo(short / 2 + overhang, 0);
-    roofShape.lineTo(0, height - wall);
-    roofShape.closePath();
-    const roofGeometry = new THREE.ExtrudeGeometry(roofShape, {
-      depth: long + overhang * 2,
-      bevelEnabled: false,
-    });
-    roofGeometry.translate(0, 0, -(long + overhang * 2) / 2);
-    roofGeometry.rotateY(Math.PI / 2);
-    const roof = new THREE.Mesh(roofGeometry, material(COLORS.roof));
-    roof.position.y = wall;
-    body.add(roof);
-    const door = new THREE.Mesh(
-      new THREE.BoxGeometry(long * 0.16, wall * 0.75, 0.04),
-      material(COLORS.door),
+    const model = new CabinModel(
+      long,
+      short,
+      cabin.height * SCALE,
+      { roof: COLORS.roof, door: COLORS.door, window: COLORS.window, chimney: COLORS.chimney },
+      new Rng(treeSeed(`${cabin.x},${cabin.y}`)),
     );
-    door.position.set(-long * 0.18, wall * 0.375, short / 2 + 0.02);
-    body.add(door);
-    const pane = new THREE.Mesh(
-      new THREE.BoxGeometry(long * 0.16, wall * 0.3, 0.04),
-      new THREE.MeshBasicMaterial({ color: COLORS.window }),
-    );
-    pane.position.set(long * 0.2, wall * 0.55, short / 2 + 0.02);
-    body.add(pane);
-    const chimney = new THREE.Mesh(
-      new THREE.BoxGeometry(short * 0.16, height * 0.45, short * 0.16),
-      material(COLORS.chimney),
-    );
-    chimney.position.set(long * 0.3, height * 0.78, -short * 0.15);
-    body.add(chimney);
-    body.traverse((child) => {
-      if (child instanceof THREE.Mesh) {
-        child.castShadow = true;
-        child.receiveShadow = true;
-      }
-    });
     // Face the clearing's middle from whichever edge it's on.
     const toMiddle = Math.atan2(
       this.#clearing.width / 2 - cabin.x,
       this.#clearing.height / 2 - cabin.y,
     );
-    const facing =
+    model.body.rotation.y =
       cabin.width >= cabin.depth
         ? Math.round(toMiddle / Math.PI) * Math.PI
         : Math.sign(toMiddle) * (Math.PI / 2);
-    body.rotation.y = facing;
-    group.add(body);
-    return group;
+    return model;
   }
 
   /**
@@ -1166,6 +1238,32 @@ export class Woodcutting3DView implements ScreenView {
 
   // Chase camera
 
+  /** The cabin has been hit this round: from then on the camera and the juice are on it alone. */
+  get #crashed(): boolean {
+    return this.#cabin?.wreck !== undefined;
+  }
+
+  /**
+   * The camera on the cabin coming down: its footprint and height, plus room round it for flying
+   * parts, seen from the side the camera is already on.
+   */
+  #crashPose(shape: NonNullable<Clearing['cabin']>): CameraPose {
+    const from = this.#shownPose ?? this.#overview;
+    const direction = from.position.clone().sub(from.target).normalize();
+    const reach = (Math.max(shape.width, shape.depth) / 2) * SCALE + CRASH_VIEW_MARGIN;
+    const middle = this.#world(shape);
+    const points = [0, 1].flatMap((up) =>
+      [-1, 1].flatMap((x) =>
+        [-1, 1].map((z) =>
+          middle
+            .clone()
+            .add(new THREE.Vector3(x * reach, up * shape.height * SCALE * 1.4, z * reach)),
+        ),
+      ),
+    );
+    return this.#framing(points, direction, CHASE_MIN_DISTANCE);
+  }
+
   /** The felling chop: watch the chain from behind the chopped tree instead of cutting away. */
   #startChase(first: FallStep | undefined): void {
     const frame = first && this.#closeUpFrame(first.tree, first.angle);
@@ -1378,6 +1476,17 @@ export class Woodcutting3DView implements ScreenView {
     this.#shownPose = pose;
     const shake = this.#shake;
     this.#camera.position.copy(pose.position);
+    // A crash punches the camera in toward it, fast, then eases back.
+    const punch = this.#punch;
+    if (punch) {
+      const t = (performance.now() - punch.start) / (PUNCH_SECONDS * 1000);
+      if (t >= 1) {
+        this.#punch = undefined;
+      } else {
+        const amount = t < PUNCH_IN ? t / PUNCH_IN : (1 - (t - PUNCH_IN) / (1 - PUNCH_IN)) ** 2;
+        this.#camera.position.lerp(punch.at, amount * this.#round.feel.crashPunch);
+      }
+    }
     if (shake > 0.0005) {
       this.#camera.position.x += (Math.random() - 0.5) * shake;
       this.#camera.position.y += (Math.random() - 0.5) * shake;
@@ -1525,7 +1634,7 @@ export class Woodcutting3DView implements ScreenView {
     } else if (event.type === 'hit') {
       // The falling canopy knocks into the next trunk: a light knock and tick before the thud.
       this.#play(`chop-${2 + Math.floor(Math.random() * 2)}`, 0.35, 250);
-      this.#deps.haptics.pulse(feel.buzzHitMs);
+      if (!this.#crashed) this.#deps.haptics.pulse(feel.buzzHitMs);
     } else if (event.type === 'landed') {
       const visual = this.#trees.get(event.step.tree);
       if (visual) {
@@ -1534,6 +1643,16 @@ export class Woodcutting3DView implements ScreenView {
             this.#burst('dust', this.#world(fallTip(visual.tree, path.angle), 0.2), 10);
           }
         });
+      }
+      // A tree landing on the cabin, and the rest of the chain after it, count for nothing: a
+      // quiet thud, no combo.
+      if (this.#crashed || event.step.paths.some((path) => path.cabin)) {
+        this.#play(`land-${1 + Math.floor(Math.random() * 3)}`, 0.4);
+        return;
+      }
+      // Now and then the thud startles birds out of the forest.
+      if (visual && this.#fxRng.chance(this.#deps.game.data.woodcutting.scenery.birds.chance)) {
+        this.#startleBirds(this.#world(fallTip(visual.tree, event.step.angle)), 1);
       }
       // Every tree a chain adds lands heavier: a deeper thud and more shake.
       const combo = event.count;
@@ -1561,24 +1680,14 @@ export class Woodcutting3DView implements ScreenView {
       this.#deps.haptics.pulse(feel.buzzHitMs);
     } else if (event.type === 'crash') {
       if (event.boulder) this.#settleBoulder(event.boulder);
-      const cabin = this.#clearing.cabin;
-      if (cabin) {
-        const at = this.#world(cabin, cabin.height * SCALE * 0.6);
-        this.#burst('chip', at, 26);
-        this.#burst('dust', at, 14);
-      }
-      if (this.#cabin) this.#cabin.hitAt = this.#round.now;
-      this.#play('crash-wood', 1, -200);
-      this.#play('crash-glass', 0.7);
-      this.#shake = 0.3 * feel.shakeStrength;
-      this.#deps.haptics.pulse(feel.buzzLandMaxMs * 2);
+      this.#crash(event.step, event.boulder);
     } else if (event.type === 'lost') {
       this.#flash(
         `Cabin hit! −${String(event.logs)} log${event.logs === 1 ? '' : 's'}`,
         'danger',
         30,
       );
-      this.#summaryNotBefore = this.#round.now + CRASH_SUMMARY_DELAY;
+      this.#summaryNotBefore = this.#round.now + feel.crashSettleSeconds;
       this.#showLiveStars();
       this.#deps.clearings.finished();
       this.#summaryPending = 'crashed';
@@ -1889,40 +1998,147 @@ export class Woodcutting3DView implements ScreenView {
     waitForPour();
   }
 
+  /**
+   * The cabin is hit, by a falling tree (`step`) or a rolling boulder: a freeze, the camera
+   * punching in, a crash and a rumble, a buzz that dies away, then the cabin coming apart in slow
+   * motion (real physics), its window shattering, dust billowing out, birds bursting from the
+   * forest, and the tree sinking into the wreck. Only looks: the rules have already called it.
+   */
+  #crash(step: FallStep | undefined, boulder: string | undefined): void {
+    const shape = this.#clearing.cabin;
+    const cabin = this.#cabin;
+    if (!shape || !cabin) return;
+    const feel = this.#round.feel;
+    const middle = this.#world(shape, shape.height * SCALE * 0.5);
+    // Where it was hit, and which way it was pushed.
+    const direction = new THREE.Vector3();
+    const hit = middle.clone();
+    const path = step?.paths.findIndex((entry) => entry.cabin) ?? -1;
+    const tree = step ? this.#trees.get(step.tree) : undefined;
+    const trunkPath = step?.paths[path];
+    if (step && tree && trunkPath?.cabin) {
+      direction.set(Math.cos(trunkPath.angle), 0, Math.sin(trunkPath.angle));
+      hit
+        .copy(this.#world(tree.tree))
+        .addScaledVector(direction, trunkPath.cabin.at * SCALE)
+        .setY(shape.height * SCALE * 0.8);
+      tree.sag = {
+        at: this.#round.now,
+        tilts: step.paths.map((entry) =>
+          entry.cabin
+            ? cabinSagTilt(this.#clearing, tree.tree, entry.cabin, feel.crashRubble)
+            : undefined,
+        ),
+      };
+      cabin.tree = step.tree;
+      cabin.trunk = path;
+    } else if (boulder) {
+      const holder = this.#boulders.get(boulder)?.holder;
+      if (holder) direction.subVectors(middle, holder.position).setY(0);
+      if (holder) hit.copy(holder.position).setY(shape.height * SCALE * 0.3);
+    }
+    if (direction.lengthSq() < 1e-6) direction.set(0, 0, -1);
+    direction.normalize();
+    cabin.model.group.visible = true;
+    cabin.wreck = new Wreck(
+      this.#hazards,
+      cabin.model.parts,
+      hit,
+      direction,
+      middle.clone().setY(0),
+      feel,
+      this.#fxRng,
+      (at, speed, kind) => {
+        this.#knock(at, speed, kind);
+      },
+    );
+    // The window shatters.
+    cabin.model.pane.visible = false;
+    const pane = cabin.model.pane.getWorldPosition(new THREE.Vector3());
+    this.#burst('glass', pane, 18, direction);
+    this.#burst('chip', hit, 26, direction);
+    this.#burst('cloud', middle.clone().setY(0.3), 16);
+    this.#play('crash-wood', 1, -200);
+    this.#play('crash-glass', 0.7);
+    this.#play('crash-rumble', 1);
+    this.#shake = feel.crashShake * feel.shakeStrength;
+    const now = performance.now();
+    this.#frozenUntil = now + feel.crashHitStopMs;
+    this.#slowUntil = this.#frozenUntil + feel.crashSlowMoSeconds * 1000;
+    this.#punch = { at: hit, start: now };
+    // Whatever else is still falling no longer counts: leave it and watch the cabin.
+    this.#chase = undefined;
+    this.#moveCamera(this.#crashPose(shape));
+    this.#deps.haptics.rumble(feel.buzzCrashMs, feel.buzzCrashPulses);
+    this.#startleBirds(middle, 2);
+  }
+
+  /** A wreck part knocking into something: a thud (and a puff of dust) for the hard ones. */
+  #knock(at: THREE.Vector3, speed: number, kind: 'log' | 'roof' | 'stone' | 'door'): void {
+    const now = performance.now();
+    if (speed < KNOCK_SPEED || now - this.#knockAt < KNOCK_GAP_MS) return;
+    this.#knockAt = now;
+    const loud = Math.min(speed / 6, 1);
+    if (kind === 'stone') {
+      this.#play(`rock-${1 + Math.floor(Math.random() * 2)}`, 0.3 + loud * 0.5, 100);
+    } else {
+      this.#play(
+        `land-${1 + Math.floor(Math.random() * 3)}`,
+        0.25 + loud * 0.5,
+        kind === 'log' ? 0 : 300,
+      );
+    }
+    if (at.y < 0.4) this.#burst('dust', at.clone().setY(0.1), 3);
+  }
+
+  /** A flock or two of birds burst from the treetops nearest `near`, flying away from it. */
+  #startleBirds(near: THREE.Vector3, flocks: number): void {
+    const { birds } = this.#deps.game.data.woodcutting.scenery;
+    const tops = [...this.#scenery.treetops]
+      .sort((a, b) => a.distanceToSquared(near) - b.distanceToSquared(near))
+      .slice(0, flocks);
+    for (const top of tops) {
+      const count = Math.round(this.#fxRng.range(birds.flock.min, birds.flock.max));
+      this.#birds.burst(this.#fxRng, top, near, count, birds.speed * SCALE);
+    }
+  }
+
   #play(name: string, volume: number, pitchCents = 0): void {
     this.#sfx.play(name, volume, pitchCents + (Math.random() - 0.5) * 240);
   }
 
-  #burst(kind: 'chip' | 'dust', at: THREE.Vector3, count: number, toward?: THREE.Vector3): void {
+  #burst(kind: ParticleKind, at: THREE.Vector3, count: number, toward?: THREE.Vector3): void {
+    const look = PARTICLES[kind];
     for (let i = 0; i < count; i++) {
       const object =
-        kind === 'chip'
+        kind === 'chip' || kind === 'glass'
           ? new THREE.Mesh(
-              new THREE.BoxGeometry(0.05, 0.02, 0.035),
-              new THREE.MeshLambertMaterial({ color: COLORS.chip }),
+              kind === 'chip'
+                ? new THREE.BoxGeometry(0.05, 0.02, 0.035)
+                : new THREE.BoxGeometry(0.06, 0.005, 0.045),
+              new THREE.MeshLambertMaterial({ color: look.color }),
             )
           : new THREE.Mesh(
-              new THREE.SphereGeometry(0.12, 6, 4),
+              new THREE.SphereGeometry(kind === 'cloud' ? 0.3 : 0.12, 6, 4),
               new THREE.MeshBasicMaterial({
-                color: COLORS.dust,
+                color: look.color,
                 transparent: true,
-                opacity: 0.6,
+                opacity: look.opacity,
                 depthWrite: false,
               }),
             );
       object.position.copy(at);
-      const spread = new THREE.Vector3(
-        Math.random() - 0.5,
-        Math.random() * 0.8 + 0.2,
-        Math.random() - 0.5,
-      );
+      // A cloud rolls out along the ground; everything else flies up and out.
+      const spread =
+        kind === 'cloud'
+          ? new THREE.Vector3(Math.random() - 0.5, Math.random() * 0.25, Math.random() - 0.5)
+          : new THREE.Vector3(Math.random() - 0.5, Math.random() * 0.8 + 0.2, Math.random() - 0.5);
       if (toward) spread.addScaledVector(toward, 0.8);
-      const speed = kind === 'chip' ? 2.4 + Math.random() * 2 : 0.6 + Math.random() * 0.8;
       this.#scene.add(object);
       this.#particles.push({
         object,
-        velocity: spread.normalize().multiplyScalar(speed),
-        life: kind === 'chip' ? 0.6 : 0.9,
+        velocity: spread.normalize().multiplyScalar(look.speed + Math.random() * look.speedRange),
+        life: look.life * (0.8 + Math.random() * 0.4),
         age: 0,
         kind,
       });
@@ -1936,13 +2152,21 @@ export class Woodcutting3DView implements ScreenView {
         this.#scene.remove(particle.object);
         return false;
       }
-      if (particle.kind === 'chip') particle.velocity.y -= 9 * dt;
+      const look = PARTICLES[particle.kind];
+      particle.velocity.y -= look.gravity * dt;
+      particle.velocity.multiplyScalar(Math.exp(-look.drag * dt));
       particle.object.position.addScaledVector(particle.velocity, dt);
-      particle.object.rotation.x += dt * 9;
-      if (particle.kind === 'dust') {
-        const grow = 1 + particle.age * 2.5;
-        particle.object.scale.setScalar(grow);
-        particle.object.material.opacity = 0.6 * (1 - particle.age / particle.life);
+      if (particle.object.position.y < 0.01 && look.gravity > 0) {
+        // Chips and glass come to rest on the ground.
+        particle.object.position.y = 0.01;
+        particle.velocity.set(0, 0, 0);
+      } else {
+        particle.object.rotation.x += dt * 9;
+      }
+      if (look.opacity < 1) {
+        const share = particle.age / particle.life;
+        particle.object.scale.setScalar(1 + particle.age * look.grow);
+        particle.object.material.opacity = look.opacity * (1 - share * share);
       }
       return true;
     });
@@ -1955,7 +2179,15 @@ export class Woodcutting3DView implements ScreenView {
     const realDt = Math.min(this.#timer.getDelta(), 0.05);
     this.#frameTimes.push(realDt * 1000);
     this.#checkFallback(realDt * 1000);
-    const dt = performance.now() < this.#frozenUntil ? 0 : realDt;
+    const now = performance.now();
+    // Frozen for a hit-stop; slowed for a crash.
+    const dt =
+      now < this.#frozenUntil
+        ? 0
+        : now < this.#slowUntil
+          ? realDt * this.#round.feel.crashSlowMo
+          : realDt;
+    windTime.value += realDt * this.#deps.game.data.woodcutting.scenery.windSpeed;
     this.#round.tick(dt);
     // Chop is a button, so the phase can change between frames: compare with last frame's.
     const kind = this.#round.phase.kind;
@@ -1965,10 +2197,11 @@ export class Woodcutting3DView implements ScreenView {
     }
     this.#updateTrees();
     this.#updateBoulders();
-    this.#updateCabin();
+    this.#updateCabin(dt);
     this.#updateGuides();
     this.#updateAxe();
     this.#updateParticles(dt);
+    this.#birds.update(dt);
     this.#updateCamera(realDt);
     this.#startPendingPour();
     const levelUp = this.#levelUpPending;
@@ -2100,19 +2333,55 @@ export class Woodcutting3DView implements ScreenView {
     visual.ring.position.set(to.x, 0.03, to.z);
   }
 
-  /** A hit cabin rocks on its base for a moment; it's hidden if it blocks the chop close-up. */
-  #updateCabin(): void {
+  /**
+   * The cabin is hidden if it blocks the chop close-up. Once hit, its wreck runs, the sinking
+   * trunk pushing the rubble down.
+   */
+  #updateCabin(dt: number): void {
     const cabin = this.#cabin;
     const shape = this.#clearing.cabin;
     if (!cabin || !shape) return;
+    if (cabin.wreck) {
+      const visual = cabin.tree === undefined ? undefined : this.#trees.get(cabin.tree);
+      const trunk = cabin.trunk === undefined ? undefined : visual?.trunks[cabin.trunk];
+      if (visual && trunk) {
+        // The trunk's box: from its pivot up its length, as the tree now leans.
+        const length = (visual.tree.height + this.#clearing.canopyRadius) * SCALE;
+        trunk.updateWorldMatrix(true, false);
+        const pivot = new THREE.Vector3().setFromMatrixPosition(trunk.matrixWorld);
+        const turn = trunk.getWorldQuaternion(new THREE.Quaternion());
+        const up = new THREE.Vector3(0, 1, 0).applyQuaternion(turn);
+        cabin.wreck.setPusher(
+          pivot.addScaledVector(up, length / 2),
+          turn,
+          new THREE.Vector3(PUSHER_THICKNESS / 2, length / 2, PUSHER_THICKNESS / 2),
+          dt,
+        );
+      }
+      cabin.wreck.step(dt);
+      return;
+    }
     const phase = this.#round.phase;
     const pose = phase.kind === 'chop' ? this.#closeUpPose(phase.tree, phase.angle) : undefined;
     const reach = (Math.max(shape.width, shape.depth) / 2) * SCALE + 0.6;
-    cabin.group.visible = !pose || !blocksAt(cabin.group.position, pose, 1, reach);
-    const since = cabin.hitAt === undefined ? CABIN_SHAKE_SECONDS : this.#round.now - cabin.hitAt;
-    const left = Math.max(1 - since / CABIN_SHAKE_SECONDS, 0);
-    cabin.group.rotation.z = Math.sin(since * 40) * 0.05 * left;
-    cabin.group.rotation.x = Math.cos(since * 33) * 0.03 * left;
+    cabin.model.group.visible = !pose || !blocksAt(cabin.model.group.position, pose, 1, reach);
+  }
+
+  /**
+   * How far trunk `index` of `visual` tips at most: flat, or resting on the cabin, sinking into it
+   * once it has caved in.
+   */
+  #restingTilt(visual: TreeVisual, index: number, resting: number | undefined): number {
+    const sag = visual.sag;
+    const sunk = sag?.tilts[index];
+    if (resting === undefined) return Math.PI / 2;
+    if (!sag || sunk === undefined) return resting;
+    const t = Math.min(
+      Math.max((this.#round.now - sag.at) / this.#round.feel.crashSagSeconds, 0),
+      1,
+    );
+    // Gives way fast, then settles onto the rubble.
+    return resting + (sunk - resting) * (1 - (1 - t) ** 3);
   }
 
   #updateTrees(): void {
@@ -2130,7 +2399,7 @@ export class Woodcutting3DView implements ScreenView {
           : 0;
         visual.trunks.forEach((trunk, index) => {
           const path = faller.step.paths[index];
-          const trunkTilt = Math.min(tilt, path?.cabin?.tilt ?? Math.PI / 2);
+          const trunkTilt = Math.min(tilt, this.#restingTilt(visual, index, path?.cabin?.tilt));
           this.#tip(trunk, path?.angle ?? faller.step.angle, trunkTilt);
           // A tree broken at its notch tips over the stump, then its butt drops to the ground.
           if (visual.brokenAt !== undefined)
@@ -2143,10 +2412,13 @@ export class Woodcutting3DView implements ScreenView {
             ? 0
             : Math.max(0, (round.now - visual.fallen.sinkAt) / HAUL_SECONDS);
         visual.trunks.forEach((trunk, index) => {
+          const resting = visual.fallen?.tilts[index];
           this.#tip(
             trunk,
             visual.fallen?.trunks[index] ?? 0,
-            visual.fallen?.tilts[index] ?? Math.PI / 2,
+            resting === undefined || resting >= Math.PI / 2
+              ? Math.PI / 2
+              : this.#restingTilt(visual, index, resting),
           );
           trunk.position.y = -sinking * 0.6;
           trunk.scale.setScalar(Math.max(1 - sinking, 0.001));
@@ -2461,6 +2733,7 @@ export class Woodcutting3DView implements ScreenView {
     if (style === this.#style) return;
     this.#style = style;
     this.#buildTrees({ keepFallen: true });
+    this.#scenery.setForest(this.#models[style]);
     // Mid-chop the notch was rebuilt away with the old trees: cut it again.
     const phase = this.#round.phase;
     if (phase.kind === 'chop' && phase.points > 0) {
@@ -2484,6 +2757,11 @@ export class Woodcutting3DView implements ScreenView {
       style: this.#style,
       pixelRatio: this.#renderer.getPixelRatio(),
       carveMs: Math.round(Math.max(0, ...[...this.#carvers.values()].map((c) => c.slowestMs))),
+      // The cabin's wreck, if it came down: its slowest physics step (ms) and how long it ran.
+      ...(this.#cabin?.wreck && {
+        wreckStepMs: Math.round(this.#cabin.wreck.slowestStepMs * 10) / 10,
+        wreckSeconds: Math.round(this.#cabin.wreck.age * 10) / 10,
+      }),
     });
   }
 }

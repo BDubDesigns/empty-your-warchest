@@ -26,7 +26,7 @@ test('Attack Run: steer through gates, clash, break the wall, see results, run a
     localStorage.setItem('warchest.runner.lift', 'run');
     localStorage.setItem(
       'warchest.tuning.runner',
-      JSON.stringify({ runSpeed: 25, spearsPerfect: 100, tradeSeconds: 0.05 }),
+      JSON.stringify({ runSpeed: 25, spears: 100, tradeSeconds: 0.05 }),
     );
   });
   await page.goto('/');

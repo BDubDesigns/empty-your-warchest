@@ -8,12 +8,12 @@ export const units = [
     name: 'Spearman',
     hp: 10,
     unarmedDamage: 1,
-    weapon: { item: 'spear', damageByQuality: { poor: 2, good: 4, perfect: 6 } },
+    weapon: { item: 'spear', damage: 4 },
   },
 ] satisfies GameDataInput['units'];
 
 // Bandits fight exactly like recruits: unarmed ones like unarmed recruits, armed ones like a
 // spearman with a Good spear.
 export const enemies = [
-  { id: 'bandit', name: 'Bandit', unit: 'spearman', weaponQuality: 'good' },
+  { id: 'bandit', name: 'Bandit', unit: 'spearman' },
 ] satisfies GameDataInput['enemies'];

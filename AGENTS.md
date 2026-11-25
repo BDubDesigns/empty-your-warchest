@@ -64,8 +64,8 @@ npm run build          # production build into dist/
 npm run test:e2e       # playwright on a phone viewport (builds and serves dist/)
 ```
 
-CI runs all of these on every push. The e2e tests pin the simpler Kenney trees because CI renders
-3D in software, where the detailed trees are slow.
+CI runs all of these on every push. The e2e tests pin the simpler Kenney trees and turn off the
+woodcutting scenery outside the fence because CI renders 3D in software, where both are slow.
 
 ## Layout
 

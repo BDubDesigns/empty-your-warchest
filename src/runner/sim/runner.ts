@@ -9,7 +9,7 @@ import {
 } from '../../data';
 import { applyGate, isGoodOp, previewGate, type GateEffect, type GatePreview } from './gates';
 import { rollLevel, type RolledGate } from './roll';
-import { Squad, UNARMED, type Fighter } from './squad';
+import { ARMED, Squad, UNARMED, type Fighter } from './squad';
 
 /** The simulation's fixed time step (s). The view runs as many steps as real time needs. */
 export const STEP_SECONDS = 1 / 60;
@@ -87,7 +87,7 @@ export type RunnerEvent =
       type: 'blow';
       index: number;
       fighter: Fighter;
-      /** What the front enemy fights with: `UNARMED` or its spear quality. */
+      /** What the front enemy fights with. */
       enemy: Fighter;
       unitFell: boolean;
       enemyFell: boolean;
@@ -107,8 +107,6 @@ export interface RunResult {
   /** Armed survivors. */
   armed: number;
   spearsUsed: number;
-  /** Spears handed out, by quality. */
-  spearsUsedByQuality: Readonly<Record<string, number>>;
   enemiesBeaten: number;
   /** Units lost, by what took them. */
   losses: Record<LossCause, number>;
@@ -123,14 +121,12 @@ export interface RunnerConfig {
   enemies: ReadonlyMap<string, { enemy: Enemy; unit: Unit }>;
   runner: Pick<RunnerData, 'trackWidth' | 'trackMetersPerSecond' | 'edgeMargin' | 'guardGap'>;
   feel: RunnerFeel;
-  /** Spear qualities, worst to best. */
-  qualities: readonly string[];
   /** Rolls the track from the level template; the same seed always gives the same run. */
   seed: number | string;
   /** Command level: scales the level template's rolls (bigger gates, bigger groups). */
   commandLevel: number;
-  /** Spears the run can hand out, by quality: from the warchest, or the debug sliders. */
-  spears: Readonly<Record<string, number>>;
+  /** Spears the run can hand out: from the warchest, or the debug slider. */
+  spears: number;
 }
 
 /** Wall hit points between `wallHit` events, as a share of the wall, so the view can crack it. */
@@ -170,7 +166,7 @@ export class RunnerSim {
     this.#feel = config.feel;
     this.seed = config.seed;
     const { level, runner } = config;
-    this.squad = new Squad(config.qualities, config.spears);
+    this.squad = new Squad(config.spears);
     this.squad.recruit(level.startingRecruits);
     this.length = level.durationSeconds * runner.trackMetersPerSecond;
     this.halfWidth = runner.trackWidth / 2;
@@ -306,13 +302,12 @@ export class RunnerSim {
 
   /** Damage one unit deals: the unarmed value or its spear's. */
   damageOf(fighter: Fighter, unit: Unit = this.#config.unit): number {
-    if (fighter === UNARMED) return unit.unarmedDamage;
-    return unit.weapon.damageByQuality[fighter] ?? 0;
+    return fighter === UNARMED ? unit.unarmedDamage : unit.weapon.damage;
   }
 
   /** What the front enemy of a group fights with. */
   enemyFront(group: TrackEnemies): Fighter {
-    return group.armed > 0 ? this.#enemy(group.enemy).weaponQuality : UNARMED;
+    return group.armed > 0 ? ARMED : UNARMED;
   }
 
   /** Advances one fixed step, steering toward `targetX` (m). Returns what happened. */
@@ -337,12 +332,6 @@ export class RunnerSim {
         break;
     }
     return events;
-  }
-
-  #enemy(id: string): Enemy {
-    const entry = this.#config.enemies.get(id);
-    if (!entry) throw new Error(`Unknown enemy "${id}"`);
-    return entry.enemy;
   }
 
   #enemyUnit(id: string): Unit {
@@ -404,11 +393,9 @@ export class RunnerSim {
   }
 
   #squadDamage(): number {
-    let damage = this.squad.unarmed * this.damageOf(UNARMED);
-    for (const quality of this.squad.qualities) {
-      damage += this.squad.armed(quality) * this.damageOf(quality);
-    }
-    return damage;
+    return (
+      this.squad.unarmed * this.damageOf(UNARMED) + this.squad.armedCount * this.damageOf(ARMED)
+    );
   }
 
   #passGate(event: TrackGates, index: number, events: RunnerEvent[]): void {
@@ -448,7 +435,7 @@ export class RunnerSim {
       const fighter = this.squad.front();
       if (fighter === undefined) break;
       const enemy = this.enemyFront(group);
-      // Spear vs no spear: the spear wins in one blow. Spear vs spear: a duel, quality decides.
+      // Spear vs no spear: the spear wins in one blow. Spear vs spear: a duel.
       // No spear vs no spear: an even brawl. (Decided Nov 24: fists can't beat spears, so a gate is
       // only worth what you can arm.)
       const armed = fighter !== UNARMED;
@@ -537,7 +524,6 @@ export class RunnerSim {
       survivors: this.squad.count,
       armed: this.squad.armedCount,
       spearsUsed: this.squad.spearsUsed,
-      spearsUsedByQuality: this.squad.usedByQuality,
       enemiesBeaten: this.#enemiesBeaten,
       losses: { ...this.#losses },
       seconds: this.seconds,
@@ -550,22 +536,12 @@ export class RunnerSim {
   }
 }
 
-/** The spears a run starts with, by quality, from the debug sliders. */
-export function spearSupply(
-  qualities: readonly string[],
-  feel: Pick<RunnerFeel, 'spearsPoor' | 'spearsGood' | 'spearsPerfect'>,
-): Record<string, number> {
-  // The sliders are named for the three tiers in data, worst to best.
-  const counts = [feel.spearsPoor, feel.spearsGood, feel.spearsPerfect];
-  return Object.fromEntries(qualities.map((quality, index) => [quality, counts[index] ?? 0]));
-}
-
-/** The War tent's run from game data: its level, unit, enemies and spear tiers. */
+/** The War tent's run from game data: its level, unit and enemies. */
 export function runnerConfig(
   data: GameData,
   feel: RunnerFeel,
   seed: number | string,
-  options: { commandLevel: number; spears: Readonly<Record<string, number>> },
+  options: { commandLevel: number; spears: number },
 ): RunnerConfig {
   const level = byId(data.levels, data.runner.level);
   return {
@@ -576,22 +552,12 @@ export function runnerConfig(
     ),
     runner: data.runner,
     feel,
-    qualities: data.qualities.map((quality) => quality.id),
     seed,
     ...options,
   };
 }
 
-/** Spears recovered after a run, by quality: a share of those handed out on a win, none on a loss. */
-export function recoveredSpears(
-  used: Readonly<Record<string, number>>,
-  won: boolean,
-  recoveryOnWin: Readonly<Record<string, number>>,
-): Record<string, number> {
-  return Object.fromEntries(
-    Object.entries(used).map(([quality, count]) => [
-      quality,
-      won ? Math.floor(count * (recoveryOnWin[quality] ?? 0)) : 0,
-    ]),
-  );
+/** Spears recovered after a run: a share of those handed out on a win, none on a loss. */
+export function recoveredSpears(used: number, won: boolean, recoveryOnWin: number): number {
+  return won ? Math.floor(used * recoveryOnWin) : 0;
 }

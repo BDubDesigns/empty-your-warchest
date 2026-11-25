@@ -12,15 +12,15 @@ export const stations = [
   {
     id: 'workbench',
     name: 'Workbench',
-    skill: 'fletching',
-    mechanic: 'rive',
+    skill: 'splitting',
+    mechanic: 'splitting',
     camp: { x: 0.27, y: 0.42 },
   },
   {
     id: 'fire_pit',
     name: 'Fire pit',
-    skill: 'fletching',
-    mechanic: 'harden',
+    skill: 'firemaking',
+    mechanic: 'firemaking',
     camp: { x: 0.73, y: 0.42 },
   },
   {

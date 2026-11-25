@@ -9,15 +9,14 @@ import {
   rollMax,
   runnerConfig,
   RunnerSim,
-  spearSupply,
   Squad,
+  ARMED,
   UNARMED,
   type RunnerEvent,
   type Side,
 } from '../src/runner/sim';
 import { data, dataWith } from './helpers';
 
-const QUALITIES = ['poor', 'good', 'perfect'];
 const feel = data.runner.feel;
 
 function sim(
@@ -27,8 +26,9 @@ function sim(
   commandLevel = 1,
 ) {
   const runFeel = { ...feel, ...overrides };
-  const spears = spearSupply(QUALITIES, runFeel);
-  return new RunnerSim(runnerConfig(gameData, runFeel, seed, { commandLevel, spears }));
+  return new RunnerSim(
+    runnerConfig(gameData, runFeel, seed, { commandLevel, spears: runFeel.spears }),
+  );
 }
 
 /** Runs to the end, steering with `steer(sim)` each step. Returns every event. */
@@ -90,7 +90,7 @@ describe('gates', () => {
   });
 
   it('previews the new count and how many of them are armed, without changing the squad', () => {
-    const squad = new Squad(QUALITIES, { poor: 5, good: 10, perfect: 10 });
+    const squad = new Squad(25);
     squad.recruit(38);
     expect(squad.armedCount).toBe(25);
     expect(previewGate(squad, { op: 'multiply', value: 2 })).toEqual({
@@ -103,41 +103,41 @@ describe('gates', () => {
 });
 
 describe('arming', () => {
-  it('hands out spears worst-first; extra recruits are unarmed', () => {
-    const squad = new Squad(QUALITIES, { poor: 2, good: 3, perfect: 1 });
+  it('hands out spears while there are any; extra recruits are unarmed', () => {
+    const squad = new Squad(6);
     squad.recruit(4);
-    expect(squad.snapshot()).toEqual({ unarmed: 0, armed: { poor: 2, good: 2, perfect: 0 } });
+    expect(squad.snapshot()).toEqual({ unarmed: 0, armed: 4 });
     squad.recruit(5);
-    expect(squad.snapshot()).toEqual({ unarmed: 3, armed: { poor: 2, good: 3, perfect: 1 } });
+    expect(squad.snapshot()).toEqual({ unarmed: 3, armed: 6 });
     expect(squad.spearsUsed).toBe(6);
+    expect(squad.supply).toBe(0);
   });
 
-  it('fights and falls spearmen first, worst spear first; the unarmed are the reserve', () => {
-    const squad = new Squad(QUALITIES, { poor: 1, good: 1, perfect: 1 });
+  it('fights and falls spearmen first; the unarmed are the reserve', () => {
+    const squad = new Squad(3);
     squad.recruit(5);
-    expect(squad.front()).toBe('poor');
-    expect(squad.fall(4)).toEqual(['poor', 'good', 'perfect', UNARMED]);
+    expect(squad.front()).toBe(ARMED);
+    expect(squad.fall(4)).toEqual([ARMED, ARMED, ARMED, UNARMED]);
     expect(squad.front()).toBe(UNARMED);
   });
 
   it('sheds the unarmed extras first at a bad gate', () => {
-    const squad = new Squad(QUALITIES, { poor: 1, good: 1, perfect: 1 });
+    const squad = new Squad(3);
     squad.recruit(5);
-    expect(squad.shed(3)).toEqual([UNARMED, UNARMED, 'poor']);
+    expect(squad.shed(3)).toEqual([UNARMED, UNARMED, ARMED]);
   });
 
   it('starts a run with one guy, armed if there is a spear', () => {
-    const runner = sim({ spearsPoor: 0, spearsGood: 3, spearsPerfect: 0 });
+    const runner = sim({ spears: 3 });
     expect(runner.squad.count).toBe(1);
     expect(runner.squad.armedCount).toBe(1);
-    expect(runner.squad.usedByQuality).toEqual({ poor: 0, good: 1, perfect: 0 });
+    expect(runner.squad.spearsUsed).toBe(1);
   });
 
   it('recovers a share of the spears used on a win, and none on a loss', () => {
-    const used = { poor: 3, good: 10, perfect: 1 };
-    const rates = { poor: 0.5, good: 0.5, perfect: 0.5 };
-    expect(recoveredSpears(used, true, rates)).toEqual({ poor: 1, good: 5, perfect: 0 });
-    expect(recoveredSpears(used, false, rates)).toEqual({ poor: 0, good: 0, perfect: 0 });
+    expect(recoveredSpears(14, true, 0.5)).toBe(7);
+    expect(recoveredSpears(15, true, 0.5)).toBe(7);
+    expect(recoveredSpears(14, false, 0.5)).toBe(0);
   });
 });
 
@@ -208,7 +208,7 @@ describe('runner', () => {
   });
 
   it("makes a squad fight a gate's guards to reach it, and only on that side", () => {
-    const spears = { spearsPoor: 0, spearsGood: 0, spearsPerfect: 100 };
+    const spears = { spears: 100 };
     const fought = play(sim(spears), route('safe', 'safe', 'greedy'));
     expect(fought.filter((event) => event.type === 'clashStart')).toHaveLength(3);
     const third = fought.filter((event) => event.type === 'gate')[2];
@@ -225,34 +225,31 @@ describe('runner', () => {
   it('lets a spear beat an unarmed bandit in one blow, and fists never beat a spear', () => {
     const gameData = (armedShare: number) =>
       fixedLevel([{ type: 'enemies', at: 0.1, enemy: 'bandit', count: 3, armedShare }, QUICK_WALL]);
-    const spear = sim({ spearsPoor: 0, spearsGood: 1, spearsPerfect: 0 }, 1, gameData(0));
+    const spear = sim({ spears: 1 }, 1, gameData(0));
     const blows = play(spear, () => 0).filter((event) => event.type === 'blow');
     expect(blows.map((blow) => blow.enemyFell)).toEqual([true, true, true]);
     expect(blows.every((blow) => !blow.unitFell)).toBe(true);
-    expect(blows[0]).toMatchObject({ fighter: 'good', enemy: UNARMED });
+    expect(blows[0]).toMatchObject({ fighter: ARMED, enemy: UNARMED });
 
-    const fists = sim({ spearsPoor: 0, spearsGood: 0, spearsPerfect: 0 }, 1, gameData(1));
+    const fists = sim({ spears: 0 }, 1, gameData(1));
     const lost = play(fists, () => 0).filter((event) => event.type === 'blow');
     expect(lost).toEqual([expect.objectContaining({ unitFell: true, enemyFell: false })]);
     expect(fists.result?.won).toBe(false);
   });
 
-  it('trades Good spears for armed bandits one for one, and Perfect spears win', () => {
-    const armedOnly = (spears: Partial<RunnerFeel>) => {
+  it('trades spears for armed bandits one for one', () => {
+    const armedOnly = (recruits: number) => {
       const gameData = fixedLevel(
         [{ type: 'enemies', at: 0.1, enemy: 'bandit', count: 5, armedShare: 1 }, QUICK_WALL],
-        5,
+        recruits,
       );
-      const runner = sim(
-        { spearsPoor: 0, spearsGood: 0, spearsPerfect: 0, ...spears },
-        1,
-        gameData,
-      );
+      const runner = sim({ spears: recruits }, 1, gameData);
       play(runner, () => 0);
       return runner;
     };
-    expect(armedOnly({ spearsGood: 5 }).result).toMatchObject({ won: false, cause: 'enemies' });
-    expect(armedOnly({ spearsPerfect: 5 }).result?.won).toBe(true);
+    expect(armedOnly(5).result).toMatchObject({ won: false, cause: 'enemies' });
+    // One spearman more than the bandits is left standing.
+    expect(armedOnly(6).result).toMatchObject({ won: true, survivors: 1 });
   });
 
   it('loses when the last soldier falls, even if the last bandit falls with him', () => {
@@ -260,7 +257,7 @@ describe('runner', () => {
       { type: 'enemies', at: 0.1, enemy: 'bandit', count: 1, armedShare: 1 },
       QUICK_WALL,
     ]);
-    const runner = sim({ spearsPoor: 0, spearsGood: 1, spearsPerfect: 0 }, 1, gameData);
+    const runner = sim({ spears: 1 }, 1, gameData);
     const events = play(runner, () => 0);
     expect(events.at(-2)).toMatchObject({ type: 'blow', unitFell: true, enemyFell: true });
     expect(events.at(-1)).toMatchObject({ type: 'lost', cause: 'enemies' });
@@ -268,7 +265,7 @@ describe('runner', () => {
   });
 
   it('loses against bandits when the count hits zero', () => {
-    const runner = sim({ spearsPoor: 0, spearsGood: 0, spearsPerfect: 0 });
+    const runner = sim({ spears: 0 });
     // No spears: unarmed recruits can't beat the armed bandits in the warm-up.
     const events = play(runner, route('safe'));
     expect(events.at(-1)).toMatchObject({ type: 'lost', cause: 'enemies' });
@@ -276,7 +273,7 @@ describe('runner', () => {
   });
 
   it('breaks the wall with the whole squad while archers fire volleys', () => {
-    const runner = sim({ spearsPoor: 0, spearsGood: 0, spearsPerfect: 100 });
+    const runner = sim({ spears: 100 });
     const events = play(runner, route('greedy', 'greedy', 'greedy'));
     expect(events.some((event) => event.type === 'wallHit')).toBe(true);
     expect(events.at(-1)?.type).toBe('won');
@@ -289,7 +286,7 @@ describe('runner', () => {
       const wall = raw.levels[0]?.events.at(-1);
       if (wall?.type === 'wall') wall.hp = 100_000;
     });
-    const runner = sim({ spearsPoor: 0, spearsGood: 0, spearsPerfect: 100 }, 1, toughWall);
+    const runner = sim({ spears: 100 }, 1, toughWall);
     const events = play(runner, route('greedy', 'greedy', 'greedy'));
     expect(events.filter((event) => event.type === 'volley').length).toBeGreaterThan(0);
     expect(events.at(-1)).toMatchObject({ type: 'lost', cause: 'wall' });

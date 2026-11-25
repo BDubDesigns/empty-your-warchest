@@ -16,13 +16,8 @@ const saveFileSchema = z.object({
   version: z.number(),
   savedAt: z.number(),
   state: z.object({
-    inventory: z.array(
-      z.object({
-        item: z.string(),
-        count: z.number().int().positive(),
-        quality: z.string().optional(),
-      }),
-    ),
+    // A stack's old quality tier (removed in M5-0) is dropped on load, so tiers merge.
+    inventory: z.array(z.object({ item: z.string(), count: z.number().int().positive() })),
     skills: z.record(z.string(), z.number().nonnegative()),
     lastSeenAt: z.number(),
     // Added after version 1 with a default, so earlier saves still load.
@@ -78,7 +73,7 @@ export class SaveStore {
     if (file.version !== SAVE_VERSION) {
       throw new Error(`Save is version ${file.version}; this build uses ${SAVE_VERSION}`);
     }
-    // Throws on items or tiers that no longer exist in the data.
+    // Throws on items that no longer exist in the data.
     const inventory = new Inventory(this.#data, file.state.inventory).stacks();
 
     const saved = Object.keys(file.state.skills).sort().join(',');

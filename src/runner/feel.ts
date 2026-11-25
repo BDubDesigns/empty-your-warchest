@@ -3,9 +3,7 @@ import type { RunnerFeel } from '../data';
 
 /** Slider ranges for the debug menu's live tuning panel. */
 export const runnerTunables: readonly Tunable[] = [
-  { key: 'spearsPoor', label: 'Spears: Poor', min: 0, max: 100, step: 1 },
-  { key: 'spearsGood', label: 'Spears: Good', min: 0, max: 100, step: 1 },
-  { key: 'spearsPerfect', label: 'Spears: Perfect', min: 0, max: 100, step: 1 },
+  { key: 'spears', label: 'Spears', min: 0, max: 100, step: 1 },
   { key: 'runSpeed', label: 'Run speed (m/s)', min: 4, max: 25, step: 0.5 },
   { key: 'steerSpeed', label: 'Steering speed (m/s)', min: 5, max: 80, step: 1 },
   { key: 'steerSmoothing', label: 'Steering smoothing (s)', min: 0, max: 0.4, step: 0.01 },

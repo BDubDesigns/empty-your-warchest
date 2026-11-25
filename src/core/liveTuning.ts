@@ -7,6 +7,8 @@ export interface Tunable {
   min: number;
   max: number;
   step: number;
+  /** Juice and timing rather than how it plays: folded under "More" in the debug menu. */
+  more?: boolean;
 }
 
 type Overrides<T> = Partial<Record<keyof T, number>>;

@@ -11,22 +11,13 @@ const nonNegative = z.number().nonnegative();
 /** A spot in the camp, as a fraction of the portrait screen (0,0 top-left; 1,1 bottom-right). */
 const campSpotSchema = z.object({ x: fraction, y: fraction });
 
-export const qualitySchema = z.object({ id, name });
-
 export const skillSchema = z.object({ id, name });
 
-export const itemSchema = z.object({
-  id,
-  name,
-  /** Tiered items are counted per quality tier (e.g. Poor/Good/Perfect spears). */
-  tiered: z.boolean(),
-});
+export const itemSchema = z.object({ id, name });
 
 export const itemStackSchema = z.object({
   item: id,
   count: positiveInt,
-  /** Only for tiered items. A tiered recipe output without one gets its tier from the mini game. */
-  quality: id.optional(),
 });
 
 export const stationSchema = z.object({
@@ -59,17 +50,14 @@ export const unitSchema = z.object({
   hp: positiveInt,
   /** Damage when no weapon was left in the warchest for this unit. */
   unarmedDamage: nonNegative,
-  weapon: z.object({
-    item: id,
-    damageByQuality: z.record(id, nonNegative),
-  }),
+  weapon: z.object({ item: id, damage: nonNegative }),
 });
 
 /**
  * Enemies fight with a unit's numbers (decided Nov 24, keep it simple): an unarmed bandit is an
- * unarmed recruit, an armed one fights like that unit with a `weaponQuality` spear.
+ * unarmed recruit, an armed one fights like that unit with its spear.
  */
-export const enemySchema = z.object({ id, name, unit: id, weaponQuality: id });
+export const enemySchema = z.object({ id, name, unit: id });
 
 const gateOp = z.enum(['add', 'subtract', 'multiply', 'divide']);
 
@@ -150,8 +138,8 @@ export const tuningSchema = z.object({
     divisor: positive,
   }),
   idle: z.object({ capMinutes: positive }),
-  /** Share of used weapons recovered after winning a run, per quality tier. */
-  weaponRecoveryOnWin: z.record(id, fraction),
+  /** Share of used weapons recovered after winning a run. */
+  weaponRecoveryOnWin: fraction,
 });
 
 const clearingSchema = z.object({
@@ -266,6 +254,121 @@ export const woodcuttingFeelSchema = z.object({
   buzzLandMs: nonNegative,
   buzzLandPerTreeMs: nonNegative,
   buzzLandMaxMs: nonNegative,
+  /**
+   * The cabin crash. Hit-stop on impact (ms), how hard the screen shakes, and how far the camera
+   * punches in toward the cabin (share of its distance), then time slows to `crashSlowMo` for
+   * `crashSlowMoSeconds` (real seconds) as the cabin gives way.
+   */
+  crashHitStopMs: nonNegative,
+  crashShake: nonNegative,
+  crashPunch: z.number().min(0).max(0.5),
+  crashSlowMo: z.number().min(0.05).max(1),
+  crashSlowMoSeconds: nonNegative,
+  /**
+   * The wreck (only looks: the rules have already called the crash). How fast the parts nearest
+   * the hit fly off in the fall's direction, how hard every part is thrown out from the cabin's
+   * middle (a second per world unit up, so the walls splay and the roof drops in), gravity, and
+   * the parts' friction and bounce.
+   */
+  crashPush: nonNegative,
+  crashShove: nonNegative,
+  crashGravity: positive,
+  crashFriction: fraction,
+  crashBounce: fraction,
+  /**
+   * The tree that hit the cabin sinks with the caving roof, over `crashSagSeconds`, until it rests
+   * on the rubble at `crashRubble` of the cabin's height (it still knocks nothing else).
+   */
+  crashRubble: fraction,
+  crashSagSeconds: positive,
+  /** Seconds the summary waits after the crash, so the wreck can settle. */
+  crashSettleSeconds: nonNegative,
+  /** The crash's buzz: `buzzCrashPulses` pulses, the first `buzzCrashMs` long, each one shorter. */
+  buzzCrashMs: nonNegative,
+  buzzCrashPulses: z.number().int().min(1),
+});
+
+/** A min–max range. */
+const rangeSchema = z.object({ min: nonNegative, max: nonNegative });
+
+/** The low plants and stones scattered outside the woodcutting fence (models picked by name). */
+export const sceneryPlantKinds = [
+  'grassTall',
+  'grassShort',
+  'fern',
+  'plant',
+  'bush',
+  'flowers',
+  'rock',
+  'mushroom',
+] as const;
+
+/**
+ * What's outside the woodcutting fence: only looks, none of it in play. Places are in clearing
+ * units, from the clearing's top-left corner (y grows toward the camera), so outside the fence is
+ * below 0 or past the clearing's width or height.
+ */
+export const woodcuttingScenerySchema = z.object({
+  /** Seed for where everything goes: the same every round. */
+  seed: z.number().int(),
+  /**
+   * Plants scattered from the fence out to `reach`, bunched toward the fence by `bunch` (1 even,
+   * higher bunches more), each `height` tall. Their tips sway `sway` of their height in the wind.
+   */
+  plants: z.array(
+    z.object({
+      kind: z.enum(sceneryPlantKinds),
+      count: z.number().int().min(0),
+      height: rangeSchema,
+      reach: positive,
+      bunch: z.number().min(1),
+      sway: z.number().min(0).max(0.5),
+    }),
+  ),
+  /**
+   * How thickly plants grow along each side of the fence, relative to its length: the camera
+   * sees the near and far sides most (on a phone the long sides are mostly off screen).
+   */
+  sides: z.object({ far: nonNegative, near: nonNegative, left: nonNegative, right: nonNegative }),
+  /** Share of the clearing (inside the fence) worn through the grass to bare earth. */
+  clearingWear: fraction,
+  /** Wind gusts per second. */
+  windSpeed: positive,
+  /**
+   * Trees that can't be chopped, from `gap` outside the fence out to `gap + depth`, at least
+   * `spacing` apart. On the camera's side they start `nearGap` out, so they never hide the clearing.
+   */
+  forest: z.object({
+    trees: z.number().int().min(0),
+    gap: nonNegative,
+    nearGap: nonNegative,
+    depth: positive,
+    spacing: positive,
+    height: rangeSchema,
+  }),
+  /** A trodden track leading off from the fence on the camera's side, centred on `x`. */
+  track: z.object({ x: z.number(), width: positive, length: positive }),
+  /** A stack of split logs beside the track: `rows` rows (the bottom one widest) of logs. */
+  woodpile: z.object({
+    x: z.number(),
+    y: z.number(),
+    rows: positiveInt,
+    length: positive,
+    radius: positive,
+  }),
+  /** A chopping block with an axe in it. */
+  block: z.object({ x: z.number(), y: z.number(), radius: positive, height: positive }),
+  /**
+   * Birds burst from the trees outside: always when the cabin is hit, and on `chance` of tree
+   * landings. A flock of `flock` birds flies off at `speed` (clearing units per second) and is
+   * gone after `seconds`.
+   */
+  birds: z.object({
+    flock: z.object({ min: positiveInt, max: positiveInt }),
+    speed: positive,
+    seconds: positive,
+    chance: fraction,
+  }),
 });
 
 export const woodcuttingSchema = z.object({
@@ -347,6 +450,7 @@ export const woodcuttingSchema = z.object({
   ),
   /** The fall and chain speeds the fast-fall switch uses (the faster feel from before Nov 23). */
   fastFall: z.object({ fallSeconds: positive, chainDelay: nonNegative }),
+  scenery: woodcuttingScenerySchema,
   feel: woodcuttingFeelSchema,
 });
 
@@ -388,10 +492,8 @@ const runnerFeelSchema = z.object({
   cameraLookAhead: nonNegative,
   /** Extra camera distance per metre of crowd radius, so big crowds fit. */
   cameraPullback: nonNegative,
-  /** Spears in the run by tier: debug sliders until runs use the warchest. */
-  spearsPoor: z.number().int().nonnegative(),
-  spearsGood: z.number().int().nonnegative(),
-  spearsPerfect: z.number().int().nonnegative(),
+  /** Spears in the run when Debug → Options → Runner spears is set to the slider. */
+  spears: z.number().int().nonnegative(),
   /** Time runs at this speed for `slowMoSeconds` when the wall breaks. */
   slowMoScale: z.number().positive().max(1),
   /**
@@ -447,9 +549,246 @@ export const warchestSchema = z.object({
   haptics: z.object({ openMs: nonNegative, slamMs: nonNegative }),
 });
 
+/** Feel numbers for splitting. The debug menu can override them live. */
+export const splittingFeelSchema = z.object({
+  /** Seconds the press takes to swing over and slam the head onto the log, and the freeze then (ms). */
+  strikeSeconds: positive,
+  hitStopMs: nonNegative,
+  shakeStrength: nonNegative,
+  /**
+   * Turning the cuts: a buzz (ms) when turning makes a line start or stop cutting a grain, and a
+   * soft click for each step of turn, at most one every `tickGapMs`. A finger that moved under
+   * `liftPx` in its last `liftMs` before lifting was holding still: the turn goes back to where
+   * it was, so lifting off can't nudge it.
+   */
+  buzzCutMs: nonNegative,
+  tickGapMs: nonNegative,
+  liftMs: nonNegative,
+  liftPx: nonNegative,
+  /**
+   * The pump: a swipe of `pumpTravel` pixels down is one stroke (back up halfway, or lift, for
+   * the next). The fewest-piece head takes `pumpsFew` strokes to go through, the most-piece head
+   * `pumpsMany`, the rest in between. Each stroke drives the head in over `pumpSeconds`.
+   */
+  pumpTravel: positive,
+  pumpsFew: positiveInt,
+  pumpsMany: positiveInt,
+  pumpSeconds: positive,
+  /** Seconds the staves take to burst out and land, then sit in a heap before pouring in. */
+  burstSeconds: positive,
+  heapSeconds: nonNegative,
+  /**
+   * Vibration (ms): the head landing, each stroke of the pump (plus up to `buzzPumpBuildMs` more
+   * by the last), and the burst.
+   */
+  buzzStrikeMs: nonNegative,
+  buzzPumpMs: nonNegative,
+  buzzPumpBuildMs: nonNegative,
+  buzzBurstMs: nonNegative,
+});
+
+/** A log to split: its size, end grain, and the grains on its end face. */
+const splittingLogSchema = z.object({
+  id,
+  /** Size in world units, for drawing it. */
+  radius: positive,
+  height: positive,
+  rings: positiveInt,
+  /** Grains: patches of the end face, each `width` degrees wide centred on `angle`. */
+  grains: z.array(z.object({ kind: id, angle: z.number(), width: positive })),
+  /** Knots: arcs of the end face (as grains are) that spoil any stave they touch. */
+  knots: z.array(z.object({ angle: z.number(), width: positive })),
+});
+
+/**
+ * Splitting a log into staves with a splitting head: a star of blades that splits the whole log
+ * into `count` equal wedges at once, each one a stave. You pick a head (more open up with
+ * levels) and turn the cuts, then pump the handle to drive it through. Grains multiply the
+ * whole log's staves if they end up whole in a stave; a cut line through a grain cancels it, good
+ * or bad. Knots spoil the staves they touch.
+ */
+const splittingSchema = z.object({
+  /** The recipe a split log runs: its yield is the staves it's worth. */
+  recipe: id,
+  multiplierCap: positive,
+  /** Degrees the cuts turn in steps of (dragging and ↺ ↻ alike): whole steps round a turn. */
+  turnStep: positive,
+  /** The splitting heads: how many staves each makes, and the Splitting level it opens up at. */
+  cutters: z.array(z.object({ count: z.number().int().min(2), level: positiveInt })).min(1),
+  /**
+   * Stars, by the share of the best a log could make with the heads you have (every head at
+   * every step of turn), and the bonus staves for 2 and 3 stars, as a share of the log.
+   */
+  stars: z.object({ one: fraction, two: fraction, three: fraction }),
+  starBonus: z.object({ two: nonNegative, three: nonNegative }),
+  /**
+   * The kinds of grain: what each multiplies the whole log's staves by when it ends up whole in
+   * a stave (they multiply together, up to `multiplierCap`; under 1 is a bad grain), how often
+   * each turns up among the good or bad ones, and how wide (degrees) it can be. A grain must fit
+   * inside one wedge to count, so a wide one can only be kept by a head with few pieces.
+   */
+  grainKinds: z
+    .array(
+      z.object({
+        id,
+        name: z.string().min(1),
+        multiplier: positive,
+        weight: positive,
+        width: z.object({ min: positive, max: positive }),
+      }),
+    )
+    .min(1),
+  /** The first log ever: to learn the controls on, with a grain to keep and one to cut. */
+  tutorialLog: splittingLogSchema,
+  /** Random logs: sizes, rings and grains, from a seed. */
+  generator: z.object({
+    radius: z.object({ min: positive, max: positive }),
+    height: z.object({ min: positive, max: positive }),
+    rings: z.object({ min: positiveInt, max: positiveInt }),
+    /** Good grains (multiplier over 1) and bad ones on every log. */
+    good: z.object({ min: z.number().int().min(0), max: z.number().int().min(0) }),
+    bad: z.object({ min: z.number().int().min(0), max: z.number().int().min(0) }),
+    knots: z.object({ min: z.number().int().min(0), max: z.number().int().min(0) }),
+    knotWidth: z.object({ min: positive, max: positive }),
+    /** Least gap (degrees) between two grains or knots, so each reads on its own. */
+    grainGap: nonNegative,
+    /**
+     * How often the first good grain sits close to the first bad one (`nearGap` degrees from its
+     * edge), so a line through the bad one lands its neighbours near the good one.
+     */
+    nearChance: fraction,
+    nearGap: z.object({ min: nonNegative, max: positive }),
+    /**
+     * Logs are checked with the best-split search: a log is easy when more than `easyShare` of
+     * every head at every turn would earn 3 stars. Only `easyChance` of easy logs are kept; the
+     * rest are made again (up to `tries` times), so most logs are a real choice.
+     */
+    easyShare: fraction,
+    easyChance: fraction,
+    /**
+     * And a log is fiddly when no head keeps 3 stars over `leeway` degrees of turn in a row:
+     * those are always made again (the last fair one is used if every try is fiddly).
+     */
+    leeway: nonNegative,
+    tries: positiveInt,
+  }),
+  /**
+   * The yard round the chopping block: grass, worn to bare earth in an oval `radius` (world units)
+   * across the middle, `wear` of it bare.
+   */
+  yard: z.object({ radius: positive, wear: fraction }),
+  feel: splittingFeelSchema,
+});
+
+/** Feel numbers for fire-hardening. The debug menu can override them live. */
+export const firemakingFeelSchema = z.object({
+  /**
+   * The fire: heat a log adds to the two staves over its own spot, and the little it spills onto
+   * the nearest stave each side. Fires are generated with these, so a change applies from the
+   * next fire.
+   */
+  heatPerLog: positive,
+  spill: nonNegative,
+  /**
+   * Cooking: seconds a stave at the flat fire's heat takes to harden (hotter staves are quicker,
+   * colder ones slower), and how far past that it chars, as a share of the time it took to harden:
+   * 1.3 chars at 1.3 times it. So every stave's pull window is the same share of its cook, and a
+   * hotter one's is shorter in seconds.
+   */
+  cookSeconds: positive,
+  charRatio: z.number().gt(1),
+  /**
+   * Smoke off the points, as a share of the way to hardened: thin white wisps from `smokeWisps`,
+   * thicker from `smokeThick`; thick grey once hardened (pull now), black once charring.
+   */
+  smokeWisps: fraction,
+  smokeThick: fraction,
+  /** The hot streak: how deep racks can stack (1 = no streak). */
+  streakCap: positiveInt,
+  /**
+   * The pull: a touch within `grabPx` of the handle grabs it (forgiving), and the pull counts once
+   * it has moved `dragPx`; the rack slides out over `pullSeconds`.
+   */
+  grabPx: positive,
+  dragPx: positive,
+  pullSeconds: positive,
+  /** The payoff: spears plunged into the trough (seconds), then a wait before they pour in. */
+  plungeSeconds: positive,
+  pourDelaySeconds: nonNegative,
+  hitStopMs: nonNegative,
+  shakeStrength: nonNegative,
+  /**
+   * Vibration (ms): a log dropping onto a spot, laying the rack, the first point starting to char
+   * (you're late), the pull, the plunge. Nothing buzzes when it's ready: reading the smoke is the
+   * skill.
+   */
+  buzzLogMs: nonNegative,
+  buzzLayMs: nonNegative,
+  buzzCharMs: nonNegative,
+  buzzPullMs: nonNegative,
+  buzzPlungeMs: nonNegative,
+});
+
+/**
+ * Fire-hardening: a rack of staves over a trench of coals that never burns evenly. Drop logs into
+ * the fuel spots under it to even out the heat, lay the rack, and pull it out when the points
+ * smoke thick grey. Hardened staves become spears; underdone ones go back as staves; charred ones
+ * are lost.
+ */
+const firemakingSchema = z.object({
+  /** The recipe a hardened stave runs, and the item burned as fuel. */
+  recipe: id,
+  fuel: id,
+  /**
+   * The rack: staves over each fuel spot, logs a spot holds, and its sizes by Firemaking level
+   * (each a number of fuel spots, opening at a level, and how many logs a fire of that size takes
+   * to even out). The biggest open size is the default; any smaller open one can be picked.
+   */
+  rack: z.object({
+    stavesPerSpot: positiveInt,
+    maxLogs: positiveInt,
+    sizes: z
+      .array(
+        z.object({
+          spots: positiveInt,
+          level: positiveInt,
+          answerLogs: z.object({ min: positiveInt, max: positiveInt }),
+        }),
+      )
+      .min(1),
+  }),
+  /**
+   * Stars count the staves (in a layer) that didn't harden: 3 for none, 2 for up to
+   * `twoMissedShare` of the layer, else 1.
+   */
+  stars: z.object({ twoMissedShare: fraction }),
+  /**
+   * Bonus spears for 2 and 3 stars, as a share of the spears hardened (rounded), as at every
+   * station: stars multiply output. XP is paid on the spears hardened, not the bonus.
+   */
+  starBonus: z.object({ two: nonNegative, three: nonNegative }),
+  /**
+   * Fires, from a seed, built backwards from a flat fire at `flat` heat so one always has a full
+   * answer: a random answer of the rack size's `answerLogs` logs is taken off, plus `noise` (heat)
+   * of lumps, and no coal under `minHeat`. A fire is made again (up to `tries` times) if it needs
+   * no fuel, if filling every spot also hardens the whole rack, or if its answer's pull window is
+   * under `minWindow` seconds. Racks of up to `searchSpots` spots also log every full-rack answer
+   * (the search grows threefold a spot).
+   */
+  generator: z.object({
+    flat: positive,
+    noise: nonNegative,
+    minHeat: positive,
+    minWindow: nonNegative,
+    tries: positiveInt,
+    searchSpots: positiveInt,
+  }),
+  /** Grass round the fire pit, trodden bare round the trench. */
+  yard: z.object({ radius: positive, wear: fraction }),
+  feel: firemakingFeelSchema,
+});
+
 export const gameDataShape = z.object({
-  /** Ordered worst to best. */
-  qualities: z.array(qualitySchema).min(1),
   skills: z.array(skillSchema).min(1),
   items: z.array(itemSchema).min(1),
   stations: z.array(stationSchema),
@@ -459,6 +798,8 @@ export const gameDataShape = z.object({
   levels: z.array(levelSchema),
   camp: campSchema,
   woodcutting: woodcuttingSchema,
+  splitting: splittingSchema,
+  firemaking: firemakingSchema,
   runner: runnerSchema,
   warchest: warchestSchema,
   tuning: tuningSchema,
@@ -466,7 +807,6 @@ export const gameDataShape = z.object({
 
 export type GameDataInput = z.input<typeof gameDataShape>;
 export type GameData = z.output<typeof gameDataShape>;
-export type Quality = GameData['qualities'][number];
 export type Skill = GameData['skills'][number];
 export type Item = GameData['items'][number];
 export type ItemStack = z.output<typeof itemStackSchema>;
@@ -481,6 +821,13 @@ export type CampSpot = Camp['chest'];
 export type Clearing = GameData['woodcutting']['clearings'][number];
 export type ClearingTree = Clearing['trees'][number];
 export type WoodcuttingFeel = GameData['woodcutting']['feel'];
+export type WoodcuttingScenery = GameData['woodcutting']['scenery'];
+export type SceneryPlantKind = (typeof sceneryPlantKinds)[number];
+export type Splitting = GameData['splitting'];
+export type SplittingLog = Splitting['tutorialLog'];
+export type SplittingFeel = Splitting['feel'];
+export type Firemaking = GameData['firemaking'];
+export type FiremakingFeel = Firemaking['feel'];
 export type Gate = z.output<typeof gateSchema>;
 export type Roll = z.output<typeof rollSchema>;
 export type GateOp = Gate['op'];

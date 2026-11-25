@@ -13,7 +13,6 @@ import {
   runnerConfig,
   RunnerSim,
   STEP_SECONDS,
-  spearSupply,
   UNARMED,
   type RunResult,
   type RunnerEvent,
@@ -37,9 +36,10 @@ export interface RunnerViewDeps {
 
 const SOUNDS: Record<string, string> = {
   ...Object.fromEntries(
-    ['chop-1', 'chop-2', 'chop-3', 'chop-perfect', 'land-1', 'land-2', 'land-3', 'star'].map(
-      (name) => [name, `audio/woodcutting/${name}.mp3`],
-    ),
+    ['chop-1', 'chop-2', 'chop-3', 'land-1', 'land-2', 'land-3', 'star'].map((name) => [
+      name,
+      `audio/woodcutting/${name}.mp3`,
+    ]),
   ),
   'crash-wood': 'audio/woodcutting/crash-wood.mp3',
   'chest-latch': 'audio/warchest/chest-latch.mp3',
@@ -61,10 +61,9 @@ const COLORS = {
   bad: 0xd8453b,
   log: 0x8b5a2b,
   spark: 0xffe08a,
-  sparkBright: 0xffffff,
 };
-/** Spear tips by quality, worst to best: dull iron, bright steel, glowing gold. */
-const TIP_COLORS = [0x4a4440, 0xdfe6ee, 0xffc42e];
+/** Spear tips: bright steel. */
+const TIP_COLOR = 0xdfe6ee;
 const ARROW_GEOMETRY = new THREE.CylinderGeometry(0.02, 0.02, 0.7, 4).rotateX(Math.PI / 2);
 const ARROW_MATERIAL = new THREE.MeshBasicMaterial({ color: 0x3a2a1a });
 const GOOD_CSS = '#2e8be6';
@@ -311,15 +310,11 @@ export class RunnerView implements ScreenView {
     return byId(data.units, byId(data.levels, data.runner.level).unit).weapon.item;
   }
 
-  /** Spears this run can hand out, by quality. */
-  #spearsAvailable(): Record<string, number> {
-    const { data, feel, game, spearSource } = this.#deps;
-    const qualities = data.qualities.map((quality) => quality.id);
-    if (spearSource.value === 'sliders') return spearSupply(qualities, feel.values);
-    const item = this.#spearItem();
-    return Object.fromEntries(
-      qualities.map((quality) => [quality, game.inventory.count(item, quality)]),
-    );
+  /** Spears this run can hand out. */
+  #spearsAvailable(): number {
+    const { feel, game, spearSource } = this.#deps;
+    if (spearSource.value === 'sliders') return feel.values.spears;
+    return game.inventory.count(this.#spearItem());
   }
 
   /**
@@ -328,19 +323,14 @@ export class RunnerView implements ScreenView {
    */
   #settleSpears(won: boolean): { used: number; recovered: number } {
     const { data, game, logger, spearSource } = this.#deps;
-    const used = this.#sim.squad.usedByQuality;
+    const used = this.#sim.squad.spearsUsed;
     const recovered = recoveredSpears(used, won, data.tuning.weaponRecoveryOnWin);
-    const sum = (record: Readonly<Record<string, number>>): number =>
-      Object.values(record).reduce((total, count) => total + count, 0);
-    const totals = { used: sum(used), recovered: sum(recovered) };
+    const totals = { used, recovered };
     if (this.#settled) return totals;
     this.#settled = true;
     if (spearSource.value !== 'warchest') return totals;
-    const item = this.#spearItem();
-    for (const [quality, count] of Object.entries(used)) {
-      const lost = count - (recovered[quality] ?? 0);
-      if (lost > 0) game.removeItems(item, lost, quality);
-    }
+    const lost = used - recovered;
+    if (lost > 0) game.removeItems(this.#spearItem(), lost);
     logger.log('runner.spears', { won, used, recovered });
     return totals;
   }
@@ -361,7 +351,7 @@ export class RunnerView implements ScreenView {
 
   #showHint(): void {
     const { hint } = this.#ui;
-    const spears = Object.values(this.#spearsAvailable()).reduce((total, n) => total + n, 0);
+    const spears = this.#spearsAvailable();
     const source = this.#deps.spearSource.value === 'warchest' ? 'in the warchest' : 'from debug';
     hint.replaceChildren();
     const steer = document.createElement('div');
@@ -555,9 +545,7 @@ export class RunnerView implements ScreenView {
     const centre = laneX + Math.max(-edge + blockHalf, Math.min(edge - blockHalf, follow - laneX));
     const armedColor = new THREE.Color(COLORS.bandit);
     const unarmedColor = new THREE.Color(COLORS.banditUnarmed);
-    const tipColor = new THREE.Color(
-      this.#tipColor(this.#sim.enemyFront({ ...event, unarmed: 0 })),
-    );
+    const tipColor = new THREE.Color(TIP_COLOR);
     let spearCount = 0;
     for (let i = 0; i < alive; i++) {
       const row = Math.floor(i / columns);
@@ -628,21 +616,6 @@ export class RunnerView implements ScreenView {
     shafts.setMatrixAt(index, matrix);
     tips.setMatrixAt(index, matrix);
     tips.setColorAt(index, tipColor);
-  }
-
-  /** Where a fighter's spear sits among the tiers. */
-  #tierOf(fighter: string): 'none' | 'worst' | 'middle' | 'best' {
-    const qualities = this.#deps.data.qualities;
-    const tier = qualities.findIndex((entry) => entry.id === fighter);
-    if (tier < 0) return 'none';
-    if (tier === qualities.length - 1) return 'best';
-    return tier === 0 ? 'worst' : 'middle';
-  }
-
-  /** Spear tips by quality, worst to best: dull iron, bright steel, glowing gold. */
-  #tipColor(quality: string): number {
-    const tier = this.#deps.data.qualities.findIndex((entry) => entry.id === quality);
-    return TIP_COLORS[Math.max(0, Math.min(TIP_COLORS.length - 1, tier))] ?? COLORS.spear;
   }
 
   #buildWall(at: number): void {
@@ -851,7 +824,7 @@ export class RunnerView implements ScreenView {
     line('Survivors', `${result.survivors} (${result.armed} armed)`);
     line('Spears used', `${spears.used}, ${spears.recovered} recovered`);
     if (this.#deps.spearSource.value === 'warchest') {
-      const left = Object.values(this.#spearsAvailable()).reduce((total, n) => total + n, 0);
+      const left = this.#spearsAvailable();
       line('Spears in the warchest', String(left));
     }
     line('Bandits beaten', String(result.enemiesBeaten));
@@ -1047,7 +1020,7 @@ export class RunnerView implements ScreenView {
 
   /**
    * The crowd is a loose blob around the squad centre. Spearmen lead the charge: the front of the
-   * blob holds the armed (worst spears at the very front, they fall first), the unarmed reserve
+   * blob holds the armed (at the very front, they fall first), the unarmed reserve
    * behind. Units further out trail the centre on turns; everyone slides up as the front falls.
    */
   #layoutUnits(dt: number, squadZ: number, radius: number): void {
@@ -1059,12 +1032,8 @@ export class RunnerView implements ScreenView {
     const pushing = sim.phase === 'clash' || sim.phase === 'wall';
     const lag = sim.feel.edgeLag;
     const matrix = new THREE.Matrix4();
-    // Fighting order: spears worst to best, then the unarmed.
-    const tiers: THREE.Color[] = [];
-    for (const quality of squad.qualities) {
-      const color = new THREE.Color(this.#tipColor(quality));
-      for (let n = squad.armed(quality); n > 0 && tiers.length < armedShown; n--) tiers.push(color);
-    }
+    // Fighting order: the spearmen, then the unarmed.
+    const tip = new THREE.Color(TIP_COLOR);
     const armed = new THREE.Color(COLORS.armed);
     const unarmed = new THREE.Color(COLORS.unarmed);
     // Blob slots, front-most first, so fighting order fills the front.
@@ -1096,8 +1065,7 @@ export class RunnerView implements ScreenView {
       matrix.makeTranslation(shownX, bob, z);
       this.#units.setMatrixAt(i, matrix);
       this.#units.setColorAt(i, i < armedShown ? armed : unarmed);
-      const tip = tiers[i];
-      if (tip)
+      if (i < armedShown)
         this.#placeSpear(
           this.#spears.shafts,
           this.#spears.tips,
@@ -1264,16 +1232,8 @@ export class RunnerView implements ScreenView {
           0.9,
           -sim.distance - 0.3,
         );
-        const bright = event.enemyFell && this.#tierOf(event.fighter) === 'best';
-        if (bright) {
-          // A Perfect spear's kill: brighter spark, heavier hit.
-          this.#burst(front, 14, COLORS.sparkBright, 5, 1.5);
-          this.#sound('chop-perfect', 0.7, 0);
-          this.#shake = Math.max(this.#shake, 0.25);
-        } else {
-          this.#burst(front, 3, event.fighter === UNARMED ? COLORS.unarmed : COLORS.spark, 2.5);
-          this.#sound(`chop-${1 + this.#fx.int(0, 2)}`, 0.3, event.enemyFell ? 200 : -200);
-        }
+        this.#burst(front, 3, event.fighter === UNARMED ? COLORS.unarmed : COLORS.spark, 2.5);
+        this.#sound(`chop-${1 + this.#fx.int(0, 2)}`, 0.3, event.enemyFell ? 200 : -200);
         if (event.enemyFell) this.#burst(front, 8, COLORS.bandit, 3);
         if (event.unitFell) this.#burst(front, 8, COLORS.armed, 3);
         if (event.enemyFell || event.unitFell) haptics.pulse(feel.buzzTradeMs);

@@ -76,14 +76,17 @@ export class Game {
     this.#changed();
   }
 
-  addItems(itemId: string, count: number, quality?: string): void {
-    this.#inventory.add(itemId, count, quality);
+  addItems(itemId: string, count: number): void {
+    this.#inventory.add(itemId, count);
     this.#changed();
   }
 
-  /** Takes items out of the warchest (e.g. spears spent in a run). Throws if there aren't enough. */
-  removeItems(itemId: string, count: number, quality?: string): void {
-    this.#inventory.remove(itemId, count, quality);
+  /**
+   * Takes items out of the warchest (e.g. logs burned as fuel, spears spent in a run). Throws if
+   * there aren't enough.
+   */
+  removeItems(itemId: string, count: number): void {
+    this.#inventory.remove(itemId, count);
     this.#changed();
   }
 

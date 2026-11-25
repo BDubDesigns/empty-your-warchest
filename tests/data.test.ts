@@ -18,13 +18,38 @@ describe('game data', () => {
       'fire_pit',
       'war_tent',
     ]);
-    expect(data.qualities.map((quality) => quality.name)).toEqual(['Poor', 'Good', 'Perfect']);
+    expect(data.skills.map((skill) => skill.id)).toEqual([
+      'woodcutting',
+      'splitting',
+      'firemaking',
+      'command',
+    ]);
+  });
+
+  it('runs the fire pit on Firemaking', () => {
+    expect(data.stations.find((station) => station.id === 'fire_pit')?.skill).toBe('firemaking');
   });
 
   it('fails loudly on a chain exponent that is not positive', () => {
     expectInvalid((raw) => {
       raw.woodcutting.chainExponent = 0;
     }, 'chainExponent');
+  });
+
+  it('fails loudly on scenery inside the woodcutting fence', () => {
+    expectInvalid((raw) => {
+      raw.woodcutting.scenery.woodpile.y = 300;
+    }, 'The woodpile must be outside the fence');
+    expectInvalid((raw) => {
+      raw.woodcutting.scenery.block.x = 180;
+      raw.woodcutting.scenery.block.y = 600;
+    }, 'The chopping block must be outside the fence');
+  });
+
+  it('fails loudly on a scenery range with min above max', () => {
+    expectInvalid((raw) => {
+      raw.woodcutting.scenery.forest.height = { min: 200, max: 100 };
+    }, 'min must not be more than max');
   });
 
   it('fails loudly on a recipe that uses an unknown item', () => {
@@ -35,7 +60,7 @@ describe('game data', () => {
 
   it('fails loudly on duplicate ids', () => {
     expectInvalid((raw) => {
-      raw.items.push({ id: 'log', name: 'Another log', tiered: false });
+      raw.items.push({ id: 'log', name: 'Another log' });
     }, 'Duplicate id "log"');
   });
 
@@ -45,10 +70,10 @@ describe('game data', () => {
     }, 'Unknown skill "mining"');
   });
 
-  it('requires weapon damage for every quality tier', () => {
+  it('fails loudly on a weapon that is not an item', () => {
     expectInvalid((raw) => {
-      if (raw.units[0]) raw.units[0].weapon.damageByQuality = { poor: 1, good: 2 };
-    }, 'Missing a value for quality "perfect"');
+      if (raw.units[0]) raw.units[0].weapon.item = 'sword';
+    }, 'Unknown item "sword"');
   });
 
   it('requires one wall as the last level event', () => {

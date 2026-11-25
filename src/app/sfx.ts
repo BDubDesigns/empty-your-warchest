@@ -42,6 +42,43 @@ export class Sfx {
     source.start();
   }
 
+  /**
+   * A clip that plays on a loop (e.g. a fire's crackle), silent until its volume is set above 0.
+   * It starts once the clip is ready, so set the volume every frame. `trim` seconds are skipped at
+   * each end of the clip (mp3 pads both ends, which would click at the seam).
+   */
+  loop(name: string, trim = 0.05): SoundLoop {
+    let source: AudioBufferSourceNode | undefined;
+    let gain: GainNode | undefined;
+    const start = (): boolean => {
+      const context = this.#context;
+      const clip = this.#clips.get(name);
+      if (!context || !clip) return false;
+      source = context.createBufferSource();
+      source.buffer = clip;
+      source.loop = true;
+      source.loopStart = trim;
+      source.loopEnd = Math.max(clip.duration - trim, trim + 0.1);
+      gain = context.createGain();
+      gain.gain.value = 0;
+      source.connect(gain).connect(context.destination);
+      source.start(0, trim);
+      return true;
+    };
+    return {
+      setVolume: (volume) => {
+        if (!gain && (volume <= 0 || !start())) return;
+        if (gain && this.#context) {
+          gain.gain.setTargetAtTime(volume, this.#context.currentTime, 0.08);
+        }
+      },
+      stop: () => {
+        source?.stop();
+        source = gain = undefined;
+      },
+    };
+  }
+
   #decodePending(): void {
     const context = this.#context;
     if (!context) return;
@@ -55,4 +92,10 @@ export class Sfx {
       );
     }
   }
+}
+
+/** A looping sound: set its volume (0 for silent) every frame, and stop it when done. */
+export interface SoundLoop {
+  setVolume(volume: number): void;
+  stop(): void;
 }

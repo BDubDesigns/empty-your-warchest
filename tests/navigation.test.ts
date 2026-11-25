@@ -24,18 +24,22 @@ function setup() {
 }
 
 describe('Navigation', () => {
-  it('opens Phaser stations as scenes and the war tent on its own screen', async () => {
+  it('opens each station on its own screen', async () => {
     const { navigation, calls } = setup();
     await navigation.start();
-    await navigation.openStation('workbench');
+    await navigation.openStation('fire_pit');
     await navigation.back();
     await navigation.openStation('war_tent');
     await navigation.back();
+    await navigation.openStation('workbench');
+    await navigation.back();
     expect(calls).toEqual([
       'camp',
-      'phaser:station-placeholder:workbench',
+      'screen:firemaking3d:fire_pit',
       'camp',
       'screen:runner:war_tent',
+      'camp',
+      'screen:splitting3d:workbench',
       'camp',
     ]);
   });
@@ -70,7 +74,7 @@ describe('Navigation', () => {
     await navigation.openStation('fire_pit');
     await navigation.openWarchest();
     await navigation.openStation('tree_line');
-    expect(calls).toEqual(['camp', 'phaser:station-placeholder:fire_pit']);
+    expect(calls).toEqual(['camp', 'screen:firemaking3d:fire_pit']);
     expect(views).toEqual([{ kind: 'camp' }, { kind: 'station', stationId: 'fire_pit' }]);
     expect(navigation.view).toEqual({ kind: 'station', stationId: 'fire_pit' });
   });

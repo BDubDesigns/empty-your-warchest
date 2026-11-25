@@ -11,7 +11,7 @@ import {
   type LiveChoice,
   type LiveTuning,
 } from '../core';
-import type { RunnerFeel, WoodcuttingFeel } from '../data';
+import type { FiremakingFeel, RunnerFeel, SplittingFeel, WoodcuttingFeel } from '../data';
 import { loadGameData } from '../data';
 import {
   liftModeChoice,
@@ -21,12 +21,16 @@ import {
   type SpearSource,
 } from '../runner/feel';
 import { checkMechanics } from '../stations';
+import { firemakingFeel } from '../stations/firemaking/feel';
+import { splittingFeel } from '../stations/splitting/feel';
 import {
   ClearingPicker,
   fastFallChoice,
+  sceneryChoice,
   treeStyleChoice,
   woodcuttingFeel,
   type FastFall,
+  type SceneryDetail,
   type TreeStyle,
 } from '../stations/woodcutting';
 import { Haptics, vibrationChoice, type Vibration } from './haptics';
@@ -36,10 +40,16 @@ export interface Booted {
   clock: Clock;
   logger: EventLogger;
   saves: SaveStore;
-  feel: { woodcutting: LiveTuning<WoodcuttingFeel>; runner: LiveTuning<RunnerFeel> };
+  feel: {
+    woodcutting: LiveTuning<WoodcuttingFeel>;
+    splitting: LiveTuning<SplittingFeel>;
+    firemaking: LiveTuning<FiremakingFeel>;
+    runner: LiveTuning<RunnerFeel>;
+  };
   /** Picks kept on this phone, shown in the debug menu. */
   choices: {
     treeStyle: LiveChoice<TreeStyle>;
+    scenery: LiveChoice<SceneryDetail>;
     vibration: LiveChoice<Vibration>;
     runnerSpears: LiveChoice<SpearSource>;
     runnerLift: LiveChoice<LiftMode>;
@@ -106,10 +116,13 @@ export async function bootGame(buildLabel: string): Promise<Booted> {
 
   const feel = {
     woodcutting: woodcuttingFeel(data.woodcutting.feel, localStorageStore()),
+    splitting: splittingFeel(data.splitting.feel, localStorageStore()),
+    firemaking: firemakingFeel(data.firemaking.feel, localStorageStore()),
     runner: runnerFeel(data.runner.feel, localStorageStore()),
   };
   const choices = {
     treeStyle: treeStyleChoice(localStorageStore()),
+    scenery: sceneryChoice(localStorageStore()),
     vibration: vibrationChoice(localStorageStore()),
     runnerSpears: spearSourceChoice(localStorageStore()),
     runnerLift: liftModeChoice(localStorageStore()),

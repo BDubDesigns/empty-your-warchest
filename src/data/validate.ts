@@ -17,7 +17,6 @@ function checkReferences(data: GameData, ctx: z.RefinementCtx): void {
     });
     return seen;
   };
-  const qualities = ids('qualities', data.qualities);
   const skills = ids('skills', data.skills);
   const itemIds = ids('items', data.items);
   const stations = ids('stations', data.stations);
@@ -25,17 +24,6 @@ function checkReferences(data: GameData, ctx: z.RefinementCtx): void {
   const units = ids('units', data.units);
   const enemies = ids('enemies', data.enemies);
   ids('levels', data.levels);
-
-  const tiered = new Set(data.items.filter((item) => item.tiered).map((item) => item.id));
-
-  const coversAllQualities = (path: Path, record: Record<string, number>): void => {
-    for (const quality of qualities) {
-      if (!(quality in record)) issue(path, `Missing a value for quality "${quality}"`);
-    }
-    for (const key of Object.keys(record)) {
-      if (!qualities.has(key)) issue(path, `Unknown quality "${key}"`);
-    }
-  };
 
   data.stations.forEach((station, index) => {
     if (!skills.has(station.skill)) {
@@ -50,19 +38,7 @@ function checkReferences(data: GameData, ctx: z.RefinementCtx): void {
     for (const side of ['inputs', 'outputs'] as const) {
       recipe[side].forEach((stack, stackIndex) => {
         const path = ['recipes', index, side, stackIndex];
-        if (!itemIds.has(stack.item)) {
-          issue([...path, 'item'], `Unknown item "${stack.item}"`);
-          return;
-        }
-        if (stack.quality !== undefined) {
-          if (!tiered.has(stack.item)) {
-            issue([...path, 'quality'], `"${stack.item}" has no quality tiers`);
-          } else if (!qualities.has(stack.quality)) {
-            issue([...path, 'quality'], `Unknown quality "${stack.quality}"`);
-          }
-        } else if (side === 'inputs' && tiered.has(stack.item)) {
-          issue([...path, 'quality'], `Tiered input "${stack.item}" needs a quality`);
-        }
+        if (!itemIds.has(stack.item)) issue([...path, 'item'], `Unknown item "${stack.item}"`);
       });
     }
   });
@@ -71,10 +47,7 @@ function checkReferences(data: GameData, ctx: z.RefinementCtx): void {
     const path = ['units', index, 'weapon'];
     if (!itemIds.has(unit.weapon.item)) {
       issue([...path, 'item'], `Unknown item "${unit.weapon.item}"`);
-    } else if (!tiered.has(unit.weapon.item)) {
-      issue([...path, 'item'], `Weapon "${unit.weapon.item}" must be a tiered item`);
     }
-    coversAllQualities([...path, 'damageByQuality'], unit.weapon.damageByQuality);
   });
 
   data.levels.forEach((level, index) => {
@@ -105,7 +78,108 @@ function checkReferences(data: GameData, ctx: z.RefinementCtx): void {
     }
   });
 
-  coversAllQualities(['tuning', 'weaponRecoveryOnWin'], data.tuning.weaponRecoveryOnWin);
+  const firemaking = data.firemaking;
+  if (!data.recipes.some((recipe) => recipe.id === firemaking.recipe)) {
+    issue(['firemaking', 'recipe'], `Unknown recipe "${firemaking.recipe}"`);
+  }
+  if (!itemIds.has(firemaking.fuel)) {
+    issue(['firemaking', 'fuel'], `Unknown item "${firemaking.fuel}"`);
+  }
+  const sizes = firemaking.rack.sizes;
+  if (!sizes.some((size) => size.level === 1)) {
+    issue(['firemaking', 'rack', 'sizes'], 'At least one rack size must be open from level 1');
+  }
+  sizes.forEach((size, index) => {
+    const before = sizes[index - 1];
+    if (before && (size.spots <= before.spots || size.level < before.level)) {
+      issue(['firemaking', 'rack', 'sizes', index], 'Sizes must grow, in level order');
+    }
+    if (size.answerLogs.min > size.answerLogs.max) {
+      issue(['firemaking', 'rack', 'sizes', index, 'answerLogs'], 'min must not be more than max');
+    }
+    if (size.answerLogs.max > size.spots * firemaking.rack.maxLogs) {
+      issue(
+        ['firemaking', 'rack', 'sizes', index, 'answerLogs', 'max'],
+        'More logs than the spots can hold',
+      );
+    }
+  });
+  if (firemaking.generator.minHeat >= firemaking.generator.flat) {
+    issue(['firemaking', 'generator', 'minHeat'], 'Must be under the flat fire');
+  }
+  if (firemaking.feel.smokeWisps >= firemaking.feel.smokeThick) {
+    issue(['firemaking', 'feel', 'smokeWisps'], 'Wisps must come before thick smoke');
+  }
+
+  const splitting = data.splitting;
+  if (!data.recipes.some((recipe) => recipe.id === splitting.recipe)) {
+    issue(['splitting', 'recipe'], `Unknown recipe "${splitting.recipe}"`);
+  }
+  const counts = new Set<number>();
+  splitting.cutters.forEach((cutter, index) => {
+    if (counts.has(cutter.count)) {
+      issue(['splitting', 'cutters', index, 'count'], `Duplicate head ${String(cutter.count)}`);
+    }
+    counts.add(cutter.count);
+  });
+  if (!splitting.cutters.some((cutter) => cutter.level === 1)) {
+    issue(['splitting', 'cutters'], 'At least one head must be open from level 1');
+  }
+  const steps = 360 / splitting.turnStep;
+  if (Math.abs(steps - Math.round(steps)) > 1e-9) {
+    issue(['splitting', 'turnStep'], 'Must go into 360 a whole number of times');
+  }
+  if (splitting.feel.pumpsFew > splitting.feel.pumpsMany) {
+    issue(['splitting', 'feel', 'pumpsFew'], 'The fewest-piece head must not need more strokes');
+  }
+  if (splitting.stars.one > splitting.stars.two || splitting.stars.two > splitting.stars.three) {
+    issue(['splitting', 'stars'], 'More stars must not need less');
+  }
+  const kinds = new Set<string>();
+  splitting.grainKinds.forEach((kind, index) => {
+    if (kinds.has(kind.id))
+      issue(['splitting', 'grainKinds', index, 'id'], `Duplicate id "${kind.id}"`);
+    kinds.add(kind.id);
+  });
+  splitting.tutorialLog.grains.forEach((grain, index) => {
+    if (!kinds.has(grain.kind)) {
+      issue(['splitting', 'tutorialLog', 'grains', index, 'kind'], `Unknown grain "${grain.kind}"`);
+    }
+  });
+  const splittingGenerator = splitting.generator;
+  for (const key of [
+    'radius',
+    'height',
+    'rings',
+    'good',
+    'bad',
+    'knots',
+    'knotWidth',
+    'nearGap',
+  ] as const) {
+    if (splittingGenerator[key].min > splittingGenerator[key].max) {
+      issue(['splitting', 'generator', key], 'min must not be more than max');
+    }
+  }
+  // A grain wider than the fewest-piece head's wedges could never be kept.
+  const widest = 360 / Math.min(...splitting.cutters.map((cutter) => cutter.count));
+  splitting.grainKinds.forEach((kind, index) => {
+    if (kind.width.min > kind.width.max) {
+      issue(['splitting', 'grainKinds', index, 'width'], 'min must not be more than max');
+    }
+    if (kind.width.max >= widest) {
+      issue(['splitting', 'grainKinds', index, 'width', 'max'], 'Too wide for any head to keep');
+    }
+  });
+  if (
+    splittingGenerator.good.max > 0 &&
+    !splitting.grainKinds.some((kind) => kind.multiplier > 1)
+  ) {
+    issue(['splitting', 'generator', 'good'], 'Good grains need a kind with a multiplier over 1');
+  }
+  if (splittingGenerator.bad.max > 0 && !splitting.grainKinds.some((kind) => kind.multiplier < 1)) {
+    issue(['splitting', 'generator', 'bad'], 'Bad grains need a kind with a multiplier under 1');
+  }
 
   const runner = data.runner;
   if (!data.levels.some((level) => level.id === runner.level)) {
@@ -113,14 +187,7 @@ function checkReferences(data: GameData, ctx: z.RefinementCtx): void {
   }
   data.enemies.forEach((enemy, index) => {
     if (!units.has(enemy.unit)) issue(['enemies', index, 'unit'], `Unknown unit "${enemy.unit}"`);
-    if (!qualities.has(enemy.weaponQuality)) {
-      issue(['enemies', index, 'weaponQuality'], `Unknown quality "${enemy.weaponQuality}"`);
-    }
   });
-  if (data.qualities.length !== 3) {
-    // The runner's spear sliders are Poor, Good and Perfect: one per tier.
-    issue(['runner', 'feel'], 'The runner spear sliders expect exactly 3 quality tiers');
-  }
   if (runner.feel.tradeMinSeconds > runner.feel.tradeSeconds) {
     issue(['runner', 'feel', 'tradeMinSeconds'], 'Must not be more than tradeSeconds');
   }
@@ -207,6 +274,33 @@ function checkReferences(data: GameData, ctx: z.RefinementCtx): void {
   }
   if (feel.timingWindow >= 1) {
     issue(['woodcutting', 'feel', 'timingWindow'], 'The green zone must be narrower than the bar');
+  }
+  // The scenery is laid out round the tutorial clearing (every clearing shares its size).
+  const scenery = woodcutting.scenery;
+  const size = woodcutting.clearings.find((entry) => entry.id === woodcutting.tutorialClearing);
+  scenery.plants.forEach((plant, index) => {
+    if (plant.height.min > plant.height.max) {
+      issue(['woodcutting', 'scenery', 'plants', index, 'height'], 'min must not be more than max');
+    }
+  });
+  for (const key of ['forest', 'birds'] as const) {
+    const range = key === 'forest' ? scenery.forest.height : scenery.birds.flock;
+    if (range.min > range.max)
+      issue(['woodcutting', 'scenery', key], 'min must not be more than max');
+  }
+  if (size) {
+    const outside = (x: number, y: number, reach: number) =>
+      x + reach < 0 || y + reach < 0 || x - reach > size.width || y - reach > size.height;
+    const { woodpile, block, track } = scenery;
+    if (!outside(woodpile.x, woodpile.y, woodpile.length / 2)) {
+      issue(['woodcutting', 'scenery', 'woodpile'], 'The woodpile must be outside the fence');
+    }
+    if (!outside(block.x, block.y, block.radius)) {
+      issue(['woodcutting', 'scenery', 'block'], 'The chopping block must be outside the fence');
+    }
+    if (track.x - track.width / 2 < 0 || track.x + track.width / 2 > size.width) {
+      issue(['woodcutting', 'scenery', 'track'], 'The track must meet the fence');
+    }
   }
 }
 

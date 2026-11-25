@@ -5,12 +5,14 @@ import { stations } from '../src/data/stations';
 const tile = stations.find((station) => station.id === 'tree_line');
 
 test('tapping the HUD chest opens the warchest panel, and it closes again', async ({ page }) => {
-  test.setTimeout(60_000);
+  // CI draws the woodcutting clearing in software alongside other tests: 60 s was flaky.
+  test.setTimeout(120_000);
   if (!tile) throw new Error('No tree line in data');
   const errors: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));
   await page.addInitScript(() => {
     localStorage.setItem('warchest.woodcutting.treeStyle', 'kenney');
+    localStorage.setItem('warchest.woodcutting.scenery', 'off');
   });
   await page.goto('/');
   await expect(page.locator('body')).toHaveAttribute('data-view', 'camp');

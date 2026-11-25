@@ -2,11 +2,12 @@
 // Code reads these; it never repeats them.
 
 import { camp } from './camp';
+import { firemaking } from './firemaking';
 import { items } from './items';
 import { levels } from './levels';
-import { qualities } from './qualities';
 import { recipes } from './recipes';
 import { runner } from './runner';
+import { splitting } from './splitting';
 import type { GameData, GameDataInput } from './schema';
 import { skills } from './skills';
 import { stations } from './stations';
@@ -20,7 +21,6 @@ export * from './schema';
 export { GameDataError, parseGameData } from './validate';
 
 export const rawGameData: GameDataInput = {
-  qualities,
   skills,
   items,
   stations,
@@ -31,6 +31,8 @@ export const rawGameData: GameDataInput = {
   camp,
   woodcutting,
   runner,
+  splitting,
+  firemaking,
   warchest,
   tuning,
 };
