@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { Rng } from '../../../core';
+import { Rng } from '../core';
 
 /**
  * Wood drawn in code, so it fits whatever log the rules make: the end grain (growth rings round
@@ -210,8 +210,8 @@ export function barkTextures(): { map: THREE.Texture; normalMap: THREE.Texture }
     return texture;
   };
   bark = {
-    map: load('textures/riving/bark.jpg', true),
-    normalMap: load('textures/riving/bark_normal.jpg', false),
+    map: load('textures/wood/bark.jpg', true),
+    normalMap: load('textures/wood/bark_normal.jpg', false),
   };
   return bark;
 }

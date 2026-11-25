@@ -43,7 +43,7 @@ export async function startApp(): Promise<void> {
     mountDebugMenu(byId('app'), {
       ...booted,
       tuning: [booted.feel.woodcutting, booted.feel.riving],
-      choices: [booted.choices.treeStyle, booted.choices.vibration],
+      choices: [booted.choices.treeStyle, booted.choices.scenery, booted.choices.vibration],
       clearings: booted.clearings,
       buildLabel: __BUILD_LABEL__,
     });
@@ -88,6 +88,7 @@ export async function startApp(): Promise<void> {
           logger,
           feel: feel.woodcutting,
           treeStyle: choices.treeStyle,
+          scenery: choices.scenery,
           haptics,
           clearings,
           fastFall,

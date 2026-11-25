@@ -218,6 +218,121 @@ export const woodcuttingFeelSchema = z.object({
   buzzLandMs: nonNegative,
   buzzLandPerTreeMs: nonNegative,
   buzzLandMaxMs: nonNegative,
+  /**
+   * The cabin crash. Hit-stop on impact (ms), how hard the screen shakes, and how far the camera
+   * punches in toward the cabin (share of its distance), then time slows to `crashSlowMo` for
+   * `crashSlowMoSeconds` (real seconds) as the cabin gives way.
+   */
+  crashHitStopMs: nonNegative,
+  crashShake: nonNegative,
+  crashPunch: z.number().min(0).max(0.5),
+  crashSlowMo: z.number().min(0.05).max(1),
+  crashSlowMoSeconds: nonNegative,
+  /**
+   * The wreck (only looks: the rules have already called the crash). How fast the parts nearest
+   * the hit fly off in the fall's direction, how hard every part is thrown out from the cabin's
+   * middle (a second per world unit up, so the walls splay and the roof drops in), gravity, and
+   * the parts' friction and bounce.
+   */
+  crashPush: nonNegative,
+  crashShove: nonNegative,
+  crashGravity: positive,
+  crashFriction: fraction,
+  crashBounce: fraction,
+  /**
+   * The tree that hit the cabin sinks with the caving roof, over `crashSagSeconds`, until it rests
+   * on the rubble at `crashRubble` of the cabin's height (it still knocks nothing else).
+   */
+  crashRubble: fraction,
+  crashSagSeconds: positive,
+  /** Seconds the summary waits after the crash, so the wreck can settle. */
+  crashSettleSeconds: nonNegative,
+  /** The crash's buzz: `buzzCrashPulses` pulses, the first `buzzCrashMs` long, each one shorter. */
+  buzzCrashMs: nonNegative,
+  buzzCrashPulses: z.number().int().min(1),
+});
+
+/** A min–max range. */
+const rangeSchema = z.object({ min: nonNegative, max: nonNegative });
+
+/** The low plants and stones scattered outside the woodcutting fence (models picked by name). */
+export const sceneryPlantKinds = [
+  'grassTall',
+  'grassShort',
+  'fern',
+  'plant',
+  'bush',
+  'flowers',
+  'rock',
+  'mushroom',
+] as const;
+
+/**
+ * What's outside the woodcutting fence: only looks, none of it in play. Places are in clearing
+ * units, from the clearing's top-left corner (y grows toward the camera), so outside the fence is
+ * below 0 or past the clearing's width or height.
+ */
+export const woodcuttingScenerySchema = z.object({
+  /** Seed for where everything goes: the same every round. */
+  seed: z.number().int(),
+  /**
+   * Plants scattered from the fence out to `reach`, bunched toward the fence by `bunch` (1 even,
+   * higher bunches more), each `height` tall. Their tips sway `sway` of their height in the wind.
+   */
+  plants: z.array(
+    z.object({
+      kind: z.enum(sceneryPlantKinds),
+      count: z.number().int().min(0),
+      height: rangeSchema,
+      reach: positive,
+      bunch: z.number().min(1),
+      sway: z.number().min(0).max(0.5),
+    }),
+  ),
+  /**
+   * How thickly plants grow along each side of the fence, relative to its length: the camera
+   * sees the near and far sides most (on a phone the long sides are mostly off screen).
+   */
+  sides: z.object({ far: nonNegative, near: nonNegative, left: nonNegative, right: nonNegative }),
+  /** Share of the clearing (inside the fence) worn through the grass to bare earth. */
+  clearingWear: fraction,
+  /** Wind gusts per second. */
+  windSpeed: positive,
+  /**
+   * Trees that can't be chopped, from `gap` outside the fence out to `gap + depth`, at least
+   * `spacing` apart. On the camera's side they start `nearGap` out, so they never hide the clearing.
+   */
+  forest: z.object({
+    trees: z.number().int().min(0),
+    gap: nonNegative,
+    nearGap: nonNegative,
+    depth: positive,
+    spacing: positive,
+    height: rangeSchema,
+  }),
+  /** A trodden track leading off from the fence on the camera's side, centred on `x`. */
+  track: z.object({ x: z.number(), width: positive, length: positive }),
+  /** A stack of split logs beside the track: `rows` rows (the bottom one widest) of logs. */
+  woodpile: z.object({
+    x: z.number(),
+    y: z.number(),
+    rows: positiveInt,
+    length: positive,
+    radius: positive,
+  }),
+  /** A chopping block with an axe in it. */
+  block: z.object({ x: z.number(), y: z.number(), radius: positive, height: positive }),
+  /**
+   * Birds burst from the trees outside: always when the cabin is hit, and on `chance` of tree
+   * landings. A flock of `flock` birds flies off at `speed` (clearing units per second) and is
+   * gone after `seconds`.
+   */
+  birds: z.object({
+    flock: z.object({ min: positiveInt, max: positiveInt }),
+    speed: positive,
+    seconds: positive,
+    chance: fraction,
+  }),
 });
 
 export const woodcuttingSchema = z.object({
@@ -299,6 +414,7 @@ export const woodcuttingSchema = z.object({
   ),
   /** The fall and chain speeds the fast-fall switch uses (the faster feel from before Nov 23). */
   fastFall: z.object({ fallSeconds: positive, chainDelay: nonNegative }),
+  scenery: woodcuttingScenerySchema,
   feel: woodcuttingFeelSchema,
 });
 
@@ -324,7 +440,7 @@ export const warchestSchema = z.object({
 
 /** Feel numbers for riving. The debug menu can override them live. */
 export const rivingFeelSchema = z.object({
-  /** Seconds the splitting head takes to drop onto the log, and the freeze when it lands (ms). */
+  /** Seconds the press takes to swing over and slam the head onto the log, and the freeze then (ms). */
   strikeSeconds: positive,
   hitStopMs: nonNegative,
   shakeStrength: nonNegative,
@@ -445,6 +561,11 @@ const rivingSchema = z.object({
     leeway: nonNegative,
     tries: positiveInt,
   }),
+  /**
+   * The yard round the chopping block: grass, worn to bare earth in an oval `radius` (world units)
+   * across the middle, `wear` of it bare.
+   */
+  yard: z.object({ radius: positive, wear: fraction }),
   feel: rivingFeelSchema,
 });
 
@@ -482,6 +603,8 @@ export type CampSpot = Camp['chest'];
 export type Clearing = GameData['woodcutting']['clearings'][number];
 export type ClearingTree = Clearing['trees'][number];
 export type WoodcuttingFeel = GameData['woodcutting']['feel'];
+export type WoodcuttingScenery = GameData['woodcutting']['scenery'];
+export type SceneryPlantKind = (typeof sceneryPlantKinds)[number];
 export type Riving = GameData['riving'];
 export type RivingLog = Riving['tutorialLog'];
 export type RivingFeel = Riving['feel'];

@@ -23,6 +23,7 @@ test('every station and the chest can be entered and exited by touch', async ({ 
   // test is about getting in and out.
   await page.addInitScript(() => {
     localStorage.setItem('warchest.woodcutting.treeStyle', 'kenney');
+    localStorage.setItem('warchest.woodcutting.scenery', 'off');
   });
   await page.goto('/');
   await viewIs(page, 'camp');
@@ -82,6 +83,7 @@ test('the camp comes back at the right size after the window resizes in a statio
 }) => {
   await page.addInitScript(() => {
     localStorage.setItem('warchest.woodcutting.treeStyle', 'kenney');
+    localStorage.setItem('warchest.woodcutting.scenery', 'off');
   });
   await page.goto('/');
   await viewIs(page, 'camp');

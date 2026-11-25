@@ -255,6 +255,33 @@ function checkReferences(data: GameData, ctx: z.RefinementCtx): void {
   if (feel.timingWindow >= 1) {
     issue(['woodcutting', 'feel', 'timingWindow'], 'The green zone must be narrower than the bar');
   }
+  // The scenery is laid out round the tutorial clearing (every clearing shares its size).
+  const scenery = woodcutting.scenery;
+  const size = woodcutting.clearings.find((entry) => entry.id === woodcutting.tutorialClearing);
+  scenery.plants.forEach((plant, index) => {
+    if (plant.height.min > plant.height.max) {
+      issue(['woodcutting', 'scenery', 'plants', index, 'height'], 'min must not be more than max');
+    }
+  });
+  for (const key of ['forest', 'birds'] as const) {
+    const range = key === 'forest' ? scenery.forest.height : scenery.birds.flock;
+    if (range.min > range.max)
+      issue(['woodcutting', 'scenery', key], 'min must not be more than max');
+  }
+  if (size) {
+    const outside = (x: number, y: number, reach: number) =>
+      x + reach < 0 || y + reach < 0 || x - reach > size.width || y - reach > size.height;
+    const { woodpile, block, track } = scenery;
+    if (!outside(woodpile.x, woodpile.y, woodpile.length / 2)) {
+      issue(['woodcutting', 'scenery', 'woodpile'], 'The woodpile must be outside the fence');
+    }
+    if (!outside(block.x, block.y, block.radius)) {
+      issue(['woodcutting', 'scenery', 'block'], 'The chopping block must be outside the fence');
+    }
+    if (track.x - track.width / 2 < 0 || track.x + track.width / 2 > size.width) {
+      issue(['woodcutting', 'scenery', 'track'], 'The track must meet the fence');
+    }
+  }
 }
 
 export const gameDataSchema = gameDataShape.superRefine(checkReferences);

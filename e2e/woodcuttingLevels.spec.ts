@@ -13,6 +13,7 @@ async function openTreeLineAt(page: Page, level: number) {
   if (!tile) throw new Error('No tree line in data');
   await page.addInitScript((xp) => {
     localStorage.setItem('warchest.woodcutting.treeStyle', 'kenney');
+    localStorage.setItem('warchest.woodcutting.scenery', 'off');
     localStorage.setItem(
       'warchest.save',
       JSON.stringify({

@@ -27,6 +27,22 @@ describe('game data', () => {
     }, 'chainExponent');
   });
 
+  it('fails loudly on scenery inside the woodcutting fence', () => {
+    expectInvalid((raw) => {
+      raw.woodcutting.scenery.woodpile.y = 300;
+    }, 'The woodpile must be outside the fence');
+    expectInvalid((raw) => {
+      raw.woodcutting.scenery.block.x = 180;
+      raw.woodcutting.scenery.block.y = 600;
+    }, 'The chopping block must be outside the fence');
+  });
+
+  it('fails loudly on a scenery range with min above max', () => {
+    expectInvalid((raw) => {
+      raw.woodcutting.scenery.forest.height = { min: 200, max: 100 };
+    }, 'min must not be more than max');
+  });
+
   it('fails loudly on a recipe that uses an unknown item', () => {
     expectInvalid((raw) => {
       raw.recipes[1]?.inputs.push({ item: 'oak_log', count: 1 });
