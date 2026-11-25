@@ -16,9 +16,9 @@ Placeholder sounds, converted to mono mp3. All CC0 (public domain): https://crea
 | woodcutting/rock-1.mp3, rock-2.mp3    | Kenney, Impact Sounds: `impactMining_001/003.ogg`                       |
 | woodcutting/crash-wood.mp3            | Kenney, Impact Sounds: `impactPlank_medium_002.ogg`                     |
 | woodcutting/crash-glass.mp3           | Kenney, Impact Sounds: `impactGlass_heavy_002.ogg`                      |
-| riving/press-slam.mp3                 | Kenney, Impact Sounds: `impactMetal_heavy_002.ogg`                      |
-| riving/press-clunk.mp3                | Kenney, Impact Sounds: `impactMetal_medium_001.ogg`                     |
-| riving/press-click.mp3                | Kenney, Impact Sounds: `impactMetal_light_001.ogg`                      |
+| splitting/press-slam.mp3              | Kenney, Impact Sounds: `impactMetal_heavy_002.ogg`                      |
+| splitting/press-clunk.mp3             | Kenney, Impact Sounds: `impactMetal_medium_001.ogg`                     |
+| splitting/press-click.mp3             | Kenney, Impact Sounds: `impactMetal_light_001.ogg`                      |
 | woodcutting/crash-rumble.mp3          | cinameng, "rumble fx" on OpenGameArt (6–9.2 s, sharp attack, faded out) |
 | warchest/chest-open.mp3               | Kenney, RPG Audio: `doorOpen_1.ogg`                                     |
 | warchest/chest-close.mp3              | Kenney, RPG Audio: `doorClose_4.ogg`                                    |

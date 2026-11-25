@@ -11,14 +11,14 @@ describe('Game', () => {
   it("pays recipe XP to the station's skill and logs the craft", async () => {
     const { game, logger } = newGame();
     game.addItems('log', 2);
-    const xp = game.data.recipes.find((recipe) => recipe.id === 'rive_stave')?.xp ?? NaN;
-    game.craft('rive_stave');
-    expect(game.xp('fletching')).toBe(xp);
+    const xp = game.data.recipes.find((recipe) => recipe.id === 'split_stave')?.xp ?? NaN;
+    game.craft('split_stave');
+    expect(game.xp('splitting')).toBe(xp);
     expect(game.xp('woodcutting')).toBe(0);
     const events = await logger.readAll();
     expect(events.at(-1)).toMatchObject({
       type: 'recipe.craft',
-      data: { recipe: 'rive_stave', xp },
+      data: { recipe: 'split_stave', xp },
     });
   });
 
@@ -57,7 +57,7 @@ describe('Game', () => {
     let changes = 0;
     const stop = game.onChange(() => changes++);
     game.addItems('spear', 2, 'good');
-    game.setLevel('fletching', 5);
+    game.setLevel('splitting', 5);
     stop();
     game.addItems('log', 1);
     expect(changes).toBe(2);
@@ -66,7 +66,7 @@ describe('Game', () => {
         { item: 'log', count: 1 },
         { item: 'spear', count: 2, quality: 'good' },
       ],
-      skills: { fletching: game.xpCurve.xpForLevel(5) },
+      skills: { splitting: game.xpCurve.xpForLevel(5) },
     });
   });
 });

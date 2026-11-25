@@ -39,7 +39,7 @@ describe('Navigation', () => {
       'camp',
       'screen:runner:war_tent',
       'camp',
-      'screen:rive3d:workbench',
+      'screen:splitting3d:workbench',
       'camp',
     ]);
   });

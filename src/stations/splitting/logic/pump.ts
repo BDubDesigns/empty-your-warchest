@@ -1,4 +1,4 @@
-import type { RivingFeel } from '../../../data';
+import type { SplittingFeel } from '../../../data';
 
 /** What a pull of the handle did: a stroke drove the head in, or the last one drove it through. */
 export type PumpResult = 'stroke' | 'through';
@@ -17,13 +17,13 @@ export class Pump {
   /** Where the handle is in its stroke: 0 up, 1 all the way down. */
   handle = 0;
   through = false;
-  readonly #feel: () => RivingFeel;
+  readonly #feel: () => SplittingFeel;
   #armed = true;
   /** Where the finger has the handle at the top (pixels down from where it went down). */
   #top = 0;
 
   /** A `count`-way head, among heads making `fewest` to `most` pieces: more pieces, more strokes. */
-  constructor(feel: () => RivingFeel, count: number, fewest: number, most: number) {
+  constructor(feel: () => SplittingFeel, count: number, fewest: number, most: number) {
     this.#feel = feel;
     const { pumpsFew, pumpsMany } = feel();
     const share = most > fewest ? (count - fewest) / (most - fewest) : 0;

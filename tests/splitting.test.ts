@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   DEG,
   Pump,
-  RivingRound,
+  SplittingRound,
   bestPlan,
   cutLines,
   generateLog,
@@ -12,17 +12,17 @@ import {
   starsFor,
   survey,
   wedgesOf,
-  type RivingEvent,
-} from '../src/stations/rive';
-import type { RivingLog } from '../src/data';
+  type SplittingEvent,
+} from '../src/stations/splitting';
+import type { SplittingLog } from '../src/data';
 import { data, testLogger } from './helpers';
 
-const rules = data.riving;
+const rules = data.splitting;
 const feel = rules.feel;
 const STEP = 1 / 60;
 
 /** A plain test log, with these grains and knots. */
-function logWith(grains: RivingLog['grains'], knots: RivingLog['knots'] = []): RivingLog {
+function logWith(grains: SplittingLog['grains'], knots: SplittingLog['knots'] = []): SplittingLog {
   return { id: 'test_log', radius: 1, height: 1.6, rings: 12, grains, knots };
 }
 
@@ -239,12 +239,12 @@ describe('the pump', () => {
   });
 });
 
-describe('RivingRound', () => {
-  function setup(log: RivingLog, heads = [4, 5, 6], seed = 7) {
+describe('SplittingRound', () => {
+  function setup(log: SplittingLog, heads = [4, 5, 6], seed = 7) {
     const { logger } = testLogger();
-    const events: RivingEvent[] = [];
+    const events: SplittingEvent[] = [];
     let banked: { worth: number; staves: number } | undefined;
-    const round = new RivingRound(
+    const round = new SplittingRound(
       log,
       {
         logger,
@@ -263,7 +263,7 @@ describe('RivingRound', () => {
   }
 
   /** Strikes, then pumps the head through. */
-  function rive(round: RivingRound) {
+  function splitLog(round: SplittingRound) {
     round.strike();
     round.tick(feel.strikeSeconds + STEP);
     for (let stroke = 0; stroke < 20 && round.phase.kind === 'pump'; stroke++) {
@@ -279,7 +279,7 @@ describe('RivingRound', () => {
     round.choose(4);
     round.turnTo(0);
     expect(round.plan.worth).toBe(12);
-    rive(round);
+    splitLog(round);
     expect(round.phase.kind).toBe('done');
     const strokes = events.filter((event) => event.type === 'stroke');
     expect(strokes).toHaveLength(feel.pumpsFew - 1);
@@ -293,7 +293,7 @@ describe('RivingRound', () => {
     expect(banked()).toEqual({ worth: 12 + Math.floor(12 * bonus), staves: 4 });
     const types = (await logger.readAll()).map((event) => event.type);
     expect(types).toEqual(
-      expect.arrayContaining(['riving.logStart', 'riving.strike', 'riving.logEnd']),
+      expect.arrayContaining(['splitting.logStart', 'splitting.strike', 'splitting.logEnd']),
     );
   });
 
@@ -302,7 +302,7 @@ describe('RivingRound', () => {
     const { round, events } = setup(log);
     round.choose(round.best.count);
     round.turnTo(round.best.rotation);
-    rive(round);
+    splitLog(round);
     const done = events.find((event) => event.type === 'done');
     expect(done?.type === 'done' && done.stars).toBe(3);
     expect(done?.type === 'done' && done.plan.staves).toBe(round.best.count);
@@ -337,6 +337,6 @@ describe('RivingRound', () => {
     const { round, logger, banked } = setup(logWith([]));
     round.exit();
     expect(banked()).toBeUndefined();
-    expect((await logger.readAll()).map((event) => event.type)).toContain('riving.leave');
+    expect((await logger.readAll()).map((event) => event.type)).toContain('splitting.leave');
   });
 });

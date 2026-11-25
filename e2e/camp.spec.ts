@@ -36,7 +36,7 @@ test('every station and the chest can be entered and exited by touch', async ({ 
     const screens: Record<string, string> = {
       runner: 'three',
       woodcutting3d: 'wood3d',
-      rive: 'rive3d',
+      splitting: 'splitting3d',
     };
     const screen = screens[station.mechanic] ?? 'phaser';
     await expect(page.locator('body')).toHaveAttribute('data-screen', screen);

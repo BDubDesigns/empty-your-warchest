@@ -6,24 +6,24 @@ import { Sfx } from '../../../app/sfx';
 import { SkillBar, type XpDeposit } from '../../../app/skillBar';
 import { WarchestHud, type ScreenPoint } from '../../../app/warchestHud';
 import { Rng, type EventLogger, type Game, type LiveTuning } from '../../../core';
-import type { RivingFeel, RivingLog } from '../../../data';
+import type { SplittingFeel, SplittingLog } from '../../../data';
 import { generateLog } from '../logic/generate';
 import { DEG, inArc, markArc, openHeads, starsFor, type Plan } from '../logic/pattern';
-import { RivingRound, type RivingEvent } from '../logic/round';
+import { SplittingRound, type SplittingEvent } from '../logic/round';
 import { barkTextures, barkUvs, drawEndGrain, drawSplitGrain } from '../../../app/woodGrain';
 
-export interface Rive3DDeps {
+export interface Splitting3DDeps {
   game: Game;
   logger: EventLogger;
-  feel: LiveTuning<RivingFeel>;
+  feel: LiveTuning<SplittingFeel>;
   haptics: Haptics;
   /** Leaves the station (the end card's Back to camp). */
   onLeave: () => void;
 }
 
 const TAU = Math.PI * 2;
-/** One-time flag: the practice log has been riven. */
-const TUTORIAL = 'tutorial.riving';
+/** One-time flag: the practice log has been split. */
+const TUTORIAL = 'tutorial.splitting';
 /** The chopping block the log stands on: its height, and how much wider than the log it is. */
 const BLOCK_HEIGHT = 0.55;
 const BLOCK_SPREAD = 1.25;
@@ -85,7 +85,7 @@ const SOUNDS: Record<string, string> = Object.fromEntries(
   ].map((name) => [name, `audio/woodcutting/${name}.mp3`]),
 );
 for (const name of ['press-slam', 'press-clunk', 'press-click']) {
-  SOUNDS[name] = `audio/riving/${name}.mp3`;
+  SOUNDS[name] = `audio/splitting/${name}.mp3`;
 }
 const COLORS = {
   sky: 0xb4cfa8,
@@ -163,14 +163,14 @@ interface StaveFlight {
 }
 
 /**
- * Riving in 3D: a log stood on end on a chopping block, seen from above, split by a splitting
+ * Splitting in 3D: a log stood on end on a chopping block, seen from above, split by a splitting
  * head (a star of blades) into staves. Pick a head and turn the cuts, strike to drop the head on,
  * pump the handle to drive it through, and the log bursts into its staves (times its grains).
- * The rules (RivingRound) decide everything; this draws them and feeds them touches.
+ * The rules (SplittingRound) decide everything; this draws them and feeds them touches.
  */
-export class Rive3DView implements ScreenView {
+export class Splitting3DView implements ScreenView {
   readonly #element: HTMLElement;
-  readonly #deps: Rive3DDeps;
+  readonly #deps: Splitting3DDeps;
   readonly #renderer: THREE.WebGLRenderer;
   readonly #scene = new THREE.Scene();
   readonly #camera = new THREE.PerspectiveCamera(40, 1, 0.1, 100);
@@ -181,9 +181,9 @@ export class Rive3DView implements ScreenView {
   readonly #skillBar: SkillBar;
   readonly #skill: string;
   readonly #logRoot = new THREE.Group();
-  #ui!: ReturnType<Rive3DView['buildUi']>;
-  #round: RivingRound | undefined;
-  #log: RivingLog | undefined;
+  #ui!: ReturnType<Splitting3DView['buildUi']>;
+  #round: SplittingRound | undefined;
+  #log: SplittingLog | undefined;
   #pieces = new Map<string, PieceVisual>();
   #faceTexture: THREE.CanvasTexture | undefined;
   #faceCanvas: HTMLCanvasElement | undefined;
@@ -235,19 +235,19 @@ export class Rive3DView implements ScreenView {
   /** The staves the chest is holding back until they pour in from the heap. */
   #deposit: ReturnType<WarchestHud['hold']> | undefined;
   /** The finished log, waiting in its heap until it's time to show the card and pour. */
-  #heap: { event: Extract<RivingEvent, { type: 'done' }>; at: number } | undefined;
+  #heap: { event: Extract<SplittingEvent, { type: 'done' }>; at: number } | undefined;
 
-  private constructor(element: HTMLElement, deps: Rive3DDeps, hud: WarchestHud) {
+  private constructor(element: HTMLElement, deps: Splitting3DDeps, hud: WarchestHud) {
     this.#element = element;
     this.#deps = deps;
     this.#hud = hud;
-    const station = deps.game.data.stations.find((entry) => entry.mechanic === 'rive');
-    this.#skill = station?.skill ?? 'fletching';
+    const station = deps.game.data.stations.find((entry) => entry.mechanic === 'splitting');
+    this.#skill = station?.skill ?? 'splitting';
     this.#skillBar = new SkillBar(element, { game: deps.game, skill: this.#skill });
     this.#renderer = new THREE.WebGLRenderer({ antialias: true });
     this.#renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.#renderer.shadowMap.enabled = true;
-    this.#renderer.domElement.className = 'rv-canvas';
+    this.#renderer.domElement.className = 'sp-canvas';
     element.append(this.#renderer.domElement);
     this.#buildWorld();
     this.#ui = this.buildUi();
@@ -258,14 +258,14 @@ export class Rive3DView implements ScreenView {
     }).observe(element);
   }
 
-  static async create(element: HTMLElement, deps: Rive3DDeps): Promise<Rive3DView> {
+  static async create(element: HTMLElement, deps: Splitting3DDeps): Promise<Splitting3DView> {
     const recipe = deps.game.data.recipes.find(
-      (entry) => entry.id === deps.game.data.riving.recipe,
+      (entry) => entry.id === deps.game.data.splitting.recipe,
     );
     const item = recipe?.outputs[0]?.item;
-    if (!item) throw new Error('The riving recipe makes nothing');
+    if (!item) throw new Error('The splitting recipe makes nothing');
     const hud = await WarchestHud.create(element, { game: deps.game, item, haptics: deps.haptics });
-    return new Rive3DView(element, deps, hud);
+    return new Splitting3DView(element, deps, hud);
   }
 
   // ScreenView
@@ -288,16 +288,16 @@ export class Rive3DView implements ScreenView {
     this.#bankedXp = undefined;
     this.#heap = undefined;
     this.#deposit = undefined;
-    delete document.body.dataset.riving;
+    delete document.body.dataset.splitting;
     this.#lastPhase = '';
   }
 
   // Logs
 
-  /** A new log, if there's one in the warchest to rive: the practice log first, then random. */
+  /** A new log, if there's one in the warchest to split: the practice log first, then random. */
   #startLog(): void {
     const { game } = this.#deps;
-    const rules = game.data.riving;
+    const rules = game.data.splitting;
     const recipe = game.data.recipes.find((entry) => entry.id === rules.recipe);
     const input = recipe?.inputs[0];
     this.#ui.card.hidden = true;
@@ -314,7 +314,7 @@ export class Rive3DView implements ScreenView {
     const heads = openHeads(rules, level);
     const log = tutorial ? rules.tutorialLog : generateLog(rules, seed, heads);
     this.#log = log;
-    this.#round = new RivingRound(
+    this.#round = new SplittingRound(
       log,
       {
         logger: this.#deps.logger,
@@ -366,7 +366,7 @@ export class Rive3DView implements ScreenView {
     this.#scene.add(sun);
     // The workbench yard: grass, trodden bare round the block where the work happens.
     this.#scene.add(groundMesh('meadowGrass', 40, 40));
-    const { yard } = this.#deps.game.data.riving;
+    const { yard } = this.#deps.game.data.splitting;
     this.#scene.add(
       wornGround('troddenDirt', yard.radius * 2, yard.radius * 2, {
         cover: yard.wear,
@@ -460,7 +460,7 @@ export class Rive3DView implements ScreenView {
    * handle in the jack's socket. Sized for the tallest log, so the ram shows more on shorter ones.
    */
   #buildPress(): Press {
-    const rules = this.#deps.game.data.riving;
+    const rules = this.#deps.game.data.splitting;
     const tallest = Math.max(rules.tutorialLog.height, rules.generator.height.max);
     const frame = new THREE.MeshPhongMaterial({ color: COLORS.frame, shininess: 40 });
     const jack = new THREE.MeshPhongMaterial({ color: COLORS.jack, shininess: 70 });
@@ -619,7 +619,7 @@ export class Rive3DView implements ScreenView {
   }
 
   /** The log as one piece (the whole end face), its end grain drawn from data. */
-  #buildLog(log: RivingLog): void {
+  #buildLog(log: SplittingLog): void {
     this.#clearLog();
     this.#faceTexture = this.#drawFace(log, [], []);
     this.#addPiece({ id: 'log', start: 0, width: TAU }, new THREE.Vector3(), 0);
@@ -632,7 +632,7 @@ export class Rive3DView implements ScreenView {
    * one, green for rot); ones a struck head has cut are drawn faded and crossed out.
    */
   #drawFace(
-    log: RivingLog,
+    log: SplittingLog,
     aimed: readonly number[],
     cancelled: readonly number[],
   ): THREE.CanvasTexture {
@@ -650,7 +650,7 @@ export class Rive3DView implements ScreenView {
       y: middle - Math.sin(angle) * radius * share,
     });
     context.drawImage(this.#grainFor(log).end, 0, 0, size, size);
-    const kinds = this.#deps.game.data.riving.grainKinds;
+    const kinds = this.#deps.game.data.splitting.grainKinds;
     const wedgePath = (mark: { angle: number; width: number }) => {
       // Canvas angles run clockwise, so the face's angles are negated.
       const from = -(mark.angle + mark.width / 2) * DEG;
@@ -714,7 +714,7 @@ export class Rive3DView implements ScreenView {
    * The wood drawn for this log (its end grain, and its split face as a texture), made once per
    * log from its id, so the same log always looks the same.
    */
-  #grainFor(log: RivingLog): { end: HTMLCanvasElement; split: THREE.CanvasTexture } {
+  #grainFor(log: SplittingLog): { end: HTMLCanvasElement; split: THREE.CanvasTexture } {
     if (this.#grain?.id === log.id) return this.#grain;
     this.#grain?.split.dispose();
     let seed = 7;
@@ -728,8 +728,8 @@ export class Rive3DView implements ScreenView {
   }
 
   /** The log's grains, for its name, repeats counted: "3 Silver ×2 · Rot ×½". */
-  #grainNames(log: RivingLog): string {
-    const kinds = this.#deps.game.data.riving.grainKinds;
+  #grainNames(log: SplittingLog): string {
+    const kinds = this.#deps.game.data.splitting.grainKinds;
     const names = kinds.flatMap((kind) => {
       const count = log.grains.filter((grain) => grain.kind === kind.id).length;
       if (count === 0) return [];
@@ -843,7 +843,7 @@ export class Rive3DView implements ScreenView {
 
   // Events
 
-  #onEvent(event: RivingEvent): void {
+  #onEvent(event: SplittingEvent): void {
     const feel = this.#deps.feel.values;
     const round = this.#round;
     const log = this.#log;
@@ -914,7 +914,7 @@ export class Rive3DView implements ScreenView {
    * Through: a big hit, the wedges fly apart, and the log's worth of staves bursts out and lands
    * in a heap in front of the block, then pours into the chest.
    */
-  #burst(event: Extract<RivingEvent, { type: 'done' }>): void {
+  #burst(event: Extract<SplittingEvent, { type: 'done' }>): void {
     const feel = this.#deps.feel.values;
     const round = this.#round;
     const log = this.#log;
@@ -1134,7 +1134,7 @@ export class Rive3DView implements ScreenView {
   #lineColor(angle: number): number {
     const log = this.#log;
     if (!log) return COLORS.guide;
-    const rules = this.#deps.game.data.riving;
+    const rules = this.#deps.game.data.splitting;
     const through = log.grains.filter((grain) => {
       const arc = markArc(grain);
       return inArc(angle, arc.start, arc.width);
@@ -1268,7 +1268,7 @@ export class Rive3DView implements ScreenView {
    * `liftPx` in its last `liftMs`, the turn goes back to where it was then.
    */
   #guardLift(
-    round: RivingRound,
+    round: SplittingRound,
     recent: readonly { time: number; x: number; y: number; rotation: number }[],
     event: PointerEvent,
   ): void {
@@ -1278,7 +1278,7 @@ export class Rive3DView implements ScreenView {
     if (!before || before.rotation === round.rotation) return;
     const moved = Math.hypot(event.clientX - before.x, event.clientY - before.y);
     if (moved >= feel.liftPx) return;
-    this.#deps.logger.log('riving.liftGuard', {
+    this.#deps.logger.log('splitting.liftGuard', {
       from: Math.round(round.rotation / DEG),
       to: Math.round(before.rotation / DEG),
       moved: Math.round(moved),
@@ -1316,47 +1316,47 @@ export class Rive3DView implements ScreenView {
       element.addEventListener('click', onTap);
       return element;
     };
-    const root = el('div', 'rv-ui');
-    const logName = el('div', 'rv-log-name');
+    const root = el('div', 'sp-ui');
+    const logName = el('div', 'sp-log-name');
     // The stars this plan would earn, and what each needs.
-    const stars = el('div', 'rv-stars');
-    const starRow = el('div', 'rv-star-row');
-    const starIcons = [0, 1, 2].map(() => el('span', 'rv-star', '★'));
+    const stars = el('div', 'sp-stars');
+    const starRow = el('div', 'sp-star-row');
+    const starIcons = [0, 1, 2].map(() => el('span', 'sp-star', '★'));
     starRow.append(...starIcons);
-    const starText = el('div', 'rv-star-text');
+    const starText = el('div', 'sp-star-text');
     stars.append(starRow, starText);
-    const hint = el('div', 'rv-hint');
+    const hint = el('div', 'sp-hint');
     // The plan as a sum: staves × each grain kept (cut ones struck through) = what the log makes.
-    const sum = el('div', 'rv-sum');
-    const heads = el('div', 'rv-heads');
+    const sum = el('div', 'sp-sum');
+    const heads = el('div', 'sp-heads');
     heads.setAttribute('role', 'radiogroup');
     heads.setAttribute('aria-label', 'Splitting head');
-    const flashes = el('div', 'rv-flashes');
-    const controls = el('div', 'rv-controls');
-    const left = button('↺', 'rv-button rv-nudge', () => {
+    const flashes = el('div', 'sp-flashes');
+    const controls = el('div', 'sp-controls');
+    const left = button('↺', 'sp-button sp-nudge', () => {
       this.#round?.nudge(1);
     });
-    const strike = button('Strike', 'rv-button rv-strike', () => {
+    const strike = button('Strike', 'sp-button sp-strike', () => {
       this.#round?.strike();
     });
-    const right = button('↻', 'rv-button rv-nudge', () => {
+    const right = button('↻', 'sp-button sp-nudge', () => {
       this.#round?.nudge(-1);
     });
     left.setAttribute('aria-label', 'Turn the cuts counter-clockwise');
     right.setAttribute('aria-label', 'Turn the cuts clockwise');
     controls.append(left, strike, right);
     // The turn of the cuts, in degrees.
-    const turn = el('div', 'rv-turn');
+    const turn = el('div', 'sp-turn');
     turn.setAttribute('aria-label', 'Turn of the cuts');
-    const card = el('div', 'rv-card');
-    const cardStars = el('div', 'w3d-stars rv-card-stars');
-    const cardTitle = el('div', 'rv-card-title');
-    const cardText = el('div', 'rv-card-text');
-    const cardButtons = el('div', 'rv-card-buttons');
-    const leave = button('Back to camp', 'rv-button rv-secondary', () => {
+    const card = el('div', 'sp-card');
+    const cardStars = el('div', 'w3d-stars sp-card-stars');
+    const cardTitle = el('div', 'sp-card-title');
+    const cardText = el('div', 'sp-card-text');
+    const cardButtons = el('div', 'sp-card-buttons');
+    const leave = button('Back to camp', 'sp-button sp-secondary', () => {
       this.#deps.onLeave();
     });
-    const next = button('Next log', 'rv-button', () => {
+    const next = button('Next log', 'sp-button', () => {
       this.#hud.settle();
       this.#skillBar.settle();
       this.#startLog();
@@ -1394,7 +1394,7 @@ export class Rive3DView implements ScreenView {
   #buildPicker(level: number): void {
     const round = this.#round;
     if (!round) return;
-    const rules = this.#deps.game.data.riving;
+    const rules = this.#deps.game.data.splitting;
     const locked = rules.cutters
       .filter((cutter) => cutter.level > level)
       .sort((a, b) => a.level - b.level || a.count - b.count)[0];
@@ -1405,7 +1405,7 @@ export class Rive3DView implements ScreenView {
     const buttons = entries.map(({ count, level: needs }) => {
       const item = document.createElement('button');
       item.type = 'button';
-      item.className = `rv-head${needs === undefined ? '' : ' rv-head-locked'}`;
+      item.className = `sp-head${needs === undefined ? '' : ' sp-head-locked'}`;
       item.dataset.count = String(count);
       item.setAttribute('role', 'radio');
       item.setAttribute(
@@ -1414,12 +1414,16 @@ export class Rive3DView implements ScreenView {
           ? `${String(count)}-way head`
           : `${String(count)}-way head, opens at level ${String(needs)}`,
       );
-      item.innerHTML = `${headIcon(count)}<span class="rv-head-label">${
+      item.innerHTML = `${headIcon(count)}<span class="sp-head-label">${
         needs === undefined ? String(count) : `Lv ${String(needs)}`
       }</span>`;
       item.addEventListener('click', () => {
         if (needs !== undefined) {
-          this.#flash(`${String(count)}-way opens at Fletching ${String(needs)}`, 'warn');
+          const skill = this.#deps.game.data.skills.find((entry) => entry.id === this.#skill);
+          this.#flash(
+            `${String(count)}-way opens at ${skill?.name ?? this.#skill} ${String(needs)}`,
+            'warn',
+          );
           return;
         }
         if (this.#round?.phase.kind !== 'plan' || this.#round.count === count) return;
@@ -1440,7 +1444,7 @@ export class Rive3DView implements ScreenView {
     if (phase !== this.#lastPhase) {
       this.#lastPhase = phase;
       // Lets the e2e test follow along.
-      document.body.dataset.riving = phase;
+      document.body.dataset.splitting = phase;
     }
     if (!round) {
       ui.controls.hidden = ui.heads.hidden = ui.sum.hidden = ui.stars.hidden = true;
@@ -1455,7 +1459,7 @@ export class Rive3DView implements ScreenView {
     ui.stars.hidden = kind === 'done';
     const plan = round.plan;
     this.#showPlan(plan);
-    const practice = this.#log?.id === this.#deps.game.data.riving.tutorialLog.id;
+    const practice = this.#log?.id === this.#deps.game.data.splitting.tutorialLog.id;
     const hints: Record<string, string> = {
       plan: practice
         ? 'Drag the log to turn the cuts: run one through the rot, keep the silver whole'
@@ -1514,16 +1518,16 @@ export class Rive3DView implements ScreenView {
     this.#planKey = key;
     const ui = this.#ui;
     if (round.phase.kind === 'plan') this.#drawFace(log, plan.cut, []);
-    for (const item of ui.heads.querySelectorAll<HTMLElement>('.rv-head')) {
+    for (const item of ui.heads.querySelectorAll<HTMLElement>('.sp-head')) {
       const on = item.dataset.count === String(plan.count);
-      if (on && !item.classList.contains('rv-head-on')) {
+      if (on && !item.classList.contains('sp-head-on')) {
         item.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
       }
-      item.classList.toggle('rv-head-on', on);
+      item.classList.toggle('sp-head-on', on);
       item.setAttribute('aria-checked', String(on));
     }
     // The sum: kept grains multiply; cut ones are struck through (green for rot, red for good).
-    const kinds = this.#deps.game.data.riving.grainKinds;
+    const kinds = this.#deps.game.data.splitting.grainKinds;
     const parts: HTMLElement[] = [];
     const span = (className: string, text: string) => {
       const part = document.createElement('span');
@@ -1531,20 +1535,20 @@ export class Rive3DView implements ScreenView {
       part.textContent = text;
       return part;
     };
-    parts.push(span('rv-sum-staves', `${String(plan.staves)} staves`));
+    parts.push(span('sp-sum-staves', `${String(plan.staves)} staves`));
     const kept = plan.kept.map((entry) => entry.grain);
     log.grains.forEach((grain, index) => {
       const kind = kinds.find((entry) => entry.id === grain.kind);
       if (!kind) return;
       const isCut = plan.cut.includes(index);
       if (!isCut && !kept.includes(index)) return;
-      const tone = isCut ? (kind.multiplier < 1 ? ' rv-sum-cut-good' : ' rv-sum-cut-bad') : '';
-      parts.push(span(`rv-sum-factor rv-sum-${grain.kind}${tone}`, `×${times(kind.multiplier)}`));
+      const tone = isCut ? (kind.multiplier < 1 ? ' sp-sum-cut-good' : ' sp-sum-cut-bad') : '';
+      parts.push(span(`sp-sum-factor sp-sum-${grain.kind}${tone}`, `×${times(kind.multiplier)}`));
     });
-    parts.push(span('rv-sum-equals', '='));
-    const total = span('rv-sum-total', String(plan.worth));
+    parts.push(span('sp-sum-equals', '='));
+    const total = span('sp-sum-total', String(plan.worth));
     if (worthBefore >= 0 && plan.worth !== worthBefore) {
-      total.classList.add(plan.worth > worthBefore ? 'rv-sum-up' : 'rv-sum-down');
+      total.classList.add(plan.worth > worthBefore ? 'sp-sum-up' : 'sp-sum-down');
     }
     parts.push(total);
     const product = kept.reduce(
@@ -1552,18 +1556,18 @@ export class Rive3DView implements ScreenView {
         value * (kinds.find((entry) => entry.id === log.grains[index]?.kind)?.multiplier ?? 1),
       1,
     );
-    if (product > plan.multiplier) parts.push(span('rv-sum-cap', `cap ×${times(plan.multiplier)}`));
+    if (product > plan.multiplier) parts.push(span('sp-sum-cap', `cap ×${times(plan.multiplier)}`));
     ui.sum.replaceChildren(...parts);
     // Stars for this plan.
-    const stars = starsFor(this.#deps.game.data.riving, plan.worth, round.best.worth);
+    const stars = starsFor(this.#deps.game.data.splitting, plan.worth, round.best.worth);
     ui.starIcons.forEach((icon, index) => {
       const on = index < stars;
-      icon.classList.toggle('rv-star-on', on);
+      icon.classList.toggle('sp-star-on', on);
       if (on && index >= this.#starsShown) {
-        icon.classList.remove('rv-star-pop');
+        icon.classList.remove('sp-star-pop');
         // Reading the layout restarts the pop.
         icon.getBoundingClientRect();
-        icon.classList.add('rv-star-pop');
+        icon.classList.add('sp-star-pop');
       }
     });
     if (stars > this.#starsShown && round.phase.kind === 'plan') {
@@ -1582,12 +1586,12 @@ export class Rive3DView implements ScreenView {
    * The end card: the stars, what went into the warchest, the sum, any bonus, and the best this
    * log could have made.
    */
-  #showCard(event: Extract<RivingEvent, { type: 'done' }>): void {
+  #showCard(event: Extract<SplittingEvent, { type: 'done' }>): void {
     const log = this.#log;
     if (!log) return;
     const ui = this.#ui;
     const { plan, best, stars, bonus, banked } = event;
-    const kinds = this.#deps.game.data.riving.grainKinds;
+    const kinds = this.#deps.game.data.splitting.grainKinds;
     ui.cardStars.replaceChildren(
       ...[0, 1, 2].map((index) => {
         const star = document.createElement('span');
@@ -1628,7 +1632,7 @@ export class Rive3DView implements ScreenView {
     const ui = this.#ui;
     ui.cardStars.replaceChildren();
     ui.cardTitle.textContent = 'No logs';
-    ui.cardText.textContent = 'The warchest has no logs to rive. Fell some at the tree line.';
+    ui.cardText.textContent = 'The warchest has no logs to split. Fell some at the tree line.';
     ui.next.hidden = true;
     ui.card.hidden = false;
     ui.logName.textContent = '';
@@ -1636,7 +1640,7 @@ export class Rive3DView implements ScreenView {
 
   #flash(message: string, tone: 'good' | 'bad' | 'warn'): void {
     const flash = document.createElement('div');
-    flash.className = `rv-flash rv-${tone}`;
+    flash.className = `sp-flash sp-${tone}`;
     flash.textContent = message;
     this.#ui.flashes.append(flash);
     window.setTimeout(() => {
@@ -1653,7 +1657,7 @@ function headIcon(count: number): string {
     const y = (20 + Math.sin(angle) * 17).toFixed(2);
     return `<line x1="20" y1="20" x2="${x}" y2="${y}"/>`;
   }).join('');
-  return `<svg class="rv-head-icon" viewBox="0 0 40 40" aria-hidden="true"><circle class="rv-head-bark" cx="20" cy="20" r="18"/><circle class="rv-head-wood" cx="20" cy="20" r="15.5"/><circle class="rv-head-ring" cx="20" cy="20" r="10"/><g class="rv-head-cuts">${lines}</g><circle class="rv-head-hub" cx="20" cy="20" r="3"/></svg>`;
+  return `<svg class="sp-head-icon" viewBox="0 0 40 40" aria-hidden="true"><circle class="sp-head-bark" cx="20" cy="20" r="18"/><circle class="sp-head-wood" cx="20" cy="20" r="15.5"/><circle class="sp-head-ring" cx="20" cy="20" r="10"/><g class="sp-head-cuts">${lines}</g><circle class="sp-head-hub" cx="20" cy="20" r="3"/></svg>`;
 }
 
 /** A multiplier or bonus for show: ½ for a half, whole numbers as they are. */
