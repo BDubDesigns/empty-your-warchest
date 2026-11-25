@@ -1264,6 +1264,8 @@ export class Firemaking3DView implements ScreenView {
       done: '',
     };
     ui.hint.textContent = hints[phase] ?? '';
+    // While it cooks the hint moves up top, clear of the handle.
+    ui.hint.dataset.phase = phase;
     // The grab ring round the handle while it cooks.
     const cooking = phase === 'cook';
     ui.grab.hidden = !cooking;

@@ -1837,6 +1837,11 @@ body:not([data-view='camp']) #build-label {
   text-shadow: 0 1px 3px rgb(0 0 0 / 0.8);
 }
 
+.fm-hint[data-phase='cook'] {
+  top: calc(var(--safe-top) + 112px);
+  bottom: auto;
+}
+
 /*
  * The heat under each stave, like an equalizer: a bar per stave, the gold band that hardens
  * together, and a mark under each bar for how it would come out at the best pull (a tick, an
