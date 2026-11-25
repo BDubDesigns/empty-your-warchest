@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { groundMesh } from '../../../app/ground';
 import type { ScreenView } from '../../../app/screen';
 import type { Haptics } from '../../../app/haptics';
 import { Sfx } from '../../../app/sfx';
@@ -40,6 +41,9 @@ const HANDLE_SWING = 50 * DEG;
 const HANDLE_GIVE = 0.35;
 /** The least gap between the handle and the top of the log, at the bottom of the last stroke. */
 const HANDLE_CLEARANCE = 0.15;
+/** The handle's arm, pivot to grip, and how far the grip hangs below the arm (its radius too). */
+const HANDLE_LENGTH = 1.5;
+const GRIP_DROP = 0.11;
 /** How wide the cut lines are drawn (world units): thin, so you can see where they cross. */
 const GUIDE_WIDTH = 0.025;
 /** Staves drawn in the burst (past this many, the count says the rest), stacked this many wide. */
@@ -63,7 +67,6 @@ const SOUNDS: Record<string, string> = Object.fromEntries(
 );
 const COLORS = {
   sky: 0xb4cfa8,
-  ground: 0x6b8f4e,
   /** Tints over the bark photo (warmer for the log, darker and older for the block). */
   bark: 0xe2c6a6,
   blockBark: 0xa08a74,
@@ -168,8 +171,12 @@ export class Rive3DView implements ScreenView {
           | undefined;
       }
     | undefined;
-  /** The turn last shown, and when it last ticked, for the detent tick on each step. */
+  /**
+   * The turn last shown and when it last clicked (a click each step), and the head and grains
+   * cut then (a buzz when turning changes which grains are cut).
+   */
   #shownTurn: number | undefined;
+  #shownCut: string | undefined;
   #tickedAt = 0;
   /** The head's depth into the log as drawn (0–1), easing from one notch to the next. */
   #drive = { from: 0, to: 0, at: 0 };
@@ -283,7 +290,7 @@ export class Rive3DView implements ScreenView {
       this.#lastHead ?? heads[heads.length - 1],
     );
     this.#drive = { from: 0, to: 0, at: 0 };
-    this.#shownTurn = undefined;
+    this.#shownTurn = this.#shownCut = undefined;
     this.#planKey = '';
     this.#starsShown = 0;
     this.#buildLog(log);
@@ -309,13 +316,8 @@ export class Rive3DView implements ScreenView {
     sun.castShadow = true;
     sun.shadow.mapSize.set(1024, 1024);
     this.#scene.add(sun);
-    const ground = new THREE.Mesh(
-      new THREE.PlaneGeometry(40, 40),
-      new THREE.MeshLambertMaterial({ color: COLORS.ground }),
-    );
-    ground.rotation.x = -Math.PI / 2;
-    ground.receiveShadow = true;
-    this.#scene.add(ground);
+    // The workbench yard: trodden earth where the work happens.
+    this.#scene.add(groundMesh('troddenDirt', 40, 40));
     this.#scene.add(this.#buildBlock());
     this.#logRoot.position.y = BLOCK_HEIGHT;
     this.#scene.add(this.#logRoot);
@@ -416,8 +418,9 @@ export class Rive3DView implements ScreenView {
       root.add(blade);
     }
     // The handle pivots high enough that, swung all the way down with the head sunk all the way
-    // in, it still clears the top of the log out to the bark.
-    const pivot = Math.sin(HANDLE_SWING) * radius * 1.05 + HEAD_SINK + HANDLE_CLEARANCE;
+    // in, the whole of it (grip and all) stays above the top of the log: past the bark it would
+    // otherwise drop beside the log and look like it goes into the wood.
+    const pivot = Math.sin(HANDLE_SWING) * HANDLE_LENGTH + GRIP_DROP + HEAD_SINK + HANDLE_CLEARANCE;
     const post = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.06, pivot - 0.22, 10), dark);
     post.position.y = (0.22 + pivot) / 2;
     root.add(post);
@@ -427,14 +430,14 @@ export class Rive3DView implements ScreenView {
     yaw.position.y = pivot;
     const arm = new THREE.Group();
     yaw.add(arm);
-    const bar = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 1.5, 8), dark);
+    const bar = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, HANDLE_LENGTH, 8), dark);
     bar.rotation.x = Math.PI / 2;
-    bar.position.z = 0.75;
+    bar.position.z = HANDLE_LENGTH / 2;
     const grip = new THREE.Mesh(
       new THREE.CylinderGeometry(0.07, 0.07, 0.32, 10),
       new THREE.MeshLambertMaterial({ color: COLORS.handle }),
     );
-    grip.position.set(0, -0.04, 1.5);
+    grip.position.set(0, -0.04, HANDLE_LENGTH);
     arm.add(bar, grip);
     root.add(yaw);
     root.traverse((child) => {
@@ -1289,24 +1292,32 @@ export class Rive3DView implements ScreenView {
     const phaseNow = round.phase;
     const pump = phaseNow.kind === 'pump' ? phaseNow.pump : undefined;
     const degrees = Math.round(round.rotation / DEG);
-    if (planning) this.#showTurn(degrees);
+    if (planning) this.#showTurn(degrees, plan);
     this.#element.dataset.head = String(round.count);
     this.#element.dataset.turn = String(degrees);
     this.#element.dataset.worth = String(plan.worth);
     this.#element.dataset.progress = pump ? pump.progress.toFixed(2) : '';
   }
 
-  /** The degrees readout, and a detent tick (a tap of vibration) for each step the cuts turn. */
-  #showTurn(degrees: number): void {
+  /**
+   * The degrees readout and a soft click for each step the cuts turn, and a buzz only when the
+   * turn changes what's cut: a line starting or stopping cutting a grain (not every step, and
+   * not when picking another head).
+   */
+  #showTurn(degrees: number, plan: Plan): void {
+    const feel = this.#deps.feel.values;
+    const cut = `${String(plan.count)}|${plan.cut.join(',')}`;
+    const turned = this.#shownTurn !== undefined && degrees !== this.#shownTurn;
+    const sameHead = this.#shownCut?.startsWith(`${String(plan.count)}|`) === true;
+    if (turned && sameHead && cut !== this.#shownCut) this.#deps.haptics.pulse(feel.buzzCutMs);
+    this.#shownCut = cut;
     if (degrees === this.#shownTurn) return;
     const first = this.#shownTurn === undefined;
     this.#shownTurn = degrees;
     this.#ui.turn.textContent = `${String(degrees)}°`;
-    const feel = this.#deps.feel.values;
     const now = performance.now();
     if (first || now - this.#tickedAt < feel.tickGapMs) return;
     this.#tickedAt = now;
-    this.#deps.haptics.pulse(feel.buzzTickMs);
     this.#play('chop-1', 0.06, 1500);
   }
 

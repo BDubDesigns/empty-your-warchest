@@ -73,7 +73,7 @@ export const riving = {
     strikeSeconds: 0.22,
     hitStopMs: 70,
     shakeStrength: 1,
-    buzzTickMs: 4,
+    buzzCutMs: 6,
     tickGapMs: 35,
     liftMs: 120,
     liftPx: 8,

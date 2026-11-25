@@ -329,11 +329,12 @@ export const rivingFeelSchema = z.object({
   hitStopMs: nonNegative,
   shakeStrength: nonNegative,
   /**
-   * Turning the cuts: a tick of vibration (ms) for each step of turn, at most one every
-   * `tickGapMs`. A finger that moved under `liftPx` in its last `liftMs` before lifting was
-   * holding still: the turn goes back to where it was, so lifting off can't nudge it.
+   * Turning the cuts: a buzz (ms) when turning makes a line start or stop cutting a grain, and a
+   * soft click for each step of turn, at most one every `tickGapMs`. A finger that moved under
+   * `liftPx` in its last `liftMs` before lifting was holding still: the turn goes back to where
+   * it was, so lifting off can't nudge it.
    */
-  buzzTickMs: nonNegative,
+  buzzCutMs: nonNegative,
   tickGapMs: nonNegative,
   liftMs: nonNegative,
   liftPx: nonNegative,
