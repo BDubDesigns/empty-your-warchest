@@ -1823,6 +1823,58 @@ body:not([data-view='camp']) #build-label {
   display: none !important;
 }
 
+/* The rack sizes: one per size open, and the next one locked with the level it opens at. */
+.fm-sizes {
+  position: absolute;
+  top: calc(var(--safe-top) + 100px);
+  left: 0;
+  right: 0;
+  display: flex;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 12px;
+}
+
+.fm-size {
+  display: grid;
+  justify-items: center;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 3px 4px;
+  border: 2px solid transparent;
+  border-radius: 12px;
+  background: rgb(22 14 10 / 0.62);
+  color: var(--fg);
+  touch-action: manipulation;
+}
+
+.fm-size:active {
+  transform: scale(0.92);
+}
+
+.fm-size[aria-checked='true'] {
+  border-color: #f39a3b;
+  background: rgb(80 34 12 / 0.8);
+  box-shadow: 0 0 10px rgb(243 154 59 / 0.5);
+}
+
+.fm-size-locked {
+  opacity: 0.55;
+}
+
+.fm-size-count {
+  font:
+    800 17px system-ui,
+    sans-serif;
+}
+
+.fm-size-label {
+  font:
+    600 10px system-ui,
+    sans-serif;
+  color: var(--muted);
+}
+
 .fm-streak {
   position: absolute;
   top: calc(var(--safe-top) + 66px);
@@ -1875,7 +1927,8 @@ body:not([data-view='camp']) #build-label {
   position: relative;
   display: grid;
   grid-template-columns: repeat(var(--fm-columns, 6), 1fr);
-  gap: 8px;
+  /* Tighter as the rack grows: 8px between 6 bars, about 3px between 18. */
+  gap: clamp(2px, calc(48px / var(--fm-columns, 6)), 8px);
 }
 
 .fm-heat-bars {
@@ -1949,16 +2002,19 @@ body:not([data-view='camp']) #build-label {
   bottom: calc(var(--safe-bottom) + 108px);
   transform: translateX(-50%);
   display: flex;
-  gap: 10px;
+  gap: clamp(4px, calc(30px / var(--fm-spots, 3)), 10px);
   width: var(--fm-width);
 }
 
 .fm-spot {
   flex: 1;
+  min-width: 0;
   display: flex;
+  flex-wrap: wrap;
+  align-content: center;
   align-items: center;
   justify-content: center;
-  gap: 6px;
+  gap: 4px 6px;
   min-height: 60px;
   border: 2px dashed rgb(255 196 140 / 0.55);
   border-radius: 14px;
@@ -1981,7 +2037,7 @@ body:not([data-view='camp']) #build-label {
 }
 
 .fm-log {
-  width: 30px;
+  width: min(30px, 80%);
   height: 14px;
   border-radius: 7px;
   border: 2px solid rgb(255 255 255 / 0.25);

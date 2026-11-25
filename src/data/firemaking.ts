@@ -4,20 +4,35 @@ import type { GameDataInput } from './schema';
 export const firemaking = {
   recipe: 'harden_spear',
   fuel: 'log',
-  // The starting setup (Brandon, Nov 24): 3 spots under 6 staves, 2 logs a spot.
-  rack: { staves: 6, spots: 3, maxLogs: 2 },
-  stars: { twoMissed: 2 },
+  // The starting setup (Brandon, Nov 24): 3 spots under 6 staves, 2 logs a spot. Then a spot and
+  // 2 staves more every 5 levels up to 9 spots (18 staves) at 30 (Brandon, Nov 25); past 30 the
+  // puzzle grows other ways (other woods). Bigger fires take more logs to even out.
+  rack: {
+    stavesPerSpot: 2,
+    maxLogs: 2,
+    sizes: [
+      { spots: 3, level: 1, answerLogs: { min: 2, max: 4 } },
+      { spots: 4, level: 5, answerLogs: { min: 2, max: 5 } },
+      { spots: 5, level: 10, answerLogs: { min: 3, max: 6 } },
+      { spots: 6, level: 15, answerLogs: { min: 3, max: 7 } },
+      { spots: 7, level: 20, answerLogs: { min: 4, max: 8 } },
+      { spots: 8, level: 25, answerLogs: { min: 4, max: 9 } },
+      { spots: 9, level: 30, answerLogs: { min: 5, max: 10 } },
+    ],
+  },
+  // Up to a third of a layer missed is still 2 stars (2 of the starting 6).
+  stars: { twoMissedShare: 0.34 },
   // The same as woodcutting's and splitting's.
   starBonus: { two: 0.1, three: 0.25 },
   generator: {
     flat: 10,
-    // A bit lumpy: a few logs' worth taken off, so a fire needs 2–4 logs to even out.
-    answerLogs: { min: 2, max: 4 },
     noise: 0.3,
     minHeat: 3,
     // The answer's pull window is at least this long (seconds): readable, not a twitch test.
     minWindow: 0.8,
     tries: 40,
+    // 3^6 = 729 fuelings to search; 9 spots would be 19,683 every rack.
+    searchSpots: 6,
   },
   yard: { radius: 2.6, wear: 0.7 },
   feel: {

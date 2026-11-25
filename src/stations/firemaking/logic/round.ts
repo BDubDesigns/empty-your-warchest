@@ -10,6 +10,8 @@ import {
   type BestPull,
   type Finish,
   type Fire,
+  type FireRules,
+  type Rack,
 } from './fire';
 
 export type FiremakingPhase =
@@ -26,6 +28,8 @@ export interface RackResult {
   hardened: number;
   under: number;
   charred: number;
+  /** The rack's fuel spots. */
+  spots: number;
   /** Stars, from the bottom layer (the ones above cook just the same), and their bonus spears. */
   stars: number;
   bonus: number;
@@ -69,6 +73,9 @@ export interface FiremakingHooks {
  */
 export class FiremakingRound {
   readonly fire: Fire;
+  /** The rack's size, and the rules its fire follows. */
+  readonly rack: Rack;
+  readonly #fireRules: FireRules;
   /** Staves on the rack (up to `layers` full rows), and how deep it's stacked. */
   readonly staves: number;
   readonly layers: number;
@@ -81,21 +88,38 @@ export class FiremakingRound {
   #cooking: { heats: number[]; feel: FiremakingFeel } | undefined;
   #fuelTaps = 0;
 
-  constructor(fire: Fire, hooks: FiremakingHooks, staves: number, layers: number) {
+  constructor(
+    fire: Fire,
+    rules: FireRules,
+    hooks: FiremakingHooks,
+    staves: number,
+    layers: number,
+  ) {
     if (staves < 1) throw new Error('A rack needs at least one stave');
     this.fire = fire;
+    this.rack = rules.rack;
+    this.#fireRules = rules;
     this.staves = staves;
     this.layers = layers;
     this.#hooks = hooks;
-    this.logs = new Array<number>(hooks.rules.rack.spots).fill(0);
+    this.logs = new Array<number>(rules.rack.spots).fill(0);
     const feel = hooks.feel();
-    const answers = fullRackAnswers(hooks.rules, feel, fire);
+    const answerWindow = bestPull(rules, feel, heatWith(rules, feel, fire, fire.answer)).window;
+    // Every full-rack answer, on racks small enough to search.
+    const answers =
+      rules.rack.spots <= rules.generator.searchSpots
+        ? fullRackAnswers(rules, feel, fire)
+        : undefined;
     this.#log('firemaking.rackStart', {
       seed: fire.seed,
+      spots: rules.rack.spots,
       base: fire.base.map(round2),
       answer: fire.answer,
-      answers: answers.length,
-      bestWindow: round2(answers[0]?.window ?? 0),
+      answerWindow: round2(answerWindow),
+      ...(answers && {
+        answers: answers.length,
+        bestWindow: round2(answers[0]?.window ?? 0),
+      }),
       staves,
       layers,
       logsAvailable: hooks.logsAvailable,
@@ -113,12 +137,12 @@ export class FiremakingRound {
 
   /** Staves along one layer of the rack. */
   get columns(): number {
-    return this.rules.rack.staves;
+    return this.rack.staves;
   }
 
   /** The heat under each stave of a layer: as planned, or as it was when the rack went on. */
   get heats(): number[] {
-    return this.#cooking?.heats ?? heatWith(this.rules, this.feel, this.fire, this.logs);
+    return this.#cooking?.heats ?? heatWith(this.#fireRules, this.feel, this.fire, this.logs);
   }
 
   /** The best pull for the fuel as it stands: the live preview. */
@@ -151,7 +175,7 @@ export class FiremakingRound {
     if (this.phase.kind !== 'plan' || spot < 0 || spot >= this.logs.length) return;
     const now = this.logs[spot] ?? 0;
     const spare = this.#hooks.logsAvailable - this.logsPlaced;
-    const next = now < this.rules.rack.maxLogs && spare > 0 ? now + 1 : 0;
+    const next = now < this.rack.maxLogs && spare > 0 ? now + 1 : 0;
     this.logs[spot] = next;
     this.#fuelTaps += 1;
     this.#hooks.onEvent?.({ type: 'fuel', spot, logs: next });
@@ -161,12 +185,13 @@ export class FiremakingRound {
   lay(): void {
     if (this.phase.kind !== 'plan') return;
     const feel = { ...this.#hooks.feel() };
-    const heats = heatWith(this.rules, feel, this.fire, this.logs);
+    const heats = heatWith(this.#fireRules, feel, this.fire, this.logs);
     const preview = bestPull(this.rules, feel, heats);
     this.#cooking = { heats, feel };
     if (this.logsPlaced > 0) this.#hooks.burn(this.logsPlaced);
     this.#log('firemaking.lay', {
       seed: this.fire.seed,
+      spots: this.rack.spots,
       logs: [...this.logs],
       logsUsed: this.logsPlaced,
       answer: this.fire.answer,
@@ -222,7 +247,7 @@ export class FiremakingRound {
     const charred = count('charred');
     const bottom = finishes.slice(0, this.columns);
     const missed = bottom.filter((finish) => finish !== 'hardened').length;
-    const stars = starsFor(this.rules, missed);
+    const stars = starsFor(this.rules, missed, this.columns);
     const bonus = starBonusSpears(this.rules, hardened, stars);
     this.phase = { kind: 'done' };
     const banked = this.#hooks.bank(hardened, charred, bonus);
@@ -231,6 +256,7 @@ export class FiremakingRound {
       hardened,
       under,
       charred,
+      spots: this.rack.spots,
       stars,
       bonus,
       seconds,
@@ -240,6 +266,7 @@ export class FiremakingRound {
     };
     this.#log('firemaking.rackEnd', {
       seed: this.fire.seed,
+      spots: this.rack.spots,
       staves: this.staves,
       layers: this.layers,
       hardened,
@@ -265,10 +292,14 @@ export class FiremakingRound {
   }
 }
 
-/** Stars for a rack with `missed` staves (in a layer) that didn't harden. */
-export function starsFor(rules: Pick<Firemaking, 'stars'>, missed: number): number {
+/** Stars for a rack with `missed` of a layer's `columns` staves that didn't harden. */
+export function starsFor(
+  rules: Pick<Firemaking, 'stars'>,
+  missed: number,
+  columns: number,
+): number {
   if (missed <= 0) return 3;
-  return missed <= rules.stars.twoMissed ? 2 : 1;
+  return missed <= columns * rules.stars.twoMissedShare ? 2 : 1;
 }
 
 /** Bonus spears for a rack's stars: a share of the spears hardened, none below 2 stars. */

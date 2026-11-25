@@ -25,12 +25,52 @@ export interface BestPull {
   window: number;
 }
 
-type Rules = Pick<Firemaking, 'rack' | 'generator'>;
+/**
+ * One size of rack: fuel spots under it, staves along it (the same number over each spot), logs a
+ * spot holds, and how many logs its fires take to even out.
+ */
+export interface Rack {
+  spots: number;
+  staves: number;
+  maxLogs: number;
+  answerLogs: { min: number; max: number };
+}
+
+/** What a fire needs to know: its rack's size and the generator. */
+export interface FireRules {
+  rack: Rack;
+  generator: Firemaking['generator'];
+}
+
+type Rules = FireRules;
 type Heat = Pick<FiremakingFeel, 'heatPerLog' | 'spill'>;
 type Cook = Pick<FiremakingFeel, 'cookSeconds' | 'charRatio'>;
 
+/** The rack sizes (fuel spots) open at a Firemaking level, smallest first. */
+export function openRacks(rules: Pick<Firemaking, 'rack'>, level: number): number[] {
+  return rules.rack.sizes
+    .filter((size) => size.level <= level)
+    .map((size) => size.spots)
+    .sort((a, b) => a - b);
+}
+
+/** The fire rules for a rack of `spots` fuel spots (one of the sizes in data). */
+export function rackRules(rules: Pick<Firemaking, 'rack' | 'generator'>, spots: number): FireRules {
+  const size = rules.rack.sizes.find((entry) => entry.spots === spots);
+  if (!size) throw new Error(`No ${String(spots)}-spot rack in data`);
+  return {
+    rack: {
+      spots,
+      staves: spots * rules.rack.stavesPerSpot,
+      maxLogs: rules.rack.maxLogs,
+      answerLogs: size.answerLogs,
+    },
+    generator: rules.generator,
+  };
+}
+
 /** The staves (by index along the rack) over spot `spot`. */
-export function stavesOver(rules: Pick<Firemaking, 'rack'>, spot: number): number[] {
+export function stavesOver(rules: Pick<FireRules, 'rack'>, spot: number): number[] {
   const per = rules.rack.staves / rules.rack.spots;
   return Array.from({ length: per }, (_, index) => spot * per + index);
 }
@@ -40,7 +80,7 @@ export function stavesOver(rules: Pick<Firemaking, 'rack'>, spot: number): numbe
  * spill `spill` each onto the nearest stave either side (the next spot's edge), so warming one spot
  * warms its neighbours a little and the whole fire has to be planned.
  */
-export function fuelHeat(rules: Pick<Firemaking, 'rack'>, heat: Heat, logs: readonly number[]) {
+export function fuelHeat(rules: Pick<FireRules, 'rack'>, heat: Heat, logs: readonly number[]) {
   const added = new Array<number>(rules.rack.staves).fill(0);
   logs.forEach((count, spot) => {
     if (count <= 0) return;
@@ -59,7 +99,7 @@ export function fuelHeat(rules: Pick<Firemaking, 'rack'>, heat: Heat, logs: read
 
 /** The heat under each stave with `logs` in the spots. */
 export function heatWith(
-  rules: Pick<Firemaking, 'rack'>,
+  rules: Pick<FireRules, 'rack'>,
   heat: Heat,
   fire: Pick<Fire, 'base'>,
   logs: readonly number[],
@@ -122,7 +162,7 @@ export function bestPull(
 }
 
 /** Every way to fill the spots (0 to `maxLogs` logs each). */
-export function allFuelings(rules: Pick<Firemaking, 'rack'>): number[][] {
+export function allFuelings(rules: Pick<FireRules, 'rack'>): number[][] {
   const { spots, maxLogs } = rules.rack;
   let result: number[][] = [[]];
   for (let spot = 0; spot < spots; spot++) {
@@ -135,7 +175,8 @@ export function allFuelings(rules: Pick<Firemaking, 'rack'>): number[][] {
 
 /**
  * The fuelings that harden the whole rack, with the pull window each gives, longest first. Used
- * to check fires and for the log.
+ * to check fires and for the log. It tries every fueling, threefold more a spot: keep it to small
+ * racks (`generator.searchSpots`).
  */
 export function fullRackAnswers(
   rules: Rules,
@@ -186,11 +227,11 @@ export function generateFire(rules: Rules, feel: Heat & Cook, seed: number): Fir
   return { seed, base: new Array<number>(rack.staves).fill(generator.flat), answer };
 }
 
-/** A random fueling with between `answerLogs.min` and `answerLogs.max` logs, spots capped. */
+/** A random fueling with between the rack's `answerLogs.min` and `.max` logs, spots capped. */
 function randomAnswer(rules: Rules, rng: Rng): number[] {
-  const { rack, generator } = rules;
+  const { rack } = rules;
   const logs = new Array<number>(rack.spots).fill(0);
-  const total = rng.int(generator.answerLogs.min, generator.answerLogs.max);
+  const total = rng.int(rack.answerLogs.min, rack.answerLogs.max);
   for (let placed = 0; placed < total;) {
     const spot = rng.int(0, rack.spots - 1);
     if ((logs[spot] ?? 0) >= rack.maxLogs) continue;

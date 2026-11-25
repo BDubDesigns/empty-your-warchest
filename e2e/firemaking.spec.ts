@@ -1,6 +1,9 @@
 import { expect, test, type Page } from '@playwright/test';
 import { skills } from '../src/data/skills';
+import { firemaking } from '../src/data/firemaking';
 import { stations } from '../src/data/stations';
+import { tuning } from '../src/data/tuning';
+import { XpCurve } from '../src/core/xp';
 
 // CI draws 3D in software: a pixel ratio of 1 keeps it fast enough (this tests the flow, not the
 // pixels).
@@ -8,11 +11,15 @@ test.use({ deviceScaleFactor: 1 });
 
 const pit = stations.find((station) => station.mechanic === 'firemaking');
 
-/** Opens the fire pit with `staves` staves and `logs` logs in the warchest. */
-async function openFirePit(page: Page, staves: number, logs: number) {
+/**
+ * Opens the fire pit with `staves` staves and `logs` logs in the warchest, at `firemakingXp`.
+ */
+async function openFirePit(page: Page, staves: number, logs: number, firemakingXp = 0) {
   if (!pit) throw new Error('No firemaking station in data');
-  // Every skill in data at 0, so the save fits the data and isn't discarded.
-  const xp = Object.fromEntries(skills.map((skill) => [skill.id, 0]));
+  // Every skill in data, so the save fits the data and isn't discarded.
+  const xp = Object.fromEntries(
+    skills.map((skill) => [skill.id, skill.id === pit.skill ? firemakingXp : 0]),
+  );
   await page.addInitScript(
     ({ staves, logs, xp }) => {
       const inventory = [
@@ -80,4 +87,26 @@ test('hardens a rack of staves into spears that land in the chest', async ({ pag
 test('with no staves the fire pit says so', async ({ page }) => {
   await openFirePit(page, 0, 4);
   await expect(page.locator('.fm-card')).toContainText('No staves', { timeout: 20_000 });
+});
+
+test('a level up opens a bigger rack, and a smaller one can still be picked', async ({ page }) => {
+  const second = firemaking.rack.sizes[1];
+  if (!second) throw new Error('Only one rack size in data');
+  const xp = new XpCurve(tuning.xpCurve).xpForLevel(second.level);
+  await openFirePit(page, 30, 4, xp);
+  await expect(page.locator('body')).toHaveAttribute('data-firemaking', 'plan', {
+    timeout: 20_000,
+  });
+  // The biggest open size is the default.
+  const spots = page.locator('.fm-spot');
+  await expect(spots).toHaveCount(second.spots);
+  const first = firemaking.rack.sizes[0];
+  if (!first) throw new Error('No rack sizes in data');
+  const smaller = page.getByRole('radio', {
+    name: `${String(first.spots * firemaking.rack.stavesPerSpot)}-stave rack`,
+    exact: true,
+  });
+  await smaller.tap();
+  await expect(spots).toHaveCount(first.spots);
+  await expect(smaller).toHaveAttribute('aria-checked', 'true');
 });

@@ -83,15 +83,25 @@ function checkReferences(data: GameData, ctx: z.RefinementCtx): void {
   if (!itemIds.has(firemaking.fuel)) {
     issue(['firemaking', 'fuel'], `Unknown item "${firemaking.fuel}"`);
   }
-  if (firemaking.rack.staves % firemaking.rack.spots !== 0) {
-    issue(['firemaking', 'rack'], 'Every fuel spot must sit under the same number of staves');
+  const sizes = firemaking.rack.sizes;
+  if (!sizes.some((size) => size.level === 1)) {
+    issue(['firemaking', 'rack', 'sizes'], 'At least one rack size must be open from level 1');
   }
-  if (firemaking.generator.answerLogs.min > firemaking.generator.answerLogs.max) {
-    issue(['firemaking', 'generator', 'answerLogs'], 'min must not be more than max');
-  }
-  if (firemaking.generator.answerLogs.max > firemaking.rack.spots * firemaking.rack.maxLogs) {
-    issue(['firemaking', 'generator', 'answerLogs', 'max'], 'More logs than the spots can hold');
-  }
+  sizes.forEach((size, index) => {
+    const before = sizes[index - 1];
+    if (before && (size.spots <= before.spots || size.level < before.level)) {
+      issue(['firemaking', 'rack', 'sizes', index], 'Sizes must grow, in level order');
+    }
+    if (size.answerLogs.min > size.answerLogs.max) {
+      issue(['firemaking', 'rack', 'sizes', index, 'answerLogs'], 'min must not be more than max');
+    }
+    if (size.answerLogs.max > size.spots * firemaking.rack.maxLogs) {
+      issue(
+        ['firemaking', 'rack', 'sizes', index, 'answerLogs', 'max'],
+        'More logs than the spots can hold',
+      );
+    }
+  });
   if (firemaking.generator.minHeat >= firemaking.generator.flat) {
     issue(['firemaking', 'generator', 'minHeat'], 'Must be under the flat fire');
   }

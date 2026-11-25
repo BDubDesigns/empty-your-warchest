@@ -8,7 +8,14 @@ import { WarchestHud, type ScreenPoint } from '../../../app/warchestHud';
 import { barkTextures, barkUvs, drawSplitGrain } from '../../../app/woodGrain';
 import type { EventLogger, Game, LiveTuning } from '../../../core';
 import type { FiremakingFeel } from '../../../data';
-import { generateFire, stavesOver, type Finish } from '../logic/fire';
+import {
+  generateFire,
+  openRacks,
+  rackRules,
+  stavesOver,
+  type Finish,
+  type FireRules,
+} from '../logic/fire';
 import { FiremakingRound, nextLayers, type FiremakingEvent, type RackResult } from '../logic/round';
 
 export interface Firemaking3DDeps {
@@ -37,11 +44,14 @@ const TRENCH_DEPTH_Z = 1.3;
 /** Where the rack sits: over the fire, and slid out toward you on its rails. */
 const RACK_IN_Z = 0;
 const RACK_OUT_Z = 1.6;
+/** The rails: how far out past the rack's edge staves' room each sits, and how thick. */
+const RAIL_OUT = 0.12;
+const RAIL = 0.045;
 /** The handle sticks out this far in front of the rack. */
 const HANDLE_REACH = 0.36;
 /** A log in a fuel spot: its radius. */
 const LOG_RADIUS = 0.065;
-/** Coal lumps scattered over the trench floor. */
+/** Coal lumps scattered over the smallest rack's trench floor (more under a longer one). */
 const COALS = 420;
 /**
  * The water trough, across the front of the rails where the rack comes out: how far in front it
@@ -180,6 +190,17 @@ export class Firemaking3DView implements ScreenView {
   readonly #skill: string;
   #ui!: ReturnType<Firemaking3DView['buildUi']>;
   #round: FiremakingRound | undefined;
+  /** The rack size the scene is built for, and the rules its fires follow. */
+  #fireRules!: FireRules;
+  /** The size picked (fuel spots); the biggest open one until one is picked. */
+  #pickedSpots: number | undefined;
+  /** The Firemaking level when this rack started, to tell when a bigger rack opens. */
+  #levelAtStart = 1;
+  /** Everything sized to the rack (trench, coals, rails, trough), rebuilt when the size changes. */
+  readonly #rig = new THREE.Group();
+  readonly #rackFrame = new THREE.Group();
+  /** How much further back the camera sits, to fit a bigger rack across the screen. */
+  #fit = 1;
   /** How deep the next rack stacks (the hot streak). */
   #layers = 1;
   /** The rack (frame and staves) that slides along the rails, and where it's sliding. */
@@ -224,6 +245,7 @@ export class Firemaking3DView implements ScreenView {
   };
   #shownStage: number[] = [];
   #previewKey = '';
+  #flashText: { text: string; until: number } | undefined;
 
   private constructor(element: HTMLElement, deps: Firemaking3DDeps, hud: WarchestHud) {
     this.#element = element;
@@ -237,8 +259,8 @@ export class Firemaking3DView implements ScreenView {
     this.#renderer.shadowMap.enabled = true;
     this.#renderer.domElement.className = 'fm-canvas';
     element.append(this.#renderer.domElement);
-    this.#buildWorld();
     this.#ui = this.buildUi();
+    this.#buildWorld();
     this.#sfx.load(SOUNDS);
     this.#fireSound = this.#sfx.loop('fire-loop');
     this.#listen();
@@ -300,12 +322,23 @@ export class Firemaking3DView implements ScreenView {
       this.#showNoStaves();
       return;
     }
+    const level = game.level(this.#skill);
+    this.#levelAtStart = level;
+    const open = openRacks(rules, level);
+    const biggest = open[open.length - 1] ?? rules.rack.sizes[0]?.spots ?? 1;
+    const spots =
+      this.#pickedSpots !== undefined && open.includes(this.#pickedSpots)
+        ? this.#pickedSpots
+        : biggest;
+    if (spots !== this.#fireRules.rack.spots) this.#buildRig(spots);
+    const fireRules = this.#fireRules;
     const seed = Date.now() >>> 0;
     const feel = this.#deps.feel.values;
-    const fire = generateFire(rules, feel, seed);
-    const staves = Math.min(rules.rack.staves * this.#layers, have);
+    const fire = generateFire(fireRules, feel, seed);
+    const staves = Math.min(fireRules.rack.staves * this.#layers, have);
     this.#round = new FiremakingRound(
       fire,
+      fireRules,
       {
         logger: this.#deps.logger,
         feel: () => this.#deps.feel.values,
@@ -335,12 +368,13 @@ export class Firemaking3DView implements ScreenView {
         },
       },
       staves,
-      Math.ceil(staves / rules.rack.staves),
+      Math.ceil(staves / fireRules.rack.staves),
     );
     this.#placeStaves(staves);
     this.#slideRack(RACK_OUT_Z, 0.01);
     this.#shownStage = [];
-    this.#smokeDue = new Array<number>(rules.rack.staves).fill(0);
+    this.#smokeDue = new Array<number>(fireRules.rack.staves).fill(0);
+    this.#showSizes(open, level);
     this.#previewKey = '';
     this.#showLogs();
     this.#ui.streak.hidden = this.#layers <= 1;
@@ -351,9 +385,6 @@ export class Firemaking3DView implements ScreenView {
 
   #buildWorld(): void {
     const rules = this.#deps.game.data.firemaking;
-    const columns = rules.rack.staves;
-    const span = (columns - 1) * STAVE_GAP;
-    const trenchWidth = span + STAVE_GAP + TRENCH_MARGIN * 2;
     this.#scene.background = new THREE.Color(COLORS.sky);
     this.#scene.add(new THREE.HemisphereLight(0xffffff, 0x445533, 1.25));
     const sun = new THREE.DirectionalLight(0xfff1dc, 1.8);
@@ -361,33 +392,7 @@ export class Firemaking3DView implements ScreenView {
     sun.castShadow = true;
     sun.shadow.mapSize.set(1024, 1024);
     this.#scene.add(sun);
-    // The fire pit's yard: grass, trodden bare round the trench.
     this.#scene.add(groundMesh('meadowGrass', 40, 40));
-    const { yard } = rules;
-    const bare = wornGround('troddenDirt', yard.radius * 2, yard.radius * 2, {
-      cover: yard.wear,
-      round: true,
-      seed: 9,
-    });
-    bare.position.z = 0.6;
-    this.#scene.add(bare);
-    // The trench: a dark pit ringed with stones, its floor ash and embers under the coals.
-    const pit = new THREE.Mesh(
-      new THREE.BoxGeometry(trenchWidth, 0.04, TRENCH_DEPTH_Z),
-      new THREE.MeshLambertMaterial({ color: COLORS.pit, emissive: 0x3a0e04 }),
-    );
-    pit.position.y = 0.01;
-    pit.receiveShadow = true;
-    this.#scene.add(pit);
-    this.#scene.add(this.#buildRim(trenchWidth));
-    this.#buildCoals(trenchWidth);
-    // A glow over each fuel spot, brighter the hotter it burns.
-    for (let spot = 0; spot < rules.rack.spots; spot++) {
-      const light = new THREE.PointLight(0xff7a2a, 0, 2.6, 1.6);
-      light.position.set(this.#spotX(spot), 0.35, 0);
-      this.#lights.push(light);
-      this.#scene.add(light);
-    }
     // Fuel logs: drawn in when dropped into a spot.
     this.#logGeometry = new THREE.CylinderGeometry(LOG_RADIUS, LOG_RADIUS, 1, 10, 1);
     barkUvs(this.#logGeometry, LOG_RADIUS, 1, 0, Math.PI * 2);
@@ -401,11 +406,25 @@ export class Firemaking3DView implements ScreenView {
       emissive: 0xff4a10,
       emissiveIntensity: 0,
     });
-    this.#logMeshes = Array.from({ length: rules.rack.spots }, () => []);
-    this.#scene.add(this.#buildRails(span));
-    this.#buildRack(span);
+    // A stave: a split, squared length with a point at the back, the grain running along it.
+    this.#staveGeometry = new THREE.BoxGeometry(
+      STAVE_WIDTH,
+      STAVE_DEPTH,
+      STAVE_LENGTH - TIP_LENGTH,
+    );
+    const uv = this.#staveGeometry.getAttribute('uv');
+    for (let index = 0; index < 8; index++) uv.setXY(index, uv.getY(index), uv.getX(index));
+    this.#staveGeometry.translate(0, 0, TIP_LENGTH / 2);
+    this.#tipGeometry = new THREE.ConeGeometry(STAVE_WIDTH * 0.62, TIP_LENGTH, 4);
+    this.#tipGeometry.rotateX(-Math.PI / 2);
+    this.#tipGeometry.rotateZ(Math.PI / 4);
+    this.#tipGeometry.translate(0, 0, -STAVE_LENGTH / 2 + TIP_LENGTH / 2);
+    const grain = new THREE.CanvasTexture(drawSplitGrain(64, 256, 5, 3));
+    grain.colorSpace = THREE.SRGBColorSpace;
+    this.#grain = grain;
+    this.#scene.add(this.#rig);
+    this.#rack.add(this.#rackFrame);
     this.#scene.add(this.#rack);
-    this.#scene.add(this.#buildTrough(span + STAVE_GAP + TROUGH_MARGIN * 2));
     // Smoke, steam and flames: soft round puffs.
     const canvas = document.createElement('canvas');
     canvas.width = canvas.height = 64;
@@ -418,6 +437,68 @@ export class Firemaking3DView implements ScreenView {
     context.fillStyle = gradient;
     context.fillRect(0, 0, 64, 64);
     this.#puffTexture = new THREE.CanvasTexture(canvas);
+    this.#buildRig(rules.rack.sizes[0]?.spots ?? 1);
+  }
+
+  /**
+   * Builds everything sized to a rack of `spots` fuel spots: the trench and its coals, a glow per
+   * spot, the rails, the rack's frame and the trough, the yard round them, and the camera's step
+   * back to fit them. The heat bars and spot buttons are rebuilt to match.
+   */
+  #buildRig(spots: number): void {
+    const rules = this.#deps.game.data.firemaking;
+    this.#fireRules = rackRules(rules, spots);
+    for (const child of [...this.#rig.children, ...this.#rackFrame.children]) {
+      child.removeFromParent();
+      child.traverse((object) => {
+        if (object instanceof THREE.Mesh) (object.geometry as THREE.BufferGeometry).dispose();
+      });
+    }
+    for (const meshes of this.#logMeshes) for (const log of meshes) log.removeFromParent();
+    this.#lights = [];
+    this.#coalX = [];
+    this.#coalGlow = [];
+    this.#coalPhase = [];
+    const columns = this.#fireRules.rack.staves;
+    const span = (columns - 1) * STAVE_GAP;
+    const trenchWidth = span + STAVE_GAP + TRENCH_MARGIN * 2;
+    const troughWidth = span + STAVE_GAP + TROUGH_MARGIN * 2;
+    // Back far enough that the rails (the widest thing in the close-up) fit across as the
+    // smallest rack's do.
+    const smallest = (rules.rack.sizes[0]?.spots ?? spots) * rules.rack.stavesPerSpot;
+    this.#fit = Math.max(railsWidth(columns) / railsWidth(smallest), 1);
+    // The fire pit's yard: trodden bare round the trench.
+    const { yard } = rules;
+    const radius = yard.radius * this.#fit;
+    const bare = wornGround('troddenDirt', radius * 2, radius * 2, {
+      cover: yard.wear,
+      round: true,
+      seed: 9,
+    });
+    bare.position.z = 0.6;
+    this.#rig.add(bare);
+    // The trench: a dark pit ringed with stones, its floor ash and embers under the coals.
+    const pit = new THREE.Mesh(
+      new THREE.BoxGeometry(trenchWidth, 0.04, TRENCH_DEPTH_Z),
+      new THREE.MeshLambertMaterial({ color: COLORS.pit, emissive: 0x3a0e04 }),
+    );
+    pit.position.y = 0.01;
+    pit.receiveShadow = true;
+    this.#rig.add(pit);
+    this.#rig.add(this.#buildRim(trenchWidth));
+    this.#buildCoals(trenchWidth);
+    // A glow over each fuel spot, brighter the hotter it burns.
+    for (let spot = 0; spot < spots; spot++) {
+      const light = new THREE.PointLight(0xff7a2a, 0, 2.6, 1.6);
+      light.position.set(this.#spotX(spot), 0.35, 0);
+      this.#lights.push(light);
+      this.#rig.add(light);
+    }
+    this.#logMeshes = Array.from({ length: spots }, () => []);
+    this.#rig.add(this.#buildRails(span));
+    this.#buildRack(span);
+    this.#rig.add(this.#buildTrough(troughWidth));
+    this.#buildRackUi();
   }
 
   /** Stones round the trench's edge. */
@@ -462,13 +543,15 @@ export class Firemaking3DView implements ScreenView {
 
   /** Coal lumps over the trench floor, lit by the heat above them. */
   #buildCoals(trenchWidth: number): void {
+    // As thick on the ground however long the trench.
+    const count = Math.round(COALS * this.#fit);
     this.#coals = new THREE.InstancedMesh(
       new THREE.DodecahedronGeometry(1, 0),
       new THREE.MeshBasicMaterial({ color: 0xffffff }),
-      COALS,
+      count,
     );
     const matrix = new THREE.Matrix4();
-    for (let index = 0; index < COALS; index++) {
+    for (let index = 0; index < count; index++) {
       const x = (Math.random() - 0.5) * (trenchWidth - 0.1);
       const z = (Math.random() - 0.5) * (TRENCH_DEPTH_Z - 0.12);
       const size = 0.022 + Math.random() * 0.03;
@@ -487,7 +570,7 @@ export class Firemaking3DView implements ScreenView {
       );
       this.#coalPhase.push(Math.random() * Math.PI * 2);
     }
-    this.#scene.add(this.#coals);
+    this.#rig.add(this.#coals);
   }
 
   /** The iron rails the rack slides along: over the trench and out toward you. */
@@ -497,8 +580,8 @@ export class Firemaking3DView implements ScreenView {
     const back = -TRENCH_DEPTH_Z / 2 - 0.1;
     const front = RACK_OUT_Z + STAVE_LENGTH / 2 + 0.15;
     for (const side of [-1, 1]) {
-      const x = side * (span / 2 + STAVE_GAP / 2 + 0.12);
-      const rail = new THREE.Mesh(new THREE.BoxGeometry(0.045, 0.045, front - back), iron);
+      const x = side * (span / 2 + STAVE_GAP / 2 + RAIL_OUT);
+      const rail = new THREE.Mesh(new THREE.BoxGeometry(RAIL, RAIL, front - back), iron);
       rail.position.set(x, RACK_Y - 0.075, (front + back) / 2);
       rail.castShadow = true;
       rails.add(rail);
@@ -520,18 +603,18 @@ export class Firemaking3DView implements ScreenView {
       const bar = new THREE.Mesh(new THREE.BoxGeometry(width, 0.035, 0.035), iron);
       bar.position.set(0, RACK_Y - 0.05, z);
       bar.castShadow = true;
-      this.#rack.add(bar);
+      this.#rackFrame.add(bar);
     }
     for (const side of [-1, 1]) {
       const bar = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.035, STAVE_LENGTH - 0.2), iron);
       bar.position.set((side * width) / 2, RACK_Y - 0.05, 0);
-      this.#rack.add(bar);
+      this.#rackFrame.add(bar);
     }
     // The handle: an iron bar out the front with a wrapped grip across its end.
     const front = STAVE_LENGTH / 2 - 0.12;
     const shaft = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.035, HANDLE_REACH), iron);
     shaft.position.set(0, RACK_Y - 0.05, front + HANDLE_REACH / 2);
-    this.#rack.add(shaft);
+    this.#rackFrame.add(shaft);
     const grip = new THREE.Mesh(
       new THREE.CylinderGeometry(0.04, 0.04, 0.34, 10),
       new THREE.MeshLambertMaterial({ color: COLORS.grip }),
@@ -539,24 +622,8 @@ export class Firemaking3DView implements ScreenView {
     grip.rotation.z = Math.PI / 2;
     grip.position.set(0, RACK_Y - 0.05, front + HANDLE_REACH);
     grip.castShadow = true;
-    this.#rack.add(grip);
+    this.#rackFrame.add(grip);
     this.#handle = grip;
-    // A stave: a split, squared length with a point at the back, the grain running along it.
-    this.#staveGeometry = new THREE.BoxGeometry(
-      STAVE_WIDTH,
-      STAVE_DEPTH,
-      STAVE_LENGTH - TIP_LENGTH,
-    );
-    const uv = this.#staveGeometry.getAttribute('uv');
-    for (let index = 0; index < 8; index++) uv.setXY(index, uv.getY(index), uv.getX(index));
-    this.#staveGeometry.translate(0, 0, TIP_LENGTH / 2);
-    this.#tipGeometry = new THREE.ConeGeometry(STAVE_WIDTH * 0.62, TIP_LENGTH, 4);
-    this.#tipGeometry.rotateX(-Math.PI / 2);
-    this.#tipGeometry.rotateZ(Math.PI / 4);
-    this.#tipGeometry.translate(0, 0, -STAVE_LENGTH / 2 + TIP_LENGTH / 2);
-    const grain = new THREE.CanvasTexture(drawSplitGrain(64, 256, 5, 3));
-    grain.colorSpace = THREE.SRGBColorSpace;
-    this.#grain = grain;
   }
 
   /** The water trough the spears plunge into: wooden planks, iron straps, on two low trestles. */
@@ -612,13 +679,13 @@ export class Firemaking3DView implements ScreenView {
 
   /** The x of fuel spot `spot`'s middle (under its staves). */
   #spotX(spot: number): number {
-    const staves = stavesOver(this.#deps.game.data.firemaking, spot);
+    const staves = stavesOver(this.#fireRules, spot);
     const middle = staves.reduce((sum, column) => sum + this.#columnX(column), 0) / staves.length;
     return middle;
   }
 
   #columnX(column: number): number {
-    const columns = this.#deps.game.data.firemaking.rack.staves;
+    const columns = this.#fireRules.rack.staves;
     return (column - (columns - 1) / 2) * STAVE_GAP;
   }
 
@@ -629,7 +696,7 @@ export class Firemaking3DView implements ScreenView {
       stave.material.dispose();
       stave.tipMaterial.dispose();
     }
-    const columns = this.#deps.game.data.firemaking.rack.staves;
+    const columns = this.#fireRules.rack.staves;
     this.#staves = Array.from({ length: count }, (_, index) => {
       const material = new THREE.MeshLambertMaterial({ map: this.#grain });
       const tipMaterial = new THREE.MeshLambertMaterial({ map: this.#grain, emissive: 0xff3a08 });
@@ -668,7 +735,7 @@ export class Firemaking3DView implements ScreenView {
       while (meshes.length > want) meshes.pop()?.removeFromParent();
       while (meshes.length < want) {
         const log = new THREE.Mesh(this.#logGeometry, this.#logMaterial);
-        const staves = stavesOver(this.#deps.game.data.firemaking, spot).length;
+        const staves = stavesOver(this.#fireRules, spot).length;
         log.scale.x = staves * STAVE_GAP * 0.9;
         const layer = meshes.length;
         log.position.set(
@@ -940,11 +1007,12 @@ export class Firemaking3DView implements ScreenView {
   #updateFire(dt: number, seconds: number): void {
     const round = this.#round;
     const rules = this.#deps.game.data.firemaking;
-    const heats = round?.heats ?? new Array<number>(rules.rack.staves).fill(rules.generator.flat);
+    const heats =
+      round?.heats ?? new Array<number>(this.#fireRules.rack.staves).fill(rules.generator.flat);
     const hottest = rules.generator.flat * 1.5;
     this.#flare = Math.max(this.#flare - dt * 1.6, 0);
     const color = new THREE.Color();
-    for (let index = 0; index < COALS; index++) {
+    for (let index = 0; index < this.#coalX.length; index++) {
       const heat = heatAt(heats, this.#coalX[index] ?? 0, (column) => this.#columnX(column));
       const flicker = 0.82 + 0.18 * Math.sin(seconds * 3.1 + (this.#coalPhase[index] ?? 0) * 7);
       const glow = Math.min(
@@ -957,7 +1025,7 @@ export class Firemaking3DView implements ScreenView {
     }
     if (this.#coals.instanceColor) this.#coals.instanceColor.needsUpdate = true;
     this.#lights.forEach((light, spot) => {
-      const staves = stavesOver(rules, spot);
+      const staves = stavesOver(this.#fireRules, spot);
       const heat = staves.reduce((sum, column) => sum + (heats[column] ?? 0), 0) / staves.length;
       const flicker = 0.85 + 0.15 * Math.sin(seconds * 5.3 + spot * 2.1);
       light.intensity = (heat / rules.generator.flat) * 1.6 * flicker + this.#flare * 1.5;
@@ -1092,7 +1160,7 @@ export class Firemaking3DView implements ScreenView {
     const ease = 1 - Math.exp(-(close ? 2.5 : 4) * dt);
     const view = this.#view;
     view.target.lerp(want.target, ease);
-    view.distance += (want.distance - view.distance) * ease;
+    view.distance += (want.distance * this.#fit - view.distance) * ease;
     view.lift += (want.lift - view.lift) * ease;
     const { clientWidth: width, clientHeight: height } = this.#element;
     if (width > 0 && height > 0) {
@@ -1205,10 +1273,10 @@ export class Firemaking3DView implements ScreenView {
       new THREE.Vector3(),
     );
     if (!point || Math.abs(point.z) > TRENCH_DEPTH_Z / 2 + 0.25) return undefined;
-    const rules = this.#deps.game.data.firemaking;
-    const width = rules.rack.staves * STAVE_GAP;
-    const spot = Math.floor(((point.x + width / 2) / width) * rules.rack.spots);
-    return spot >= 0 && spot < rules.rack.spots ? spot : undefined;
+    const { rack } = this.#fireRules;
+    const width = rack.staves * STAVE_GAP;
+    const spot = Math.floor(((point.x + width / 2) / width) * rack.spots);
+    return spot >= 0 && spot < rack.spots ? spot : undefined;
   }
 
   // Overlay
@@ -1229,37 +1297,25 @@ export class Firemaking3DView implements ScreenView {
       element.addEventListener('click', onTap);
       return element;
     };
-    const rules = this.#deps.game.data.firemaking;
     const root = el('div', 'fm-ui');
     const streak = el('div', 'fm-streak');
     streak.hidden = true;
+    // The rack sizes open, and the next one with the level it opens at.
+    const sizes = el('div', 'fm-sizes');
+    sizes.setAttribute('role', 'radiogroup');
+    sizes.setAttribute('aria-label', 'Rack size');
     const hint = el('div', 'fm-hint');
     // The heat under each stave as bars, coloured by how each would come out at the best pull.
     const heat = el('div', 'fm-heat');
     heat.setAttribute('aria-label', 'Heat under each stave');
     const heatBars = el('div', 'fm-heat-bars');
     const heatMarks = el('div', 'fm-heat-marks');
-    const bars = Array.from({ length: rules.rack.staves }, () => {
-      const column = el('div', 'fm-bar');
-      const fill = el('div', 'fm-bar-fill');
-      column.append(fill);
-      heatBars.append(column);
-      const mark = el('div', 'fm-bar-mark');
-      heatMarks.append(mark);
-      return { column, fill, mark };
-    });
+    const bars: { column: HTMLElement; fill: HTMLElement; mark: HTMLElement }[] = [];
     const best = el('div', 'fm-best');
     heat.append(heatBars, heatMarks, best);
-    // A button per fuel spot, under its staves' bars.
+    // A button per fuel spot, under its staves' bars (built for each rack size).
     const spots = el('div', 'fm-spots');
-    const spotButtons = Array.from({ length: rules.rack.spots }, (_, spot) => {
-      const element = button('', 'fm-spot', () => {
-        this.#round?.tapSpot(spot);
-      });
-      element.setAttribute('aria-label', `Fuel spot ${String(spot + 1)}`);
-      spots.append(element);
-      return element;
-    });
+    const spotButtons: HTMLButtonElement[] = [];
     const controls = el('div', 'fm-controls');
     const fuel = el('div', 'fm-fuel');
     const lay = button('Lay the rack', 'fm-button fm-lay', () => {
@@ -1285,13 +1341,17 @@ export class Firemaking3DView implements ScreenView {
     cardButtons.append(leave, next);
     card.append(cardStars, cardTitle, cardText, cardButtons);
     card.hidden = true;
-    root.append(streak, grab, hint, heat, spots, controls, card);
+    root.append(streak, sizes, grab, hint, heat, spots, controls, card);
     this.#element.append(root);
     return {
+      button,
       root,
       streak,
+      sizes,
       hint,
       heat,
+      heatBars,
+      heatMarks,
       bars,
       best,
       spots,
@@ -1308,6 +1368,90 @@ export class Firemaking3DView implements ScreenView {
     };
   }
 
+  /** The heat bars and fuel spot buttons for the rack size the scene is built for. */
+  #buildRackUi(): void {
+    const ui = this.#ui;
+    const { rack } = this.#fireRules;
+    const el = (className: string) => {
+      const element = document.createElement('div');
+      element.className = className;
+      return element;
+    };
+    ui.bars.length = 0;
+    ui.heatBars.replaceChildren();
+    ui.heatMarks.replaceChildren();
+    for (let column = 0; column < rack.staves; column++) {
+      const bar = { column: el('fm-bar'), fill: el('fm-bar-fill'), mark: el('fm-bar-mark') };
+      bar.column.append(bar.fill);
+      ui.heatBars.append(bar.column);
+      ui.heatMarks.append(bar.mark);
+      ui.bars.push(bar);
+    }
+    ui.spotButtons.length = 0;
+    ui.spots.replaceChildren();
+    for (let spot = 0; spot < rack.spots; spot++) {
+      const element = ui.button('', 'fm-spot', () => {
+        this.#round?.tapSpot(spot);
+      });
+      element.setAttribute('aria-label', `Fuel spot ${String(spot + 1)}`);
+      ui.spots.append(element);
+      ui.spotButtons.push(element);
+    }
+    ui.root.style.setProperty('--fm-columns', String(rack.staves));
+    ui.root.style.setProperty('--fm-spots', String(rack.spots));
+    this.#previewKey = '';
+  }
+
+  /**
+   * The rack size picker: a button per open size (by its staves), the one in use picked, and the
+   * next size to open, locked, with the level it needs. Picking a size starts a fresh fire.
+   */
+  #showSizes(open: number[], level: number): void {
+    const rules = this.#deps.game.data.firemaking;
+    const next = rules.rack.sizes.find((size) => size.level > level);
+    const entries = [
+      ...open.map((spots) => ({ spots, needs: undefined as number | undefined })),
+      ...(next ? [{ spots: next.spots, needs: next.level }] : []),
+    ];
+    const ui = this.#ui;
+    ui.sizes.replaceChildren(
+      ...entries.map(({ spots, needs }) => {
+        const staves = spots * rules.rack.stavesPerSpot;
+        const picked = needs === undefined && spots === this.#fireRules.rack.spots;
+        const element = ui.button('', 'fm-size', () => {
+          if (needs !== undefined) {
+            this.#flash(`A ${String(staves)}-stave rack opens at Firemaking ${String(needs)}`);
+            return;
+          }
+          if (this.#round?.phase.kind !== 'plan' || spots === this.#fireRules.rack.spots) return;
+          this.#pickedSpots = spots;
+          this.#play('press-click', 0.3, 200 - spots * 40);
+          this.#deps.haptics.pulse(6);
+          this.#startRack();
+        });
+        element.setAttribute('role', 'radio');
+        element.setAttribute('aria-checked', String(picked));
+        element.setAttribute(
+          'aria-label',
+          needs === undefined
+            ? `${String(staves)}-stave rack`
+            : `${String(staves)}-stave rack, opens at level ${String(needs)}`,
+        );
+        if (needs !== undefined) element.classList.add('fm-size-locked');
+        element.dataset.spots = String(spots);
+        element.innerHTML = `<span class="fm-size-count">${String(staves)}</span><span class="fm-size-label">${
+          needs === undefined ? 'staves' : `Lv ${String(needs)}`
+        }</span>`;
+        return element;
+      }),
+    );
+  }
+
+  /** A short note in place of the hint for a moment. */
+  #flash(text: string): void {
+    this.#flashText = { text, until: performance.now() + 1800 };
+  }
+
   #updateUi(): void {
     const ui = this.#ui;
     const round = this.#round;
@@ -1319,11 +1463,12 @@ export class Firemaking3DView implements ScreenView {
     }
     if (!round) {
       ui.heat.hidden = ui.spots.hidden = ui.controls.hidden = ui.grab.hidden = true;
+      ui.sizes.hidden = true;
       ui.hint.textContent = '';
       return;
     }
     const planning = phase === 'plan';
-    ui.heat.hidden = ui.spots.hidden = ui.controls.hidden = !planning;
+    ui.heat.hidden = ui.spots.hidden = ui.controls.hidden = ui.sizes.hidden = !planning;
     const logsLeft =
       this.#deps.game.inventory.count(this.#deps.game.data.firemaking.fuel) -
       (planning ? round.logsPlaced : 0);
@@ -1339,7 +1484,9 @@ export class Firemaking3DView implements ScreenView {
       cook: 'Grab the handle and pull the rack out when the smoke turns thick grey',
       done: '',
     };
-    ui.hint.textContent = hints[phase] ?? '';
+    const flash = this.#flashText;
+    ui.hint.textContent =
+      flash && performance.now() < flash.until ? flash.text : (hints[phase] ?? '');
     // While it cooks the hint moves up top, clear of the handle.
     ui.hint.dataset.phase = phase;
     // The grab ring round the handle while it cooks.
@@ -1391,14 +1538,13 @@ export class Firemaking3DView implements ScreenView {
       const logs = round.logs[spot] ?? 0;
       element.dataset.logs = String(logs);
       element.replaceChildren(
-        ...Array.from({ length: rules.rack.maxLogs }, (_, index) => {
+        ...Array.from({ length: round.rack.maxLogs }, (_, index) => {
           const log = document.createElement('span');
           log.className = index < logs ? 'fm-log fm-log-on' : 'fm-log';
           return log;
         }),
       );
     });
-    ui.root.style.setProperty('--fm-columns', String(round.columns));
   }
 
   /** The end card: stars, spears, what went wrong if anything, and the hot streak. */
@@ -1428,7 +1574,7 @@ export class Firemaking3DView implements ScreenView {
     if (result.charred > 0) parts.push(`${String(result.charred)} charred`);
     lines.push(parts.join(' · '));
     if (result.bonus > 0) lines.push(`${'★'.repeat(result.stars)} bonus +${String(result.bonus)}`);
-    const columns = this.#deps.game.data.firemaking.rack.staves;
+    const columns = this.#fireRules.rack.staves;
     if (result.burnt) lines.push('Left on the fire too long');
     else if (result.stars >= 3) lines.push('Pulled right on time');
     else if (result.best.hardened < columns) {
@@ -1438,6 +1584,18 @@ export class Firemaking3DView implements ScreenView {
     else if (layers === this.#layers && layers > 1)
       lines.push(`🔥 Hot streak holds: ${String(layers)} deep`);
     else if (this.#layers > 1) lines.push('The streak is over');
+    // A level up that opens a bigger rack: it's the one the next rack uses.
+    const rules = this.#deps.game.data.firemaking;
+    const level = this.#deps.game.level(this.#skill);
+    const opened = rules.rack.sizes.filter(
+      (size) => size.level > this.#levelAtStart && size.level <= level,
+    );
+    const bigger = opened[opened.length - 1];
+    if (bigger) {
+      const staves = bigger.spots * rules.rack.stavesPerSpot;
+      lines.push(`🔓 Bigger rack: ${String(staves)} staves from now on`);
+      this.#pickedSpots = undefined;
+    }
     this.#layers = layers;
     ui.cardTitle.textContent = `${String(result.banked)} spear${result.banked === 1 ? '' : 's'}`;
     ui.cardText.textContent = lines.join('\n');
@@ -1454,6 +1612,11 @@ export class Firemaking3DView implements ScreenView {
     ui.next.hidden = true;
     ui.card.hidden = false;
   }
+}
+
+/** How far apart the outsides of the rails are under a rack of `columns` staves. */
+function railsWidth(columns: number): number {
+  return columns * STAVE_GAP + (RAIL_OUT + RAIL) * 2;
 }
 
 /** The colour of a stave `done` along (1 hardened, `charRatio` charred). */

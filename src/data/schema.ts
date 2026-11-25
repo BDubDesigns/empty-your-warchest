@@ -616,10 +616,29 @@ const firemakingSchema = z.object({
   /** The recipe a hardened stave runs, and the item burned as fuel. */
   recipe: id,
   fuel: id,
-  /** The rack: staves on it, fuel spots under it (each under the same number of staves), logs a spot holds. */
-  rack: z.object({ staves: positiveInt, spots: positiveInt, maxLogs: positiveInt }),
-  /** Stars count the staves that didn't harden: 3 for none, 2 for up to `twoMissed`, else 1. */
-  stars: z.object({ twoMissed: z.number().int().min(0) }),
+  /**
+   * The rack: staves over each fuel spot, logs a spot holds, and its sizes by Firemaking level
+   * (each a number of fuel spots, opening at a level, and how many logs a fire of that size takes
+   * to even out). The biggest open size is the default; any smaller open one can be picked.
+   */
+  rack: z.object({
+    stavesPerSpot: positiveInt,
+    maxLogs: positiveInt,
+    sizes: z
+      .array(
+        z.object({
+          spots: positiveInt,
+          level: positiveInt,
+          answerLogs: z.object({ min: positiveInt, max: positiveInt }),
+        }),
+      )
+      .min(1),
+  }),
+  /**
+   * Stars count the staves (in a layer) that didn't harden: 3 for none, 2 for up to
+   * `twoMissedShare` of the layer, else 1.
+   */
+  stars: z.object({ twoMissedShare: fraction }),
   /**
    * Bonus spears for 2 and 3 stars, as a share of the spears hardened (rounded), as at every
    * station: stars multiply output. XP is paid on the spears hardened, not the bonus.
@@ -627,18 +646,19 @@ const firemakingSchema = z.object({
   starBonus: z.object({ two: nonNegative, three: nonNegative }),
   /**
    * Fires, from a seed, built backwards from a flat fire at `flat` heat so one always has a full
-   * answer: a random answer of `answerLogs` logs is taken off, plus `noise` (heat) of lumps, and no
-   * coal under `minHeat`. A fire is made again (up to `tries` times) if it needs no fuel, if
-   * filling every spot also hardens the whole rack, or if its answer's pull window is under
-   * `minWindow` seconds.
+   * answer: a random answer of the rack size's `answerLogs` logs is taken off, plus `noise` (heat)
+   * of lumps, and no coal under `minHeat`. A fire is made again (up to `tries` times) if it needs
+   * no fuel, if filling every spot also hardens the whole rack, or if its answer's pull window is
+   * under `minWindow` seconds. Racks of up to `searchSpots` spots also log every full-rack answer
+   * (the search grows threefold a spot).
    */
   generator: z.object({
     flat: positive,
-    answerLogs: z.object({ min: positiveInt, max: positiveInt }),
     noise: nonNegative,
     minHeat: positive,
     minWindow: nonNegative,
     tries: positiveInt,
+    searchSpots: positiveInt,
   }),
   /** Grass round the fire pit, trodden bare round the trench. */
   yard: z.object({ radius: positive, wear: fraction }),
