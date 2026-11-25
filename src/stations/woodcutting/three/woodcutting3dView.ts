@@ -161,6 +161,8 @@ const CHASE_FOLLOW = 5;
 const CHASE_MIN_DISTANCE = 6;
 const CHASE_LOOKAHEAD = 0.3;
 const CHASE_HOLD = 0.9;
+/** Room (world units) the camera leaves round a crashing cabin for its flying parts. */
+const CRASH_VIEW_MARGIN = 1.6;
 /** How far ahead (seconds) the chase frames a rolling boulder: where it's about to be. */
 const CHASE_ROLL_AHEAD = 0.6;
 /** Seconds a banked tree takes to sink away (hauled off). */
@@ -1236,6 +1238,32 @@ export class Woodcutting3DView implements ScreenView {
 
   // Chase camera
 
+  /** The cabin has been hit this round: from then on the camera and the juice are on it alone. */
+  get #crashed(): boolean {
+    return this.#cabin?.wreck !== undefined;
+  }
+
+  /**
+   * The camera on the cabin coming down: its footprint and height, plus room round it for flying
+   * parts, seen from the side the camera is already on.
+   */
+  #crashPose(shape: NonNullable<Clearing['cabin']>): CameraPose {
+    const from = this.#shownPose ?? this.#overview;
+    const direction = from.position.clone().sub(from.target).normalize();
+    const reach = (Math.max(shape.width, shape.depth) / 2) * SCALE + CRASH_VIEW_MARGIN;
+    const middle = this.#world(shape);
+    const points = [0, 1].flatMap((up) =>
+      [-1, 1].flatMap((x) =>
+        [-1, 1].map((z) =>
+          middle
+            .clone()
+            .add(new THREE.Vector3(x * reach, up * shape.height * SCALE * 1.4, z * reach)),
+        ),
+      ),
+    );
+    return this.#framing(points, direction, CHASE_MIN_DISTANCE);
+  }
+
   /** The felling chop: watch the chain from behind the chopped tree instead of cutting away. */
   #startChase(first: FallStep | undefined): void {
     const frame = first && this.#closeUpFrame(first.tree, first.angle);
@@ -1606,7 +1634,7 @@ export class Woodcutting3DView implements ScreenView {
     } else if (event.type === 'hit') {
       // The falling canopy knocks into the next trunk: a light knock and tick before the thud.
       this.#play(`chop-${2 + Math.floor(Math.random() * 2)}`, 0.35, 250);
-      this.#deps.haptics.pulse(feel.buzzHitMs);
+      if (!this.#crashed) this.#deps.haptics.pulse(feel.buzzHitMs);
     } else if (event.type === 'landed') {
       const visual = this.#trees.get(event.step.tree);
       if (visual) {
@@ -1615,6 +1643,12 @@ export class Woodcutting3DView implements ScreenView {
             this.#burst('dust', this.#world(fallTip(visual.tree, path.angle), 0.2), 10);
           }
         });
+      }
+      // A tree landing on the cabin, and the rest of the chain after it, count for nothing: a
+      // quiet thud, no combo.
+      if (this.#crashed || event.step.paths.some((path) => path.cabin)) {
+        this.#play(`land-${1 + Math.floor(Math.random() * 3)}`, 0.4);
+        return;
       }
       // Now and then the thud startles birds out of the forest.
       if (visual && this.#fxRng.chance(this.#deps.game.data.woodcutting.scenery.birds.chance)) {
@@ -2032,6 +2066,9 @@ export class Woodcutting3DView implements ScreenView {
     this.#frozenUntil = now + feel.crashHitStopMs;
     this.#slowUntil = this.#frozenUntil + feel.crashSlowMoSeconds * 1000;
     this.#punch = { at: hit, start: now };
+    // Whatever else is still falling no longer counts: leave it and watch the cabin.
+    this.#chase = undefined;
+    this.#moveCamera(this.#crashPose(shape));
     this.#deps.haptics.rumble(feel.buzzCrashMs, feel.buzzCrashPulses);
     this.#startleBirds(middle, 2);
   }
