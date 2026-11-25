@@ -105,7 +105,6 @@ export class RivingRound {
       seed,
       grains: log.grains.map((grain) => grain.kind),
       knots: log.knots.length,
-      checks: log.checks.length,
       heads: hooks.heads,
       best: { head: this.best.count, turn: degrees(this.best.rotation), worth: this.best.worth },
       feel: hooks.feel(),

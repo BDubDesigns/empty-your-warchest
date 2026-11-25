@@ -145,7 +145,6 @@ function checkReferences(data: GameData, ctx: z.RefinementCtx): void {
     'radius',
     'height',
     'rings',
-    'checks',
     'good',
     'bad',
     'knots',

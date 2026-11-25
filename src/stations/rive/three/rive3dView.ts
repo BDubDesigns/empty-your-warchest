@@ -69,7 +69,6 @@ const COLORS = {
   ringDark: '#c99d64',
   ringLight: '#e2c08c',
   pith: '#8a5d32',
-  check: '#3b2415',
   grain: { rot: '#5a4325', silver: '#cfd8dc', gold: '#f2c037' } as Record<string, string>,
   grainEdge: { rot: '#33240f', silver: '#8fa0a8', gold: '#a87a12' } as Record<string, string>,
   knot: '#3b2413',
@@ -434,7 +433,7 @@ export class Rive3DView implements ScreenView {
   }
 
   /**
-   * The end grain: growth rings round the pith, checks as dark cracks, knots as dark patches,
+   * The end grain: growth rings round the pith, knots as dark patches,
    * and each grain as a coloured patch over the arc of the face it covers (the arc the rules
    * use), marked with what it's worth. Grains the cuts would run through glow (red for a good
    * one, green for rot); ones a struck head has cut are drawn faded and crossed out.
@@ -514,17 +513,6 @@ export class Rive3DView implements ScreenView {
       context.strokeText(text, label.x, label.y);
       context.fillText(text, label.x, label.y);
     });
-    context.strokeStyle = COLORS.check;
-    context.lineWidth = 5;
-    context.lineCap = 'round';
-    for (const check of log.checks) {
-      const from = at(check * DEG, 0.12);
-      const to = at(check * DEG, 0.97);
-      context.beginPath();
-      context.moveTo(from.x, from.y);
-      context.lineTo(to.x, to.y);
-      context.stroke();
-    }
     if (this.#faceTexture) {
       this.#faceTexture.needsUpdate = true;
       return this.#faceTexture;

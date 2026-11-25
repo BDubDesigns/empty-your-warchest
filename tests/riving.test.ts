@@ -21,13 +21,9 @@ const rules = data.riving;
 const feel = rules.feel;
 const STEP = 1 / 60;
 
-/** A plain test log, with these grains, checks and knots. */
-function logWith(
-  grains: RivingLog['grains'],
-  checks: number[] = [],
-  knots: RivingLog['knots'] = [],
-): RivingLog {
-  return { id: 'test_log', radius: 1, height: 1.6, rings: 12, checks, grains, knots };
+/** A plain test log, with these grains and knots. */
+function logWith(grains: RivingLog['grains'], knots: RivingLog['knots'] = []): RivingLog {
+  return { id: 'test_log', radius: 1, height: 1.6, rings: 12, grains, knots };
 }
 
 /** A pump for a `count`-way head among 4- to 16-way heads. */
@@ -90,7 +86,7 @@ describe('the cut pattern', () => {
   });
 
   it('a knot spoils the wedge it touches', () => {
-    const log = logWith([{ kind: 'gold', angle: 45, width: 10 }], [], [{ angle: 135, width: 10 }]);
+    const log = logWith([{ kind: 'gold', angle: 45, width: 10 }], [{ angle: 135, width: 10 }]);
     const plan = planFor(rules, log, 4, 0);
     expect(plan.knotted).toEqual([1]);
     expect(plan.staves).toBe(3);

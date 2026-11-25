@@ -3,7 +3,7 @@ import type { Riving, RivingLog } from '../../../data';
 import { survey } from './pattern';
 
 /**
- * A random log from `seed`: its size, rings, checks, knots and grains. Every log has good grains
+ * A random log from `seed`: its size, rings, knots and grains. Every log has good grains
  * to keep and bad ones to cut out (kinds picked by their weights, each as wide as its kind
  * allows), and most put a good grain close to a bad one. Each log is checked against the heads
  * the player has: one where 3 stars hangs on a sliver of turn is always made again, and one
@@ -28,9 +28,6 @@ export function generateLog(rules: Riving, seed: number, heads: readonly number[
 
 function makeLog(rules: Riving, rng: Rng, seed: number): RivingLog {
   const { generator } = rules;
-  const checks = Array.from({ length: rng.int(generator.checks.min, generator.checks.max) }, () =>
-    Math.round(rng.range(0, 360)),
-  );
   const pickKind = (kinds: Riving['grainKinds']) => {
     const total = kinds.reduce((sum, kind) => sum + kind.weight, 0);
     let roll = rng.range(0, total);
@@ -93,7 +90,6 @@ function makeLog(rules: Riving, rng: Rng, seed: number): RivingLog {
     radius: Math.round(rng.range(generator.radius.min, generator.radius.max) * 100) / 100,
     height: Math.round(rng.range(generator.height.min, generator.height.max) * 100) / 100,
     rings: rng.int(generator.rings.min, generator.rings.max),
-    checks,
     grains,
     knots,
   };

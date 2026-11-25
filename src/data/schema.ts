@@ -366,8 +366,6 @@ const rivingLogSchema = z.object({
   radius: positive,
   height: positive,
   rings: positiveInt,
-  /** Natural cracks in the end grain, as angles (degrees) from the pith. */
-  checks: z.array(z.number()),
   /** Grains: patches of the end face, each `width` degrees wide centred on `angle`. */
   grains: z.array(z.object({ kind: id, angle: z.number(), width: positive })),
   /** Knots: arcs of the end face (as grains are) that spoil any stave they touch. */
@@ -414,12 +412,11 @@ const rivingSchema = z.object({
     .min(1),
   /** The first log ever: to learn the controls on, with a grain to keep and one to cut. */
   tutorialLog: rivingLogSchema,
-  /** Random logs: sizes, rings, checks and grains, from a seed. */
+  /** Random logs: sizes, rings and grains, from a seed. */
   generator: z.object({
     radius: z.object({ min: positive, max: positive }),
     height: z.object({ min: positive, max: positive }),
     rings: z.object({ min: positiveInt, max: positiveInt }),
-    checks: z.object({ min: z.number().int().min(0), max: z.number().int().min(0) }),
     /** Good grains (multiplier over 1) and bad ones on every log. */
     good: z.object({ min: z.number().int().min(0), max: z.number().int().min(0) }),
     bad: z.object({ min: z.number().int().min(0), max: z.number().int().min(0) }),
