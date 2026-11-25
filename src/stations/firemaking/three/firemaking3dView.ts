@@ -43,14 +43,20 @@ const HANDLE_REACH = 0.36;
 const LOG_RADIUS = 0.065;
 /** Coal lumps scattered over the trench floor. */
 const COALS = 420;
-/** The water bucket, in front of the rails where the rack comes out: where it stands, its size. */
-const BUCKET_Z = 3.05;
-const BUCKET_RADIUS = 0.3;
-const BUCKET_HEIGHT = 0.46;
+/**
+ * The water trough, across the front of the rails where the rack comes out: how far in front it
+ * stands, how far it reaches past the rack each side, front to back, its height and its planks.
+ * Wide, so a big stacked rack's spears all have room to drop in.
+ */
+const TROUGH_Z = 2.85;
+const TROUGH_MARGIN = 0.32;
+const TROUGH_DEPTH_Z = 0.5;
+const TROUGH_HEIGHT = 0.32;
+const PLANK = 0.04;
 /** The camera: how far it looks down, how far back it sits, and where it looks. */
 const CAMERA_ELEVATION = 56 * DEG;
 /**
- * The camera's two views: planning (the trench, the rack waiting out front and the bucket, drawn
+ * The camera's two views: planning (the trench, the rack waiting out front and the trough, drawn
  * `lift` of the screen higher, clear of the controls) and cooking (in close on the rack and its
  * smoke). It eases between them.
  */
@@ -78,8 +84,8 @@ const COLORS = {
   stone: 0x8a8680,
   iron: 0x3b3f42,
   grip: 0x2a1a10,
-  bucket: 0x7a5434,
-  band: 0x2f3336,
+  trough: 0x7a5434,
+  strap: 0x2f3336,
   water: 0x3f5f6e,
   /** Coals: cold, hot and white-hot. */
   coalCold: new THREE.Color(0x2a0d05),
@@ -130,7 +136,7 @@ interface StaveVisual {
   column: number;
   layer: number;
   finish: Finish | undefined;
-  /** After the pull: flying to the bucket (hardened), crumbling (charred) or fading (underdone). */
+  /** After the pull: dropping into the trough (hardened), crumbling (charred) or fading (underdone). */
   move:
     | {
         from: THREE.Vector3;
@@ -142,8 +148,8 @@ interface StaveVisual {
         hop: number;
       }
     | undefined;
-  /** In the bucket, waiting to pour into the chest; gone once it has set off. */
-  inBucket: boolean;
+  /** In the trough, waiting to pour into the chest; gone once it has set off. */
+  inTrough: boolean;
   left: boolean;
 }
 
@@ -153,7 +159,7 @@ interface StaveVisual {
  * the buttons under the heat curve) to drop logs in and even out the heat, then Lay the rack and
  * it slides in over the fire. Smoke rises off each stave as it cooks, thin white to thick grey
  * (pull now) to black (burning); grab the handle and drag it toward you to pull the rack out.
- * Spears plunge into the water bucket, hissing, and pour into the chest. The rules
+ * Spears plunge into the water trough, hissing, and pour into the chest. The rules
  * (FiremakingRound) decide everything; this draws them and feeds them touches.
  */
 export class Firemaking3DView implements ScreenView {
@@ -191,7 +197,8 @@ export class Firemaking3DView implements ScreenView {
   #logMeshes: THREE.Mesh[][] = [];
   #logGeometry!: THREE.CylinderGeometry;
   #logMaterial!: THREE.MeshStandardMaterial;
-  #bucketTop = new THREE.Vector3();
+  /** The middle of the trough's water surface. */
+  #water = new THREE.Vector3();
   #particles: Particle[] = [];
   #puffTexture!: THREE.Texture;
   /** Smoke owed per column, building up between frames. */
@@ -390,7 +397,7 @@ export class Firemaking3DView implements ScreenView {
     this.#scene.add(this.#buildRails(span));
     this.#buildRack(span);
     this.#scene.add(this.#rack);
-    this.#scene.add(this.#buildBucket());
+    this.#scene.add(this.#buildTrough(span + STAVE_GAP + TROUGH_MARGIN * 2));
     // Smoke, steam and flames: soft round puffs.
     const canvas = document.createElement('canvas');
     canvas.width = canvas.height = 64;
@@ -544,35 +551,55 @@ export class Firemaking3DView implements ScreenView {
     this.#grain = grain;
   }
 
-  /** The water bucket the spears plunge into: wooden, iron-banded, full to near the top. */
-  #buildBucket(): THREE.Group {
-    const bucket = new THREE.Group();
-    const wood = new THREE.Mesh(
-      new THREE.CylinderGeometry(BUCKET_RADIUS, BUCKET_RADIUS * 0.85, BUCKET_HEIGHT, 18, 1, true),
-      new THREE.MeshLambertMaterial({ color: COLORS.bucket, side: THREE.DoubleSide }),
-    );
-    wood.position.y = BUCKET_HEIGHT / 2;
-    wood.castShadow = true;
-    bucket.add(wood);
-    for (const y of [0.1, BUCKET_HEIGHT - 0.08]) {
-      const band = new THREE.Mesh(
-        new THREE.TorusGeometry(BUCKET_RADIUS * (y > 0.2 ? 0.99 : 0.89), 0.014, 6, 24),
-        new THREE.MeshLambertMaterial({ color: COLORS.band }),
+  /** The water trough the spears plunge into: wooden planks, iron straps, on two low trestles. */
+  #buildTrough(width: number): THREE.Group {
+    const trough = new THREE.Group();
+    const wood = new THREE.MeshLambertMaterial({ color: COLORS.trough });
+    const plank = (w: number, h: number, d: number, x: number, y: number, z: number) => {
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), wood);
+      mesh.position.set(x, y, z);
+      mesh.castShadow = mesh.receiveShadow = true;
+      trough.add(mesh);
+    };
+    const legs = 0.08;
+    plank(width, PLANK, TROUGH_DEPTH_Z, 0, legs + PLANK / 2, 0);
+    for (const side of [-1, 1]) {
+      plank(
+        width,
+        TROUGH_HEIGHT,
+        PLANK,
+        0,
+        legs + TROUGH_HEIGHT / 2,
+        (side * (TROUGH_DEPTH_Z - PLANK)) / 2,
       );
-      band.rotation.x = Math.PI / 2;
-      band.position.y = y;
-      bucket.add(band);
+      plank(
+        PLANK,
+        TROUGH_HEIGHT,
+        TROUGH_DEPTH_Z,
+        (side * (width - PLANK)) / 2,
+        legs + TROUGH_HEIGHT / 2,
+        0,
+      );
+      // A trestle under each end, and an iron strap round it.
+      plank(PLANK * 2, legs, TROUGH_DEPTH_Z * 1.1, side * (width / 2 - 0.25), legs / 2, 0);
+      const strap = new THREE.Mesh(
+        new THREE.BoxGeometry(0.03, TROUGH_HEIGHT + 0.01, TROUGH_DEPTH_Z + 0.01),
+        new THREE.MeshLambertMaterial({ color: COLORS.strap }),
+      );
+      strap.position.set(side * (width / 2 - 0.12), legs + TROUGH_HEIGHT / 2, 0);
+      trough.add(strap);
     }
+    const waterY = legs + TROUGH_HEIGHT - 0.06;
     const water = new THREE.Mesh(
-      new THREE.CircleGeometry(BUCKET_RADIUS * 0.97, 24),
+      new THREE.PlaneGeometry(width - PLANK * 2, TROUGH_DEPTH_Z - PLANK * 2),
       new THREE.MeshLambertMaterial({ color: COLORS.water }),
     );
     water.rotation.x = -Math.PI / 2;
-    water.position.y = BUCKET_HEIGHT - 0.07;
-    bucket.add(water);
-    bucket.position.set(0, 0, BUCKET_Z);
-    this.#bucketTop.set(0, BUCKET_HEIGHT - 0.07, BUCKET_Z);
-    return bucket;
+    water.position.y = waterY;
+    trough.add(water);
+    trough.position.set(0, 0, TROUGH_Z);
+    this.#water.set(0, waterY, TROUGH_Z);
+    return trough;
   }
 
   /** The x of fuel spot `spot`'s middle (under its staves). */
@@ -619,7 +646,7 @@ export class Firemaking3DView implements ScreenView {
         layer,
         finish: undefined,
         move: undefined,
-        inBucket: false,
+        inTrough: false,
         left: false,
       };
     });
@@ -686,7 +713,7 @@ export class Firemaking3DView implements ScreenView {
   }
 
   /**
-   * The rack comes off: it slides out toward you, the hardened staves plunge into the bucket with
+   * The rack comes off: it slides out toward you, the hardened staves plunge into the trough with
    * a hiss of steam, charred ones crumble to ash, underdone ones fade back to the warchest.
    */
   #pulled(result: RackResult): void {
@@ -704,18 +731,22 @@ export class Firemaking3DView implements ScreenView {
     this.#staves.forEach((stave, index) => {
       stave.finish = result.finishes[index];
       if (stave.finish !== 'hardened') return;
-      // Into the bucket point first, one after another, standing up in the water.
-      const spread = (hardened % 5) - 2;
-      const ring = Math.floor(hardened / 5);
+      // Forward off the rack into the trough, point first, each where it lay along the rack, so
+      // they cascade in one after another and stand leaning against the trough's far side.
       hardened += 1;
-      const to = this.#bucketTop
+      const x = stave.mesh.position.x;
+      const to = this.#water
         .clone()
-        .add(new THREE.Vector3(spread * 0.07, 0.25, (ring % 2) * 0.08 - 0.04));
+        .add(new THREE.Vector3(x, 0.3, (stave.layer % 2) * 0.08 - 0.1 + Math.random() * 0.03));
       stave.move = {
         from: new THREE.Vector3(),
         to,
         fromTurn: new THREE.Euler(),
-        toTurn: new THREE.Euler(-Math.PI / 2 + (Math.random() - 0.5) * 0.25, 0, spread * 0.06),
+        toTurn: new THREE.Euler(
+          -Math.PI / 2 + 0.75 + (Math.random() - 0.5) * 0.12,
+          0,
+          (Math.random() - 0.5) * 0.12,
+        ),
         at: plungeAt + hardened * 0.05,
         seconds: feel.plungeSeconds * 0.6,
         hop: 0.7,
@@ -723,7 +754,7 @@ export class Firemaking3DView implements ScreenView {
     });
     const plungeEnd = plungeAt + feel.plungeSeconds + hardened * 0.05;
     this.#finished = { result, at: plungeEnd + feel.pourDelaySeconds };
-    // The chest holds the spears back until they pour in from the bucket.
+    // The chest holds the spears back until they pour in from the trough.
     const xp = this.#bankedXp;
     this.#bankedXp = undefined;
     if (result.banked > 0) {
@@ -734,23 +765,23 @@ export class Firemaking3DView implements ScreenView {
     }
   }
 
-  /** The bucket's spears pour into the chest, each leaving the bucket as it sets off. */
+  /** The trough's spears pour into the chest, each leaving the trough as it sets off. */
   #pourSpears(): void {
     const deposit = this.#deposit;
     this.#deposit = undefined;
     if (!deposit) return;
     const { clientWidth: width, clientHeight: height } = this.#element;
-    const inBucket = this.#staves.filter((stave) => stave.inBucket);
-    const points: ScreenPoint[] = inBucket.map((stave) => {
+    const inTrough = this.#staves.filter((stave) => stave.inTrough);
+    const points: ScreenPoint[] = inTrough.map((stave) => {
       const projected = stave.mesh.getWorldPosition(new THREE.Vector3()).project(this.#camera);
       return { x: ((projected.x + 1) / 2) * width, y: ((1 - projected.y) / 2) * height };
     });
     if (points.length === 0) {
-      const projected = this.#bucketTop.clone().project(this.#camera);
+      const projected = this.#water.clone().project(this.#camera);
       points.push({ x: ((projected.x + 1) / 2) * width, y: ((1 - projected.y) / 2) * height });
     }
     deposit.pour(points, (source) => {
-      const stave = inBucket[source];
+      const stave = inTrough[source];
       if (stave) stave.left = true;
     });
   }
@@ -786,7 +817,7 @@ export class Firemaking3DView implements ScreenView {
     this.#rack.position.z = from + (to - from) * (1 - (1 - t) ** 3);
   }
 
-  /** Each stave's colour as it cooks, its smoke, and its trip to the bucket after the pull. */
+  /** Each stave's colour as it cooks, its smoke, and its trip to the trough after the pull. */
   #updateStaves(dt: number): void {
     const round = this.#round;
     if (!round) return;
@@ -842,7 +873,7 @@ export class Firemaking3DView implements ScreenView {
       if (move) {
         if (round.now < move.at) continue;
         if (move.from.lengthSq() === 0) {
-          // Leaves the rack for the bucket from wherever it is now.
+          // Leaves the rack for the trough from wherever it is now.
           stave.mesh.getWorldPosition(move.from);
           this.#scene.attach(stave.mesh);
           move.fromTurn.copy(stave.mesh.rotation);
@@ -859,15 +890,16 @@ export class Firemaking3DView implements ScreenView {
         );
         if (t >= 1) {
           stave.move = undefined;
-          stave.inBucket = true;
+          stave.inTrough = true;
           // The plunge: a hiss and a cloud of steam off the water.
           this.#play(`steam-${String(1 + Math.floor(Math.random() * 2))}`, 0.8, -200);
           this.#deps.haptics.pulse(feel.buzzPlungeMs);
-          this.#burst('steam', this.#bucketTop.clone().add(new THREE.Vector3(0, 0.05, 0)), 7);
+          const splash = new THREE.Vector3(move.to.x, this.#water.y + 0.05, this.#water.z);
+          this.#burst('steam', splash, 7);
           this.#shake = Math.max(this.#shake, 0.02 * feel.shakeStrength);
         }
       }
-      if (stave.inBucket) stave.mesh.visible = !stave.left;
+      if (stave.inTrough) stave.mesh.visible = !stave.left;
       if (round.phase.kind === 'done' && stave.finish === 'charred' && stave.mesh.visible) {
         // Charred: crumbles to ash where it lies.
         stave.mesh.scale.multiplyScalar(Math.exp(-2.2 * dt));
@@ -1069,7 +1101,7 @@ export class Firemaking3DView implements ScreenView {
     if (width === 0 || height === 0) return;
     this.#renderer.setSize(width, height);
     this.#camera.aspect = width / height;
-    // Narrow portrait screens: widen the view so the trench and the bucket fit across.
+    // Narrow portrait screens: widen the view so the trench and the trough fit across.
     this.#camera.fov = width / height < 0.6 ? 50 : 42;
     this.#camera.setViewOffset(width, height, 0, height * this.#view.lift, width, height);
     this.#camera.updateProjectionMatrix();

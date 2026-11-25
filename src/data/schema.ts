@@ -589,7 +589,7 @@ export const firemakingFeelSchema = z.object({
   grabPx: positive,
   dragPx: positive,
   pullSeconds: positive,
-  /** The payoff: spears plunged into the bucket (seconds), then a wait before they pour in. */
+  /** The payoff: spears plunged into the trough (seconds), then a wait before they pour in. */
   plungeSeconds: positive,
   pourDelaySeconds: nonNegative,
   hitStopMs: nonNegative,
