@@ -61,11 +61,11 @@ const COALS = 420;
 const TROUGH_Z = 2.85;
 const TROUGH_MARGIN = 0.32;
 const TROUGH_DEPTH_Z = 0.5;
-const TROUGH_HEIGHT = 0.32;
+const TROUGH_HEIGHT = 0.5;
 const PLANK = 0.04;
 /** Spears in the trough: how far they lean back from upright (radians), how deep the points sit. */
 const SPEAR_LEAN = 0.55;
-const SPEAR_DEPTH = 0.15;
+const SPEAR_DEPTH = 0.3;
 /** The camera: how far it looks down, how far back it sits, and where it looks. */
 const CAMERA_ELEVATION = 56 * DEG;
 /**

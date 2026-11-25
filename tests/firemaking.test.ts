@@ -229,6 +229,11 @@ describe('a rack', () => {
     expect(pulled).toMatchObject({ bonus, banked: 6 + bonus });
     expect(banked).toMatchObject({ hardened: 6, bonus });
     expect(round.phase.kind).toBe('done');
+    // Off the fire, the staves stay as they came out.
+    const done = round.doneness(0);
+    expect(done).toBeGreaterThanOrEqual(1);
+    round.tick(5);
+    expect(round.doneness(0)).toBe(done);
   });
 
   it('pulled early leaves staves underdone, which cost stars but aren’t lost', () => {

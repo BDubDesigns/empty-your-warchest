@@ -19,7 +19,8 @@ export type FiremakingPhase =
   | { kind: 'plan' }
   /** The rack is on the fire, laid at round time `at`. */
   | { kind: 'cook'; at: number }
-  | { kind: 'done' };
+  /** Off the fire after `seconds` on it: the staves stay as they came out. */
+  | { kind: 'done'; seconds: number };
 
 /** How a rack came out. */
 export interface RackResult {
@@ -154,9 +155,10 @@ export class FiremakingRound {
     return this.logs.reduce((sum, count) => sum + count, 0);
   }
 
-  /** Seconds the rack has been on the fire. */
+  /** Seconds the rack has been on the fire (or was, once it's off). */
   get cooked(): number {
-    return this.phase.kind === 'cook' ? this.now - this.phase.at : 0;
+    if (this.phase.kind === 'cook') return this.now - this.phase.at;
+    return this.phase.kind === 'done' ? this.phase.seconds : 0;
   }
 
   /** How far along stave `column` of a layer is: 1 is hardened, `charRatio` charred. */
@@ -249,7 +251,7 @@ export class FiremakingRound {
     const missed = bottom.filter((finish) => finish !== 'hardened').length;
     const stars = starsFor(this.rules, missed, this.columns);
     const bonus = starBonusSpears(this.rules, hardened, stars);
-    this.phase = { kind: 'done' };
+    this.phase = { kind: 'done', seconds };
     const banked = this.#hooks.bank(hardened, charred, bonus);
     const result: RackResult = {
       finishes,
