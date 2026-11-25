@@ -4,11 +4,12 @@ import type { Haptics } from '../../../app/haptics';
 import { Sfx } from '../../../app/sfx';
 import { SkillBar, type XpDeposit } from '../../../app/skillBar';
 import { WarchestHud, type ScreenPoint } from '../../../app/warchestHud';
-import type { EventLogger, Game, LiveTuning } from '../../../core';
+import { Rng, type EventLogger, type Game, type LiveTuning } from '../../../core';
 import type { RivingFeel, RivingLog } from '../../../data';
 import { generateLog } from '../logic/generate';
 import { DEG, inArc, markArc, openHeads, starsFor, type Plan } from '../logic/pattern';
 import { RivingRound, type RivingEvent } from '../logic/round';
+import { barkTextures, barkUvs, drawEndGrain, drawSplitGrain } from './woodGrain';
 
 export interface Rive3DDeps {
   game: Game;
@@ -63,14 +64,12 @@ const SOUNDS: Record<string, string> = Object.fromEntries(
 const COLORS = {
   sky: 0xb4cfa8,
   ground: 0x6b8f4e,
-  block: 0x6b4a2f,
-  blockTop: 0x8a6440,
-  bark: 0x5b3e27,
-  wood: 0xd9b98a,
-  stave: 0xe0c08e,
-  ringDark: '#c99d64',
-  ringLight: '#e2c08c',
-  pith: '#8a5d32',
+  /** Tints over the bark photo (warmer for the log, darker and older for the block). */
+  bark: 0xe2c6a6,
+  blockBark: 0xa08a74,
+  /** The block's top: its end grain darkened by weather and chopping. */
+  blockWeather: 'rgb(122 104 88)',
+  chopMark: 'rgb(60 40 24 / 0.55)',
   grain: { rot: '#5a4325', silver: '#cfd8dc', gold: '#f2c037' } as Record<string, string>,
   grainEdge: { rot: '#33240f', silver: '#8fa0a8', gold: '#a87a12' } as Record<string, string>,
   knot: '#3b2413',
@@ -145,6 +144,7 @@ export class Rive3DView implements ScreenView {
   #pieces = new Map<string, PieceVisual>();
   #faceTexture: THREE.CanvasTexture | undefined;
   #faceCanvas: HTMLCanvasElement | undefined;
+  #grain: { id: string; end: HTMLCanvasElement; split: THREE.CanvasTexture } | undefined;
   /** The head chosen last, kept for the next log. */
   #lastHead: number | undefined;
   /** What the plan last drew (face glow, lines, equation), so it redraws only on change. */
@@ -316,30 +316,82 @@ export class Rive3DView implements ScreenView {
     ground.rotation.x = -Math.PI / 2;
     ground.receiveShadow = true;
     this.#scene.add(ground);
-    const block = new THREE.Mesh(
-      new THREE.CylinderGeometry(BLOCK_SPREAD * 1.05, BLOCK_SPREAD * 1.12, BLOCK_HEIGHT, 28),
-      [
-        new THREE.MeshLambertMaterial({ color: COLORS.block }),
-        new THREE.MeshLambertMaterial({ color: COLORS.blockTop }),
-        new THREE.MeshLambertMaterial({ color: COLORS.block }),
-      ],
-    );
-    block.position.y = BLOCK_HEIGHT / 2;
-    block.castShadow = block.receiveShadow = true;
-    this.#scene.add(block);
+    this.#scene.add(this.#buildBlock());
     this.#logRoot.position.y = BLOCK_HEIGHT;
     this.#scene.add(this.#logRoot);
     // The burst's staves: one mesh drawn many times, so a big log stays smooth on a phone.
     const stave = new THREE.BoxGeometry(0.09, 0.06, 0.85);
+    // A box's sides map their long edge across u (the ±x sides) or up v (the ±y sides): turn the
+    // ±x sides' UVs so the grain runs the stave's length on all four.
+    const uv = stave.getAttribute('uv');
+    for (let index = 0; index < 8; index++) uv.setXY(index, uv.getY(index), uv.getX(index));
+    const grain = new THREE.CanvasTexture(drawSplitGrain(64, 256, 5, 3));
+    grain.colorSpace = THREE.SRGBColorSpace;
     this.#staves = new THREE.InstancedMesh(
       stave,
-      new THREE.MeshLambertMaterial({ color: COLORS.stave }),
+      new THREE.MeshLambertMaterial({ map: grain }),
       MAX_STAVES_SHOWN,
     );
     this.#staves.castShadow = true;
     this.#staves.count = 0;
     this.#staves.frustumCulled = false;
     this.#scene.add(this.#staves);
+  }
+
+  /**
+   * The chopping block: a big old round of wood, bark round its side and its top weathered grey
+   * and scarred with chop marks.
+   */
+  #buildBlock(): THREE.Group {
+    const block = new THREE.Group();
+    const top = BLOCK_SPREAD * 1.05;
+    const bottom = BLOCK_SPREAD * 1.12;
+    const sideGeometry = new THREE.CylinderGeometry(top, bottom, BLOCK_HEIGHT, 40, 1, true);
+    barkUvs(sideGeometry, (top + bottom) / 2, BLOCK_HEIGHT, 0, TAU);
+    const { map, normalMap } = barkTextures();
+    const side = new THREE.Mesh(
+      sideGeometry,
+      new THREE.MeshLambertMaterial({ color: COLORS.blockBark, map, normalMap }),
+    );
+    side.position.y = BLOCK_HEIGHT / 2;
+    const canvas = drawEndGrain(512, 34, 7);
+    const context = canvas.getContext('2d');
+    if (context) {
+      context.globalCompositeOperation = 'multiply';
+      context.fillStyle = COLORS.blockWeather;
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      context.globalCompositeOperation = 'source-over';
+      // Chop marks: short dark cuts from missed blows, mostly across the middle.
+      const rng = new Rng(11);
+      context.strokeStyle = COLORS.chopMark;
+      context.lineCap = 'round';
+      for (let mark = 0; mark < 16; mark++) {
+        const angle = rng.range(0, TAU);
+        const out = Math.sqrt(rng.range(0, 1)) * 0.75;
+        const x = 256 + Math.cos(angle) * out * 256;
+        const y = 256 + Math.sin(angle) * out * 256;
+        const along = rng.range(0, Math.PI);
+        const length = rng.range(18, 60);
+        context.lineWidth = rng.range(1.5, 3.5);
+        context.beginPath();
+        context.moveTo(x - Math.cos(along) * length, y - Math.sin(along) * length);
+        context.lineTo(x + Math.cos(along) * length, y + Math.sin(along) * length);
+        context.stroke();
+      }
+    }
+    const grain = new THREE.CanvasTexture(canvas);
+    grain.colorSpace = THREE.SRGBColorSpace;
+    const cap = new THREE.Mesh(
+      new THREE.CircleGeometry(top, 40),
+      new THREE.MeshLambertMaterial({ map: grain }),
+    );
+    cap.rotation.x = -Math.PI / 2;
+    cap.position.y = BLOCK_HEIGHT;
+    block.add(side, cap);
+    block.traverse((child) => {
+      if (child instanceof THREE.Mesh) child.castShadow = child.receiveShadow = true;
+    });
+    return block;
   }
 
   /**
@@ -438,7 +490,7 @@ export class Rive3DView implements ScreenView {
   }
 
   /**
-   * The end grain: growth rings round the pith, knots as dark patches,
+   * The end grain: the log's wood (drawn once per log), knots as dark patches,
    * and each grain as a coloured patch over the arc of the face it covers (the arc the rules
    * use), marked with what it's worth. Grains the cuts would run through glow (red for a good
    * one, green for rot); ones a struck head has cut are drawn faded and crossed out.
@@ -461,16 +513,7 @@ export class Rive3DView implements ScreenView {
       x: middle + Math.cos(angle) * radius * share,
       y: middle - Math.sin(angle) * radius * share,
     });
-    for (let ring = log.rings; ring >= 1; ring--) {
-      context.beginPath();
-      context.arc(middle, middle, (radius * ring) / log.rings, 0, Math.PI * 2);
-      context.fillStyle = ring % 2 === 0 ? COLORS.ringDark : COLORS.ringLight;
-      context.fill();
-    }
-    context.beginPath();
-    context.arc(middle, middle, radius * 0.04, 0, Math.PI * 2);
-    context.fillStyle = COLORS.pith;
-    context.fill();
+    context.drawImage(this.#grainFor(log).end, 0, 0, size, size);
     const kinds = this.#deps.game.data.riving.grainKinds;
     const wedgePath = (mark: { angle: number; width: number }) => {
       // Canvas angles run clockwise, so the face's angles are negated.
@@ -489,7 +532,8 @@ export class Rive3DView implements ScreenView {
     log.grains.forEach((grain, index) => {
       const alive = !cancelled.includes(index);
       wedgePath(grain);
-      context.globalAlpha = alive ? 0.92 : 0.35;
+      // The wood shows through a little, so a grain reads as part of the log.
+      context.globalAlpha = alive ? 0.8 : 0.35;
       context.fillStyle = alive ? (COLORS.grain[grain.kind] ?? '#888') : COLORS.cancelled;
       context.fill();
       context.globalAlpha = 1;
@@ -528,6 +572,23 @@ export class Rive3DView implements ScreenView {
     texture.repeat.set(1 / (2 * log.radius), 1 / (2 * log.radius));
     texture.offset.set(0.5, 0.5);
     return texture;
+  }
+
+  /**
+   * The wood drawn for this log (its end grain, and its split face as a texture), made once per
+   * log from its id, so the same log always looks the same.
+   */
+  #grainFor(log: RivingLog): { end: HTMLCanvasElement; split: THREE.CanvasTexture } {
+    if (this.#grain?.id === log.id) return this.#grain;
+    this.#grain?.split.dispose();
+    let seed = 7;
+    for (let index = 0; index < log.id.length; index++) {
+      seed = (seed * 31 + log.id.charCodeAt(index)) | 0;
+    }
+    const split = new THREE.CanvasTexture(drawSplitGrain(128, 256, log.rings, seed));
+    split.colorSpace = THREE.SRGBColorSpace;
+    this.#grain = { id: log.id, end: drawEndGrain(512, log.rings, seed), split };
+    return this.#grain;
   }
 
   /** The log's grains, for its name, repeats counted: "3 Silver ×2 · Rot ×½". */
@@ -571,18 +632,21 @@ export class Rive3DView implements ScreenView {
     );
     top.position.y = height;
     // The bark: a cylinder's side over the piece's arc (its angles start a quarter turn round).
+    const barkGeometry = new THREE.CylinderGeometry(
+      radius,
+      radius,
+      height,
+      segments,
+      1,
+      true,
+      arc.start + Math.PI / 2,
+      arc.width,
+    );
+    barkUvs(barkGeometry, radius, height, arc.start + Math.PI / 2, arc.width);
+    const { map, normalMap } = barkTextures();
     const bark = new THREE.Mesh(
-      new THREE.CylinderGeometry(
-        radius,
-        radius,
-        height,
-        segments,
-        1,
-        true,
-        arc.start + Math.PI / 2,
-        arc.width,
-      ),
-      new THREE.MeshLambertMaterial({ color: COLORS.bark, side: THREE.DoubleSide }),
+      barkGeometry,
+      new THREE.MeshLambertMaterial({ color: COLORS.bark, map, normalMap, side: THREE.DoubleSide }),
     );
     bark.position.y = height / 2;
     root.add(top, bark);
@@ -592,7 +656,7 @@ export class Rive3DView implements ScreenView {
         geometry.translate(radius / 2, height / 2, 0);
         const face = new THREE.Mesh(
           geometry,
-          new THREE.MeshLambertMaterial({ color: COLORS.wood, side: THREE.DoubleSide }),
+          new THREE.MeshLambertMaterial({ map: this.#grainFor(log).split, side: THREE.DoubleSide }),
         );
         face.rotation.y = edge;
         root.add(face);

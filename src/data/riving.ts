@@ -39,7 +39,7 @@ export const riving = {
     id: 'tutorial_log',
     radius: 1,
     height: 1.7,
-    rings: 14,
+    rings: 22,
     // Run a cut through the rot and keep the silver whole.
     knots: [],
     grains: [
@@ -50,7 +50,8 @@ export const riving = {
   generator: {
     radius: { min: 0.92, max: 1.08 },
     height: { min: 1.55, max: 1.8 },
-    rings: { min: 11, max: 19 },
+    // Growth rings, only drawn: enough that the end grain reads as a real log.
+    rings: { min: 18, max: 30 },
     // Always something to keep and something to cut out.
     good: { min: 1, max: 3 },
     bad: { min: 1, max: 2 },
