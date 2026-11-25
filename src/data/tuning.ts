@@ -5,5 +5,5 @@ export const tuning = {
   xpCurve: { maxLevel: 99, base: 300, doublingLevels: 7, divisor: 4 },
   idle: { capMinutes: 30 },
   // Attack Run: "you recover about half of the thrown spears".
-  weaponRecoveryOnWin: { poor: 0.5, good: 0.5, perfect: 0.5 },
+  weaponRecoveryOnWin: 0.5,
 } satisfies GameDataInput['tuning'];

@@ -58,16 +58,15 @@ describe('camp layout', () => {
 });
 
 describe('warchest view', () => {
-  it('lists every item, with tiered items by quality', () => {
+  it('lists every item with its count', () => {
     const inventory = new Inventory(data, [
       { item: 'log', count: 12 },
-      { item: 'spear', count: 4, quality: 'poor' },
-      { item: 'spear', count: 1, quality: 'perfect' },
+      { item: 'spear', count: 5 },
     ]);
     expect(warchestRows(data, inventory)).toEqual([
       { item: 'log', name: 'Log', detail: '12' },
       { item: 'stave', name: 'Stave', detail: '0' },
-      { item: 'spear', name: 'Spear', detail: 'Poor 4 · Good 0 · Perfect 1' },
+      { item: 'spear', name: 'Spear', detail: '5' },
     ]);
   });
 });

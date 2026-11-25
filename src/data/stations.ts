@@ -19,7 +19,7 @@ export const stations = [
   {
     id: 'fire_pit',
     name: 'Fire pit',
-    skill: 'splitting',
+    skill: 'firemaking',
     mechanic: 'harden',
     camp: { x: 0.73, y: 0.42 },
   },

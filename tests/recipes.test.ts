@@ -20,11 +20,11 @@ describe('recipes', () => {
     expect(inventory.count('log')).toBe(4);
   });
 
-  it('runs a rack of batches with the quality the mini game decided', () => {
+  it('runs a rack of batches', () => {
     const inventory = new Inventory(data, [{ item: 'stave', count: 6 }]);
-    const result = craft(inventory, recipe('harden_spear'), { batches: 5, outputQuality: 'good' });
+    const result = craft(inventory, recipe('harden_spear'), { batches: 5 });
     expect(inventory.count('stave')).toBe(1);
-    expect(inventory.count('spear', 'good')).toBe(5);
+    expect(inventory.count('spear')).toBe(5);
     expect(result.xp).toBe(recipe('harden_spear').xp * 5);
   });
 
@@ -49,16 +49,9 @@ describe('recipes', () => {
   it('changes nothing when inputs are missing', () => {
     const inventory = new Inventory(data, [{ item: 'stave', count: 2 }]);
     expect(canCraft(inventory, recipe('harden_spear'), 3)).toBe(false);
-    expect(() =>
-      craft(inventory, recipe('harden_spear'), { batches: 3, outputQuality: 'good' }),
-    ).toThrow('missing 3 stave');
-    expect(inventory.stacks()).toEqual([{ item: 'stave', count: 2 }]);
-  });
-
-  it('changes nothing when a tiered output has no or a bad quality', () => {
-    const inventory = new Inventory(data, [{ item: 'stave', count: 2 }]);
-    expect(() => craft(inventory, recipe('harden_spear'))).toThrow('needs an outputQuality');
-    expect(() => craft(inventory, recipe('harden_spear'), { outputQuality: 'shiny' })).toThrow();
+    expect(() => craft(inventory, recipe('harden_spear'), { batches: 3 })).toThrow(
+      'missing 3 stave',
+    );
     expect(inventory.stacks()).toEqual([{ item: 'stave', count: 2 }]);
   });
 

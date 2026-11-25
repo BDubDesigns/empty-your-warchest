@@ -9,7 +9,7 @@ export interface WarchestDeps {
   onClose: () => void;
 }
 
-/** The warchest view: every item, by quality tier, over the camp. */
+/** The warchest view: every item and its count, over the camp. */
 export class WarchestScene extends Phaser.Scene {
   readonly #deps: WarchestDeps;
 

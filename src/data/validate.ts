@@ -17,7 +17,6 @@ function checkReferences(data: GameData, ctx: z.RefinementCtx): void {
     });
     return seen;
   };
-  const qualities = ids('qualities', data.qualities);
   const skills = ids('skills', data.skills);
   const itemIds = ids('items', data.items);
   const stations = ids('stations', data.stations);
@@ -25,17 +24,6 @@ function checkReferences(data: GameData, ctx: z.RefinementCtx): void {
   const units = ids('units', data.units);
   const enemies = ids('enemies', data.enemies);
   ids('levels', data.levels);
-
-  const tiered = new Set(data.items.filter((item) => item.tiered).map((item) => item.id));
-
-  const coversAllQualities = (path: Path, record: Record<string, number>): void => {
-    for (const quality of qualities) {
-      if (!(quality in record)) issue(path, `Missing a value for quality "${quality}"`);
-    }
-    for (const key of Object.keys(record)) {
-      if (!qualities.has(key)) issue(path, `Unknown quality "${key}"`);
-    }
-  };
 
   data.stations.forEach((station, index) => {
     if (!skills.has(station.skill)) {
@@ -50,19 +38,7 @@ function checkReferences(data: GameData, ctx: z.RefinementCtx): void {
     for (const side of ['inputs', 'outputs'] as const) {
       recipe[side].forEach((stack, stackIndex) => {
         const path = ['recipes', index, side, stackIndex];
-        if (!itemIds.has(stack.item)) {
-          issue([...path, 'item'], `Unknown item "${stack.item}"`);
-          return;
-        }
-        if (stack.quality !== undefined) {
-          if (!tiered.has(stack.item)) {
-            issue([...path, 'quality'], `"${stack.item}" has no quality tiers`);
-          } else if (!qualities.has(stack.quality)) {
-            issue([...path, 'quality'], `Unknown quality "${stack.quality}"`);
-          }
-        } else if (side === 'inputs' && tiered.has(stack.item)) {
-          issue([...path, 'quality'], `Tiered input "${stack.item}" needs a quality`);
-        }
+        if (!itemIds.has(stack.item)) issue([...path, 'item'], `Unknown item "${stack.item}"`);
       });
     }
   });
@@ -71,10 +47,7 @@ function checkReferences(data: GameData, ctx: z.RefinementCtx): void {
     const path = ['units', index, 'weapon'];
     if (!itemIds.has(unit.weapon.item)) {
       issue([...path, 'item'], `Unknown item "${unit.weapon.item}"`);
-    } else if (!tiered.has(unit.weapon.item)) {
-      issue([...path, 'item'], `Weapon "${unit.weapon.item}" must be a tiered item`);
     }
-    coversAllQualities([...path, 'damageByQuality'], unit.weapon.damageByQuality);
   });
 
   data.levels.forEach((level, index) => {
@@ -102,8 +75,6 @@ function checkReferences(data: GameData, ctx: z.RefinementCtx): void {
       issue([...path, 'events'], 'A level needs exactly one wall, as its last event');
     }
   });
-
-  coversAllQualities(['tuning', 'weaponRecoveryOnWin'], data.tuning.weaponRecoveryOnWin);
 
   const splitting = data.splitting;
   if (!data.recipes.some((recipe) => recipe.id === splitting.recipe)) {

@@ -76,8 +76,8 @@ export class Game {
     this.#changed();
   }
 
-  addItems(itemId: string, count: number, quality?: string): void {
-    this.#inventory.add(itemId, count, quality);
+  addItems(itemId: string, count: number): void {
+    this.#inventory.add(itemId, count);
     this.#changed();
   }
 
