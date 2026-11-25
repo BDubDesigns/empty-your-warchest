@@ -195,6 +195,27 @@ function restTilt(
   return Math.asin(Math.min(distance / length, 1));
 }
 
+/** How far from its stump a trunk touching the cabin `at` along its line rests on it. */
+function cabinReach(clearing: Clearing, tree: ClearingTree, at: number): number {
+  const radius =
+    at < tree.height * clearing.canopyStart ? clearing.trunkRadius : clearing.canopyRadius;
+  return at + radius;
+}
+
+/**
+ * How far a trunk leaning on the cabin tips once the cabin has caved in to `share` of its height.
+ * Only looks: the crash already stopped the chain there, so it knocks nothing else.
+ */
+export function cabinSagTilt(
+  clearing: Clearing,
+  tree: ClearingTree,
+  stop: CabinStop,
+  share: number,
+): number {
+  const height = (clearing.cabin?.height ?? 0) * share;
+  return Math.max(restTilt(clearing, tree, cabinReach(clearing, tree, stop.at), height), stop.tilt);
+}
+
 /** A boulder a falling trunk touches: where along its line, for the billiards knock. */
 interface BoulderHit {
   boulder: Boulder;
@@ -247,10 +268,11 @@ export function fallPath(
     })
     .sort((a, b) => a.contactAt - b.contactAt);
   if (!cabin || at === undefined) return { path: { angle }, hits, boulders: boulderHits };
-  const radius =
-    at < tree.height * clearing.canopyStart ? clearing.trunkRadius : clearing.canopyRadius;
   return {
-    path: { angle, cabin: { at, tilt: restTilt(clearing, tree, at + radius, cabin.height) } },
+    path: {
+      angle,
+      cabin: { at, tilt: restTilt(clearing, tree, cabinReach(clearing, tree, at), cabin.height) },
+    },
     hits,
     boulders: boulderHits,
   };

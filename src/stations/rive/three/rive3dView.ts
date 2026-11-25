@@ -10,7 +10,7 @@ import type { RivingFeel, RivingLog } from '../../../data';
 import { generateLog } from '../logic/generate';
 import { DEG, inArc, markArc, openHeads, starsFor, type Plan } from '../logic/pattern';
 import { RivingRound, type RivingEvent } from '../logic/round';
-import { barkTextures, barkUvs, drawEndGrain, drawSplitGrain } from './woodGrain';
+import { barkTextures, barkUvs, drawEndGrain, drawSplitGrain } from '../../../app/woodGrain';
 
 export interface Rive3DDeps {
   game: Game;

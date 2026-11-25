@@ -11,6 +11,7 @@ test('tapping the HUD chest opens the warchest panel, and it closes again', asyn
   page.on('pageerror', (error) => errors.push(error.message));
   await page.addInitScript(() => {
     localStorage.setItem('warchest.woodcutting.treeStyle', 'kenney');
+    localStorage.setItem('warchest.woodcutting.scenery', 'off');
   });
   await page.goto('/');
   await expect(page.locator('body')).toHaveAttribute('data-view', 'camp');

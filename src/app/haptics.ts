@@ -32,4 +32,19 @@ export class Haptics {
     if (ms <= 0 || this.#enabled.value === 'off' || !('vibrate' in navigator)) return;
     navigator.vibrate(Math.round(ms));
   }
+
+  /**
+   * A rumble that dies away: `pulses` pulses, the first `ms` long and each shorter than the last,
+   * with short gaps between them (a crash, not a tap).
+   */
+  rumble(ms: number, pulses: number): void {
+    if (ms <= 0 || this.#enabled.value === 'off' || !('vibrate' in navigator)) return;
+    const pattern: number[] = [];
+    for (let pulse = 0; pulse < pulses; pulse++) {
+      const fade = 1 - pulse / pulses;
+      if (pulse > 0) pattern.push(Math.round(25 + 30 * (1 - fade)));
+      pattern.push(Math.max(Math.round(ms * fade), 8));
+    }
+    navigator.vibrate(pattern);
+  }
 }

@@ -19,3 +19,23 @@ export function treeStyleChoice(store: KeyValueStore): LiveChoice<TreeStyle> {
     store,
   );
 }
+
+/** Whether the 3D clearing draws the grass, plants and forest outside its fence. */
+export type SceneryDetail = 'full' | 'off';
+
+/**
+ * The scenery outside the fence, a debug menu choice kept on this phone: full by default, off for
+ * a phone that struggles (and for the e2e tests, which draw 3D in software).
+ */
+export function sceneryChoice(store: KeyValueStore): LiveChoice<SceneryDetail> {
+  return new LiveChoice<SceneryDetail>(
+    'warchest.woodcutting.scenery',
+    'Woodcutting scenery',
+    [
+      { value: 'full', label: 'Full' },
+      { value: 'off', label: 'Off' },
+    ],
+    'full',
+    store,
+  );
+}

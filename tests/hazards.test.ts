@@ -3,6 +3,8 @@ import type { Clearing } from '../src/data';
 import {
   afterChain,
   boulderKnock,
+  cabinSagTilt,
+  fallPath,
   hitsCabin,
   previewFall,
   previewFelling,
@@ -223,6 +225,24 @@ describe('the cabin', () => {
     expect(events.map((event) => event.type)).toContain('crash');
     expect(events).toContainEqual({ type: 'lost', trees: 1, logs: 1 });
     expect((await logger.readAll()).map((entry) => entry.type)).toContain('woodcutting.cabinHit');
+  });
+});
+
+describe('a tree that crashed into the cabin', () => {
+  it('sinks lower as the cabin caves in, never rising, and only along its own line', () => {
+    const c = clearing([{ id: 'a', x: 0, y: 100, height: 100 }], {
+      cabin: { x: 80, y: 100, width: 20, depth: 40, height: 30 },
+    });
+    const tree = c.trees[0];
+    if (!tree) throw new Error('No tree');
+    const stop = fallPath(c, all(c), tree, RIGHT).path.cabin;
+    if (!stop) throw new Error('Expected it to hit the cabin');
+    expect(cabinSagTilt(c, tree, stop, 1)).toBeCloseTo(stop.tilt);
+    const half = cabinSagTilt(c, tree, stop, 0.5);
+    const low = cabinSagTilt(c, tree, stop, 0.2);
+    expect(half).toBeGreaterThan(stop.tilt);
+    expect(low).toBeGreaterThan(half);
+    expect(low).toBeLessThan(Math.PI / 2);
   });
 });
 

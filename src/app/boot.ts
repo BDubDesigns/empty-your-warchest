@@ -18,9 +18,11 @@ import { rivingFeel } from '../stations/rive/feel';
 import {
   ClearingPicker,
   fastFallChoice,
+  sceneryChoice,
   treeStyleChoice,
   woodcuttingFeel,
   type FastFall,
+  type SceneryDetail,
   type TreeStyle,
 } from '../stations/woodcutting';
 import { Haptics, vibrationChoice, type Vibration } from './haptics';
@@ -32,7 +34,11 @@ export interface Booted {
   saves: SaveStore;
   feel: { woodcutting: LiveTuning<WoodcuttingFeel>; riving: LiveTuning<RivingFeel> };
   /** Picks kept on this phone, shown in the debug menu. */
-  choices: { treeStyle: LiveChoice<TreeStyle>; vibration: LiveChoice<Vibration> };
+  choices: {
+    treeStyle: LiveChoice<TreeStyle>;
+    scenery: LiveChoice<SceneryDetail>;
+    vibration: LiveChoice<Vibration>;
+  };
   haptics: Haptics;
   /** Which clearing each woodcutting round plays. */
   clearings: ClearingPicker;
@@ -99,6 +105,7 @@ export async function bootGame(buildLabel: string): Promise<Booted> {
   };
   const choices = {
     treeStyle: treeStyleChoice(localStorageStore()),
+    scenery: sceneryChoice(localStorageStore()),
     vibration: vibrationChoice(localStorageStore()),
   };
   const haptics = new Haptics(choices.vibration);

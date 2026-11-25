@@ -42,6 +42,7 @@ test('3D woodcutting: aim, Chop, chop in the close-up, the tree falls, logs to t
   // The simpler trees: the detailed ones (and carving them) are slow in software rendering.
   await page.addInitScript(() => {
     localStorage.setItem('warchest.woodcutting.treeStyle', 'kenney');
+    localStorage.setItem('warchest.woodcutting.scenery', 'off');
   });
   await page.goto('/');
   await expect(page.locator('body')).toHaveAttribute('data-view', 'camp');

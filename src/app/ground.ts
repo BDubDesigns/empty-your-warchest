@@ -6,7 +6,7 @@ import * as THREE from 'three';
  * dirt, twigs and grass as if they were real bumps). One texture per kind, loaded once and shared;
  * each ground mesh maps it in world units, so the ground is the same size everywhere.
  */
-export type GroundKind = 'forestGrass' | 'troddenDirt';
+export type GroundKind = 'forestGrass' | 'meadowGrass' | 'troddenDirt';
 
 const GROUNDS: Record<GroundKind, { map: string; normalMap: string; tile: number; tint: number }> =
   {
@@ -15,6 +15,13 @@ const GROUNDS: Record<GroundKind, { map: string; normalMap: string; tile: number
       map: 'textures/ground/forest_grass.jpg',
       normalMap: 'textures/ground/forest_grass_normal.jpg',
       tile: 3.5,
+      tint: 0xffffff,
+    },
+    /** Thick, green grass. */
+    meadowGrass: {
+      map: 'textures/ground/meadow_grass.jpg',
+      normalMap: 'textures/ground/meadow_grass_normal.jpg',
+      tile: 2.5,
       tint: 0xffffff,
     },
     /** Bare, trodden earth with moss and leaves, for places people work. */
