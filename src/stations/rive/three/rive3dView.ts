@@ -37,6 +37,8 @@ const HEAD_SINK = 0.5;
 const HANDLE_SWING = 50 * DEG;
 /** How much of a notch the head gives as the handle goes down, before the stroke clicks it in. */
 const HANDLE_GIVE = 0.35;
+/** The least gap between the handle and the top of the log, at the bottom of the last stroke. */
+const HANDLE_CLEARANCE = 0.15;
 /** How wide the cut lines are drawn (world units): thin, so you can see where they cross. */
 const GUIDE_WIDTH = 0.025;
 /** Staves drawn in the burst (past this many, the count says the rest), stacked this many wide. */
@@ -361,13 +363,16 @@ export class Rive3DView implements ScreenView {
       blade.rotation.y = (index * TAU) / count;
       root.add(blade);
     }
-    const post = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.06, 0.7, 10), dark);
-    post.position.y = 0.22 + 0.35;
+    // The handle pivots high enough that, swung all the way down with the head sunk all the way
+    // in, it still clears the top of the log out to the bark.
+    const pivot = Math.sin(HANDLE_SWING) * radius * 1.05 + HEAD_SINK + HANDLE_CLEARANCE;
+    const post = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.06, pivot - 0.22, 10), dark);
+    post.position.y = (0.22 + pivot) / 2;
     root.add(post);
     // The handle always reaches out to the right, however the blades are turned, so you see it
     // swing down as you pump.
     const yaw = new THREE.Group();
-    yaw.position.y = 0.22 + 0.7;
+    yaw.position.y = pivot;
     const arm = new THREE.Group();
     yaw.add(arm);
     const bar = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 1.5, 8), dark);
