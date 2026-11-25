@@ -3,7 +3,7 @@ import type { RivingFeel } from '../../data';
 
 /** Slider ranges for the debug menu's live tuning panel. */
 export const rivingTunables: readonly Tunable[] = [
-  { key: 'strikeSeconds', label: 'Head drop (s)', min: 0.05, max: 0.6, step: 0.01 },
+  { key: 'strikeSeconds', label: 'Press swings over (s)', min: 0.05, max: 1, step: 0.01 },
   { key: 'hitStopMs', label: 'Hit-stop (ms)', min: 0, max: 200, step: 10 },
   { key: 'shakeStrength', label: 'Shake strength', min: 0, max: 3, step: 0.1 },
   {

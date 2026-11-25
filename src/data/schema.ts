@@ -440,7 +440,7 @@ export const warchestSchema = z.object({
 
 /** Feel numbers for riving. The debug menu can override them live. */
 export const rivingFeelSchema = z.object({
-  /** Seconds the splitting head takes to drop onto the log, and the freeze when it lands (ms). */
+  /** Seconds the press takes to swing over and slam the head onto the log, and the freeze then (ms). */
   strikeSeconds: positive,
   hitStopMs: nonNegative,
   shakeStrength: nonNegative,

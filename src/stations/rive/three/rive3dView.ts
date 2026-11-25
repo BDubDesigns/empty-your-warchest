@@ -32,18 +32,37 @@ const STRAIN_GAP = 0.06;
 /** The camera: how far it looks down (radians) and how far back it sits. */
 const CAMERA_ELEVATION = 58 * DEG;
 const CAMERA_DISTANCE = 9;
-/** The splitting head: how high it starts its drop, and how far it sinks into the log. */
-const HEAD_DROP = 1.5;
+/** How far the splitting head sinks into the log. */
 const HEAD_SINK = 0.5;
-/** How far the pump handle swings down at the bottom of a stroke (radians). */
+/** The head's hub height: the ram pushes on its top. */
+const HUB_HEIGHT = 0.22;
+/**
+ * The press: a post behind the block with an arm hinged at its top, a bottle jack hanging upside
+ * down from the arm's end over the pith, its chrome ram pushing the head. The jack's body length
+ * and radius, the ram's least showing length (at the tallest log), the arm's thickness, and how
+ * far it's swung up and back out of the way while you plan (radians).
+ */
+const JACK_LENGTH = 0.75;
+const JACK_RADIUS = 0.17;
+const RAM_MIN = 0.3;
+const ARM_THICKNESS = 0.18;
+const ARM_RAISED = -100 * DEG;
+/** How far behind the pith the post stands, past the block's back. */
+const POST_GAP = 0.18;
+/** Seconds the arm takes to lift back up after the burst, and how long it waits first. */
+const LIFT_SECONDS = 0.7;
+const LIFT_DELAY = 0.5;
+/**
+ * The pump handle, in a socket near the top of the jack: how far it swings (from `HANDLE_REST`
+ * above level to as far below), how much of a notch the head gives as it goes down before the
+ * stroke clicks it in, its length, the grip's size, and the least gap above the tallest log.
+ */
 const HANDLE_SWING = 50 * DEG;
-/** How much of a notch the head gives as the handle goes down, before the stroke clicks it in. */
+const HANDLE_REST = 25 * DEG;
 const HANDLE_GIVE = 0.35;
-/** The least gap between the handle and the top of the log, at the bottom of the last stroke. */
-const HANDLE_CLEARANCE = 0.15;
-/** The handle's arm, pivot to grip, and how far the grip hangs below the arm (its radius too). */
 const HANDLE_LENGTH = 1.5;
 const GRIP_DROP = 0.11;
+const HANDLE_CLEARANCE = 0.15;
 /** How wide the cut lines are drawn (world units): thin, so you can see where they cross. */
 const GUIDE_WIDTH = 0.025;
 /** Staves drawn in the burst (past this many, the count says the rest), stacked this many wide. */
@@ -65,6 +84,9 @@ const SOUNDS: Record<string, string> = Object.fromEntries(
     'star',
   ].map((name) => [name, `audio/woodcutting/${name}.mp3`]),
 );
+for (const name of ['press-slam', 'press-clunk', 'press-click']) {
+  SOUNDS[name] = `audio/riving/${name}.mp3`;
+}
 const COLORS = {
   sky: 0xb4cfa8,
   /** Tints over the bark photo (warmer for the log, darker and older for the block). */
@@ -81,12 +103,28 @@ const COLORS = {
   glowBad: '#ff4a3a',
   steel: 0x9aa3a8,
   steelDark: 0x5d666b,
-  handle: 0x8b5a2b,
+  frame: 0x3a4044,
+  jack: 0xb3261e,
+  chrome: 0xdfe4e8,
+  rubber: 0x1c1c1c,
   guide: 0xf2ead3,
   danger: 0xe0503c,
   good: 0x7fd65a,
   crack: 0x1d120a,
 };
+
+/**
+ * The press's moving parts. The arm pivots at its hinge (x = 0, `hinge` y and z in the log root);
+ * along it, at the pith, hang the jack and its ram (`ramTop` below the hinge), the head under the
+ * ram, and the handle's socket.
+ */
+interface Press {
+  arm: THREE.Group;
+  ram: THREE.Mesh;
+  handle: THREE.Group;
+  hinge: { y: number; z: number };
+  ramTop: number;
+}
 
 /** A part of the log seen on its end: the arc of the end face it covers. */
 interface Arc {
@@ -154,7 +192,14 @@ export class Rive3DView implements ScreenView {
   #lastHead: number | undefined;
   /** What the plan last drew (face glow, lines, equation), so it redraws only on change. */
   #planKey = '';
-  #head: { root: THREE.Group; yaw: THREE.Group; arm: THREE.Group; count: number } | undefined;
+  /** The press (built once): its swinging arm, the ram, the handle, and where things hang. */
+  #press!: Press;
+  /** The splitting head on the ram, built for the head picked at the strike. */
+  #head: { root: THREE.Group; count: number } | undefined;
+  /** Round time the arm starts lifting back up after the burst. */
+  #liftAt: number | undefined;
+  /** The handle was down last frame (for the ratchet click as it comes back up). */
+  #handleDown = false;
   #guideLines: THREE.Mesh[] = [];
   #cracks: THREE.Mesh[] = [];
   #staves!: THREE.InstancedMesh;
@@ -306,6 +351,7 @@ export class Rive3DView implements ScreenView {
     this.#faceTexture?.dispose();
     this.#faceTexture = undefined;
     if (this.#head) this.#head.root.visible = false;
+    this.#liftAt = undefined;
   }
 
   // World
@@ -330,6 +376,7 @@ export class Rive3DView implements ScreenView {
     );
     this.#scene.add(this.#buildBlock());
     this.#logRoot.position.y = BLOCK_HEIGHT;
+    this.#press = this.#buildPress();
     this.#scene.add(this.#logRoot);
     // The burst's staves: one mesh drawn many times, so a big log stays smooth on a phone.
     const stave = new THREE.BoxGeometry(0.09, 0.06, 0.85);
@@ -407,17 +454,117 @@ export class Rive3DView implements ScreenView {
   }
 
   /**
-   * The splitting head for a `count`-way split: a steel blade along each cut line from a hub at
-   * the pith, a post up from the hub, and a pump handle reaching toward you that swings down with
-   * each stroke.
+   * The press, a bottle-jack log splitter: a steel post bolted behind the block, an arm hinged at
+   * its top that swings over the log, and a red bottle jack hanging upside down from the arm's end
+   * over the pith. Its chrome ram pushes the splitting head, creeping out a notch each pump of the
+   * handle in the jack's socket. Sized for the tallest log, so the ram shows more on shorter ones.
    */
+  #buildPress(): Press {
+    const rules = this.#deps.game.data.riving;
+    const tallest = Math.max(rules.tutorialLog.height, rules.generator.height.max);
+    const frame = new THREE.MeshPhongMaterial({ color: COLORS.frame, shininess: 40 });
+    const jack = new THREE.MeshPhongMaterial({ color: COLORS.jack, shininess: 70 });
+    const chrome = new THREE.MeshPhongMaterial({
+      color: COLORS.chrome,
+      shininess: 140,
+      specular: 0xffffff,
+    });
+    // From the top of the tallest log up: hub, the ram's least length, the jack, its base plate,
+    // and half the arm, to the hinge.
+    const jackBottom = tallest - 0.03 + HUB_HEIGHT + RAM_MIN;
+    const plate = 0.08;
+    const hingeY = jackBottom + JACK_LENGTH + plate + ARM_THICKNESS / 2;
+    const hingeZ = -(BLOCK_SPREAD * 1.12 + POST_GAP);
+    const group = new THREE.Group();
+    // The post, from the ground to the hinge, on a foot plate, strapped to the block.
+    const postHeight = hingeY + BLOCK_HEIGHT;
+    const post = new THREE.Mesh(new THREE.BoxGeometry(0.22, postHeight, 0.22), frame);
+    post.position.set(0, postHeight / 2 - BLOCK_HEIGHT, hingeZ);
+    const foot = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.05, 0.5), frame);
+    foot.position.set(0, 0.025 - BLOCK_HEIGHT, hingeZ);
+    const strap = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.12, 0.08), frame);
+    strap.position.set(0, -BLOCK_HEIGHT / 2, hingeZ + 0.15);
+    // The hinge: a knuckle across the top, with a stop the arm slams down onto.
+    const knuckle = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.13, 0.34, 14), frame);
+    knuckle.rotation.z = Math.PI / 2;
+    knuckle.position.set(0, hingeY, hingeZ);
+    group.add(post, foot, strap, knuckle);
+    // The arm, pivoting at the hinge, reaching forward past the pith.
+    const arm = new THREE.Group();
+    arm.position.set(0, hingeY, hingeZ);
+    // Up and back out of the way until a strike swings it over.
+    arm.rotation.x = ARM_RAISED;
+    const reach = -hingeZ + 0.2;
+    const beam = new THREE.Mesh(new THREE.BoxGeometry(0.24, ARM_THICKNESS, reach), frame);
+    beam.position.z = reach / 2;
+    arm.add(beam);
+    // The jack hangs under the arm's end over the pith (arm-local: the pith is at z = -hingeZ).
+    const at = -hingeZ;
+    const base = new THREE.Mesh(new THREE.CylinderGeometry(0.23, 0.23, plate, 18), jack);
+    base.position.set(0, -ARM_THICKNESS / 2 - plate / 2, at);
+    const jackTop = -ARM_THICKNESS / 2 - plate;
+    const body = new THREE.Mesh(
+      new THREE.CylinderGeometry(JACK_RADIUS, JACK_RADIUS * 1.1, JACK_LENGTH, 18),
+      jack,
+    );
+    body.position.set(0, jackTop - JACK_LENGTH / 2, at);
+    const collar = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.11, 0.06, 14), chrome);
+    collar.position.set(0, jackTop - JACK_LENGTH - 0.03, at);
+    arm.add(base, body, collar);
+    // The ram: a unit-tall chrome rod, stretched each frame from the jack down to the head.
+    const ram = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.075, 1, 14), chrome);
+    ram.position.z = at;
+    arm.add(ram);
+    // The handle's socket near the top of the jack, on the right, and the handle in it.
+    const socketY = jackTop - 0.14;
+    const socket = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.14, 0.14), jack);
+    socket.position.set(JACK_RADIUS + 0.05, socketY, at);
+    arm.add(socket);
+    const handle = new THREE.Group();
+    handle.position.set(JACK_RADIUS + 0.1, socketY, at);
+    const bar = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, HANDLE_LENGTH, 10), frame);
+    bar.rotation.z = Math.PI / 2;
+    bar.position.x = HANDLE_LENGTH / 2;
+    const grip = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.065, 0.065, 0.36, 12),
+      new THREE.MeshLambertMaterial({ color: COLORS.rubber }),
+    );
+    grip.rotation.z = Math.PI / 2;
+    grip.position.x = HANDLE_LENGTH - 0.18;
+    handle.add(bar, grip);
+    arm.add(handle);
+    group.add(arm);
+    group.traverse((child) => {
+      if (child instanceof THREE.Mesh) {
+        child.castShadow = true;
+        child.receiveShadow = true;
+      }
+    });
+    // At the bottom of a stroke the handle dips HANDLE_SWING - HANDLE_REST below level: it must
+    // stay above the tallest log, grip and all, so it never looks to go into the wood.
+    const socketHeight = hingeY + socketY;
+    const lowest = socketHeight - Math.sin(HANDLE_SWING - HANDLE_REST) * HANDLE_LENGTH - GRIP_DROP;
+    if (lowest < tallest + HANDLE_CLEARANCE) {
+      throw new Error('The press handle would dip into the log: raise the jack');
+    }
+    this.#logRoot.add(group);
+    return {
+      arm,
+      ram,
+      handle,
+      hinge: { y: hingeY, z: hingeZ },
+      ramTop: jackTop - JACK_LENGTH - 0.06,
+    };
+  }
+
+  /** The splitting head for a `count`-way split: a steel blade along each cut line from a hub. */
   #buildHead(count: number, radius: number) {
-    if (this.#head) this.#logRoot.remove(this.#head.root);
+    if (this.#head) this.#press.arm.remove(this.#head.root);
     const root = new THREE.Group();
-    const steel = new THREE.MeshLambertMaterial({ color: COLORS.steel });
-    const dark = new THREE.MeshLambertMaterial({ color: COLORS.steelDark });
-    const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.17, 0.2, 0.22, 16), dark);
-    hub.position.y = 0.11;
+    const steel = new THREE.MeshPhongMaterial({ color: COLORS.steel, shininess: 60 });
+    const dark = new THREE.MeshPhongMaterial({ color: COLORS.steelDark, shininess: 40 });
+    const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.17, 0.2, HUB_HEIGHT, 16), dark);
+    hub.position.y = HUB_HEIGHT / 2;
     root.add(hub);
     // Blades sit along the face's angles; their outline runs from the hub to just past the bark.
     for (let index = 0; index < count; index++) {
@@ -427,35 +574,11 @@ export class Rive3DView implements ScreenView {
       blade.rotation.y = (index * TAU) / count;
       root.add(blade);
     }
-    // The handle pivots high enough that, swung all the way down with the head sunk all the way
-    // in, the whole of it (grip and all) stays above the top of the log: past the bark it would
-    // otherwise drop beside the log and look like it goes into the wood.
-    const pivot = Math.sin(HANDLE_SWING) * HANDLE_LENGTH + GRIP_DROP + HEAD_SINK + HANDLE_CLEARANCE;
-    const post = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.06, pivot - 0.22, 10), dark);
-    post.position.y = (0.22 + pivot) / 2;
-    root.add(post);
-    // The handle always reaches out to the right, however the blades are turned, so you see it
-    // swing down as you pump.
-    const yaw = new THREE.Group();
-    yaw.position.y = pivot;
-    const arm = new THREE.Group();
-    yaw.add(arm);
-    const bar = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, HANDLE_LENGTH, 8), dark);
-    bar.rotation.x = Math.PI / 2;
-    bar.position.z = HANDLE_LENGTH / 2;
-    const grip = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.07, 0.07, 0.32, 10),
-      new THREE.MeshLambertMaterial({ color: COLORS.handle }),
-    );
-    grip.position.set(0, -0.04, HANDLE_LENGTH);
-    arm.add(bar, grip);
-    root.add(yaw);
     root.traverse((child) => {
       if (child instanceof THREE.Mesh) child.castShadow = true;
     });
-    root.visible = false;
-    this.#logRoot.add(root);
-    this.#head = { root, yaw, arm, count };
+    this.#press.arm.add(root);
+    this.#head = { root, count };
     return this.#head;
   }
 
@@ -728,13 +851,15 @@ export class Rive3DView implements ScreenView {
     if (event.type === 'strike') {
       const head = this.#buildHead(round.count, log.radius);
       head.root.rotation.y = round.rotation;
-      head.yaw.rotation.y = Math.PI / 2 - round.rotation;
       head.root.visible = true;
+      this.#liftAt = undefined;
       // The struck plan's cut grains are gone for good.
       this.#drawFace(log, [], round.plan.cut);
       this.#play('creak-1', 0.35, 500);
     } else if (event.type === 'landed') {
-      this.#play('chop-perfect', 0.9, -250);
+      // The arm slams onto its stop and the head bites in.
+      this.#play('press-slam', 0.9, -200);
+      this.#play('chop-perfect', 0.7, -250);
       this.#play(`chop-${1 + Math.floor(Math.random() * 3)}`, 0.6);
       this.#deps.haptics.pulse(feel.buzzStrikeMs);
       this.#shake = 0.07 * feel.shakeStrength;
@@ -767,7 +892,9 @@ export class Rive3DView implements ScreenView {
     if (!round) return;
     const build = stroke / strokes;
     this.#drive = { from: this.#driveDepth(), to: build, at: round.now };
-    this.#play(`chop-${1 + Math.floor(Math.random() * 3)}`, 0.55 + build * 0.35, -150 * stroke);
+    // The jack's clunk as the ram jolts out, and the wood creaking under it.
+    this.#play('press-clunk', 0.5 + build * 0.4, -120 * stroke);
+    this.#play(`chop-${1 + Math.floor(Math.random() * 3)}`, 0.3 + build * 0.3, -150 * stroke);
     this.#play(`creak-${1 + Math.floor(Math.random() * 3)}`, 0.25 + build * 0.45, -400 * build);
     this.#deps.haptics.pulse(feel.buzzPumpMs + Math.round(build * feel.buzzPumpBuildMs));
     this.#shake = (0.03 + 0.07 * build) * feel.shakeStrength;
@@ -798,7 +925,8 @@ export class Rive3DView implements ScreenView {
     this.#deps.haptics.pulse(feel.buzzBurstMs);
     this.#shake = 0.18 * feel.shakeStrength;
     this.#frozenUntil = performance.now() + feel.hitStopMs * 1.5;
-    if (this.#head) this.#head.root.visible = false;
+    // The press lifts back out of the way once the staves are flying.
+    this.#liftAt = round.now + LIFT_DELAY;
     for (const visual of this.#pieces.values()) {
       const out = this.#direction(visual.arc.start + visual.arc.width / 2);
       this.#move(visual, out.multiplyScalar(1.3).setY(0.2), {
@@ -928,6 +1056,37 @@ export class Rive3DView implements ScreenView {
     return Math.min(this.#driveDepth() + (pump.handle * HANDLE_GIVE) / pump.strokes, 1);
   }
 
+  /**
+   * The press for this frame: the head's root at `headY` (log-root height, when the arm is down),
+   * the ram reaching from the jack to it, the handle `handle` of the way down, and the arm swung
+   * up out of the way while planning and after the burst (the strike swings it down).
+   */
+  #placePress(headY: number, handle: number): void {
+    const press = this.#press;
+    const round = this.#round;
+    // Arm-local: the hinge is the origin and the pith is ahead of it.
+    const headLocal = headY - press.hinge.y;
+    const top = headLocal + HUB_HEIGHT;
+    const length = Math.max(press.ramTop - top, 0.01);
+    press.ram.scale.y = length;
+    press.ram.position.y = top + length / 2;
+    if (this.#head) this.#head.root.position.set(0, headLocal, -press.hinge.z);
+    press.handle.rotation.z = HANDLE_REST - handle * HANDLE_SWING;
+    const phase = round?.phase.kind;
+    // The ratchet clicks as the handle comes back up for the next stroke.
+    const down = handle > 0.5;
+    if (this.#handleDown && !down && phase === 'pump') this.#play('press-click', 0.45);
+    this.#handleDown = down;
+    if (phase === 'plan' || !round) {
+      press.arm.rotation.x = ARM_RAISED;
+    } else if (phase === 'done' && this.#liftAt !== undefined) {
+      const t = Math.min(Math.max((round.now - this.#liftAt) / LIFT_SECONDS, 0), 1);
+      press.arm.rotation.x = ARM_RAISED * (t * t * (3 - 2 * t));
+    } else {
+      press.arm.rotation.x = 0;
+    }
+  }
+
   /** The cut lines while planning; the head dropping and driving in, and the cracks, after. */
   #updateTools(): void {
     const round = this.#round;
@@ -938,6 +1097,7 @@ export class Rive3DView implements ScreenView {
     if (!round || !log || !phase) return;
     const plan = round.plan;
     if (phase.kind === 'plan') {
+      this.#placePress(log.height - 0.03, 0);
       plan.lines.forEach((angle, index) => {
         const mesh = this.#guideLine(index);
         mesh.visible = true;
@@ -948,18 +1108,14 @@ export class Rive3DView implements ScreenView {
       });
       return;
     }
-    const head = this.#head;
-    if (!head) return;
     const pump = phase.kind === 'pump' ? phase.pump : undefined;
     const progress = this.#headDepth();
+    this.#placePress(log.height - 0.03 - progress * HEAD_SINK, pump?.handle ?? 0);
     if (phase.kind === 'swing') {
-      // The head drops, speeding up, and bites in as it lands.
+      // The arm swings over the log, speeding up as it falls, and slams down as the head lands.
       const t = Math.min((round.now - phase.at) / round.feel.strikeSeconds, 1);
-      head.root.position.y = log.height - 0.03 + HEAD_DROP * (1 - t * t);
-    } else {
-      head.root.position.y = log.height - 0.03 - progress * HEAD_SINK;
+      this.#press.arm.rotation.x = ARM_RAISED * (1 - t * t);
     }
-    head.arm.rotation.x = (pump?.handle ?? 0) * HANDLE_SWING;
     if (!pump) return;
     // A crack runs down the bark at the end of every line, further with each stroke.
     plan.lines.forEach((angle, index) => {
