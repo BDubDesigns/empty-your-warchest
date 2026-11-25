@@ -26,8 +26,9 @@ export interface RackResult {
   hardened: number;
   under: number;
   charred: number;
-  /** Stars, from the bottom layer (the ones above cook just the same). */
+  /** Stars, from the bottom layer (the ones above cook just the same), and their bonus spears. */
   stars: number;
+  bonus: number;
   /** Seconds the rack was on the fire, and the best moment there was. */
   seconds: number;
   best: BestPull;
@@ -53,10 +54,11 @@ export interface FiremakingHooks {
   /** Burns the fuel as the rack goes on. */
   burn: (logs: number) => void;
   /**
-   * Banks a rack: runs the hardening recipe for the `hardened` staves (spears, with XP) and loses
-   * the `charred` ones. Underdone staves stay staves. Returns the spears banked.
+   * Banks a rack: runs the hardening recipe for the `hardened` staves (spears, with XP), adds the
+   * `bonus` spears the stars earned, and loses the `charred` staves. Underdone staves stay staves.
+   * Returns the spears banked.
    */
-  bank: (hardened: number, charred: number) => number;
+  bank: (hardened: number, charred: number, bonus: number) => number;
   onEvent?: (event: FiremakingEvent) => void;
 }
 
@@ -221,14 +223,16 @@ export class FiremakingRound {
     const bottom = finishes.slice(0, this.columns);
     const missed = bottom.filter((finish) => finish !== 'hardened').length;
     const stars = starsFor(this.rules, missed);
+    const bonus = starBonusSpears(this.rules, hardened, stars);
     this.phase = { kind: 'done' };
-    const banked = this.#hooks.bank(hardened, charred);
+    const banked = this.#hooks.bank(hardened, charred, bonus);
     const result: RackResult = {
       finishes,
       hardened,
       under,
       charred,
       stars,
+      bonus,
       seconds,
       best,
       burnt,
@@ -242,6 +246,7 @@ export class FiremakingRound {
       under,
       charred,
       stars,
+      bonus,
       burnt,
       seconds: round2(seconds),
       bestAt: round2(best.at),
@@ -264,6 +269,16 @@ export class FiremakingRound {
 export function starsFor(rules: Pick<Firemaking, 'stars'>, missed: number): number {
   if (missed <= 0) return 3;
   return missed <= rules.stars.twoMissed ? 2 : 1;
+}
+
+/** Bonus spears for a rack's stars: a share of the spears hardened, none below 2 stars. */
+export function starBonusSpears(
+  rules: Pick<Firemaking, 'starBonus'>,
+  hardened: number,
+  stars: number,
+): number {
+  const share = stars >= 3 ? rules.starBonus.three : stars === 2 ? rules.starBonus.two : 0;
+  return Math.round(hardened * share);
 }
 
 /**

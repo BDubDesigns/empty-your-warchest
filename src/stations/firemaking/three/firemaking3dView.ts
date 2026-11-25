@@ -53,6 +53,9 @@ const TROUGH_MARGIN = 0.32;
 const TROUGH_DEPTH_Z = 0.5;
 const TROUGH_HEIGHT = 0.32;
 const PLANK = 0.04;
+/** Spears in the trough: how far they lean back from upright (radians), how deep the points sit. */
+const SPEAR_LEAN = 0.55;
+const SPEAR_DEPTH = 0.15;
 /** The camera: how far it looks down, how far back it sits, and where it looks. */
 const CAMERA_ELEVATION = 56 * DEG;
 /**
@@ -311,12 +314,17 @@ export class Firemaking3DView implements ScreenView {
         burn: (logs) => {
           game.removeItems(rules.fuel, logs);
         },
-        bank: (hardened, charred) => {
+        bank: (hardened, charred, bonus) => {
           const before = game.xp(this.#skill);
           let banked = 0;
           if (hardened > 0) {
             const result = game.craft(rules.recipe, { batches: hardened });
             banked = result.produced.reduce((sum, stack) => sum + stack.count, 0);
+          }
+          const spear = recipe?.outputs[0]?.item;
+          if (bonus > 0 && spear) {
+            game.addItems(spear, bonus);
+            banked += bonus;
           }
           if (charred > 0 && input) game.removeItems(input.item, charred);
           this.#bankedXp = this.#skillBar.hold(game.xp(this.#skill) - before);
@@ -732,21 +740,26 @@ export class Firemaking3DView implements ScreenView {
       stave.finish = result.finishes[index];
       if (stave.finish !== 'hardened') return;
       // Forward off the rack into the trough, point first, each where it lay along the rack, so
-      // they cascade in one after another and stand leaning against the trough's far side.
+      // they cascade in one after another. Each comes to rest with its point under the water in
+      // the near corner and its shaft leaning back on the far rim, `lean` from upright.
       hardened += 1;
       const x = stave.mesh.position.x;
+      const lean = SPEAR_LEAN + (Math.random() - 0.5) * 0.08;
+      const half = STAVE_LENGTH / 2;
+      const point = new THREE.Vector3(
+        x,
+        -SPEAR_DEPTH,
+        TROUGH_DEPTH_Z / 2 - PLANK - 0.05 - (stave.layer % 2) * 0.05,
+      );
       const to = this.#water
         .clone()
-        .add(new THREE.Vector3(x, 0.3, (stave.layer % 2) * 0.08 - 0.1 + Math.random() * 0.03));
+        .add(point)
+        .add(new THREE.Vector3(0, Math.cos(lean), -Math.sin(lean)).multiplyScalar(half));
       stave.move = {
         from: new THREE.Vector3(),
         to,
         fromTurn: new THREE.Euler(),
-        toTurn: new THREE.Euler(
-          -Math.PI / 2 + 0.75 + (Math.random() - 0.5) * 0.12,
-          0,
-          (Math.random() - 0.5) * 0.12,
-        ),
+        toTurn: new THREE.Euler(-Math.PI / 2 - lean, 0, (Math.random() - 0.5) * 0.12),
         at: plungeAt + hardened * 0.05,
         seconds: feel.plungeSeconds * 0.6,
         hop: 0.7,
@@ -1414,6 +1427,7 @@ export class Firemaking3DView implements ScreenView {
     if (result.under > 0) parts.push(`${String(result.under)} underdone (back to staves)`);
     if (result.charred > 0) parts.push(`${String(result.charred)} charred`);
     lines.push(parts.join(' · '));
+    if (result.bonus > 0) lines.push(`${'★'.repeat(result.stars)} bonus +${String(result.bonus)}`);
     const columns = this.#deps.game.data.firemaking.rack.staves;
     if (result.burnt) lines.push('Left on the fire too long');
     else if (result.stars >= 3) lines.push('Pulled right on time');

@@ -621,6 +621,11 @@ const firemakingSchema = z.object({
   /** Stars count the staves that didn't harden: 3 for none, 2 for up to `twoMissed`, else 1. */
   stars: z.object({ twoMissed: z.number().int().min(0) }),
   /**
+   * Bonus spears for 2 and 3 stars, as a share of the spears hardened (rounded), as at every
+   * station: stars multiply output. XP is paid on the spears hardened, not the bonus.
+   */
+  starBonus: z.object({ two: nonNegative, three: nonNegative }),
+  /**
    * Fires, from a seed, built backwards from a flat fire at `flat` heat so one always has a full
    * answer: a random answer of `answerLogs` logs is taken off, plus `noise` (heat) of lumps, and no
    * coal under `minHeat`. A fire is made again (up to `tries` times) if it needs no fuel, if

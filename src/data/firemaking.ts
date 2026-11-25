@@ -7,6 +7,8 @@ export const firemaking = {
   // The starting setup (Brandon, Nov 24): 3 spots under 6 staves, 2 logs a spot.
   rack: { staves: 6, spots: 3, maxLogs: 2 },
   stars: { twoMissed: 2 },
+  // The same as woodcutting's and splitting's.
+  starBonus: { two: 0.1, three: 0.25 },
   generator: {
     flat: 10,
     // A bit lumpy: a few logs' worth taken off, so a fire needs 2–4 logs to even out.

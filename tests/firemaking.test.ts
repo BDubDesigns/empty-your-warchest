@@ -10,6 +10,7 @@ import {
   hardenAt,
   heatWith,
   nextLayers,
+  starBonusSpears,
   starsFor,
   stavesOver,
   type Fire,
@@ -29,7 +30,7 @@ function fireOf(base: number[]): Fire {
 /** A round over `fire`, recording its events and what it banked. */
 function roundOver(fire: Fire, { staves = rules.rack.staves, layers = 1, logs = 99 } = {}) {
   const events: FiremakingEvent[] = [];
-  const banked = { hardened: 0, charred: 0, burned: 0 };
+  const banked = { hardened: 0, charred: 0, burned: 0, bonus: 0 };
   const { logger } = testLogger();
   const round = new FiremakingRound(
     fire,
@@ -41,10 +42,11 @@ function roundOver(fire: Fire, { staves = rules.rack.staves, layers = 1, logs = 
       burn: (count) => {
         banked.burned += count;
       },
-      bank: (hardened, charred) => {
+      bank: (hardened, charred, bonus) => {
         banked.hardened += hardened;
         banked.charred += charred;
-        return hardened;
+        banked.bonus += bonus;
+        return hardened + bonus;
       },
       onEvent: (event) => events.push(event),
     },
@@ -168,8 +170,10 @@ describe('a rack', () => {
     cookTo(round, best.at + best.window / 2);
     round.pull();
     const pulled = events.at(-1);
+    const bonus = Math.round(6 * rules.starBonus.three);
     expect(pulled).toMatchObject({ type: 'pulled', hardened: 6, under: 0, charred: 0, stars: 3 });
-    expect(banked.hardened).toBe(6);
+    expect(pulled).toMatchObject({ bonus, banked: 6 + bonus });
+    expect(banked).toMatchObject({ hardened: 6, bonus });
     expect(round.phase.kind).toBe('done');
   });
 
@@ -218,6 +222,12 @@ describe('a rack', () => {
 });
 
 describe('stars and the hot streak', () => {
+  it('pays bonus spears for 2 and 3 stars, none for 1', () => {
+    expect(starBonusSpears(rules, 20, 3)).toBe(Math.round(20 * rules.starBonus.three));
+    expect(starBonusSpears(rules, 20, 2)).toBe(Math.round(20 * rules.starBonus.two));
+    expect(starBonusSpears(rules, 20, 1)).toBe(0);
+  });
+
   it('counts staves that didn’t harden', () => {
     expect(starsFor(rules, 0)).toBe(3);
     expect(starsFor(rules, rules.stars.twoMissed)).toBe(2);
