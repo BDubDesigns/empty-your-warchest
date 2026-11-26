@@ -617,19 +617,18 @@ const firemakingSchema = z.object({
   recipe: id,
   fuel: id,
   /**
-   * The rack: staves over each fuel spot, the logs a spot holds from each Firemaking level (on
-   * every rack), and its sizes by level (each a number of fuel spots, opening at a level, and how
-   * many logs a fire of that size takes to even out). The biggest open size is the default; any
-   * smaller open one can be picked.
+   * The rack: staves over each fuel spot, and its sizes by Firemaking level (each a number of fuel
+   * spots, opening at a level, the logs a spot holds, and how many logs a fire of that size takes
+   * to even out). The biggest open size is the default; any smaller open one can be picked.
    */
   rack: z.object({
     stavesPerSpot: positiveInt,
-    logsPerSpot: z.array(z.object({ logs: positiveInt, level: positiveInt })).min(1),
     sizes: z
       .array(
         z.object({
           spots: positiveInt,
           level: positiveInt,
+          logsPerSpot: positiveInt,
           answerLogs: z.object({ min: positiveInt, max: positiveInt }),
         }),
       )

@@ -9,20 +9,17 @@ export const firemaking = {
   // puzzle grows other ways (other woods). Bigger fires take more logs to even out.
   rack: {
     stavesPerSpot: 2,
-    // From Firemaking 10 a spot holds 3 logs, on any rack (Brandon, Nov 25): the racks multiply
-    // output by then, so fires can ask for more fuel.
-    logsPerSpot: [
-      { logs: 2, level: 1 },
-      { logs: 3, level: 10 },
-    ],
+    // Logs a spot holds, by size: the racks from level 10 hold 3 (Brandon, Nov 25), since they
+    // multiply output by then and can ask for more fuel; the small racks stay at 2, so picking one
+    // stays the easy choice (and level-30 racks may go to 4 later).
     sizes: [
-      { spots: 3, level: 1, answerLogs: { min: 2, max: 4 } },
-      { spots: 4, level: 5, answerLogs: { min: 2, max: 5 } },
-      { spots: 5, level: 10, answerLogs: { min: 3, max: 7 } },
-      { spots: 6, level: 15, answerLogs: { min: 4, max: 8 } },
-      { spots: 7, level: 20, answerLogs: { min: 4, max: 9 } },
-      { spots: 8, level: 25, answerLogs: { min: 5, max: 10 } },
-      { spots: 9, level: 30, answerLogs: { min: 5, max: 11 } },
+      { spots: 3, level: 1, logsPerSpot: 2, answerLogs: { min: 2, max: 4 } },
+      { spots: 4, level: 5, logsPerSpot: 2, answerLogs: { min: 2, max: 5 } },
+      { spots: 5, level: 10, logsPerSpot: 3, answerLogs: { min: 3, max: 7 } },
+      { spots: 6, level: 15, logsPerSpot: 3, answerLogs: { min: 4, max: 8 } },
+      { spots: 7, level: 20, logsPerSpot: 3, answerLogs: { min: 4, max: 9 } },
+      { spots: 8, level: 25, logsPerSpot: 3, answerLogs: { min: 5, max: 10 } },
+      { spots: 9, level: 30, logsPerSpot: 3, answerLogs: { min: 5, max: 11 } },
     ],
   },
   // Up to a third of a layer missed is still 2 stars (2 of the starting 6).

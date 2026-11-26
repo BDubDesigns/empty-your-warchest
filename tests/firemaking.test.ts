@@ -9,7 +9,6 @@ import {
   generateFire,
   hardenAt,
   heatWith,
-  logsPerSpot,
   nextLayers,
   openRacks,
   rackRules,
@@ -23,7 +22,7 @@ import { data, testLogger } from './helpers';
 
 const rules = data.firemaking;
 /** The starting rack: 3 spots under 6 staves. */
-const fr = rackRules(rules, 3, 1);
+const fr = rackRules(rules, 3);
 const feel = rules.feel;
 const STEP = 1 / 60;
 
@@ -146,24 +145,19 @@ describe('rack sizes', () => {
     expect(openRacks(rules, 5)).toEqual([3, 4]);
     expect(openRacks(rules, 30)).toEqual([3, 4, 5, 6, 7, 8, 9]);
     expect(openRacks(rules, 99)).toEqual([3, 4, 5, 6, 7, 8, 9]);
-    expect(rackRules(rules, 9, 30).rack).toMatchObject({ spots: 9, staves: 18, maxLogs: 3 });
+    expect(rackRules(rules, 9).rack).toMatchObject({ spots: 9, staves: 18, maxLogs: 3 });
   });
 
-  it('holds 2 logs a spot to start and 3 from level 10, on every rack', () => {
-    expect(logsPerSpot(rules, 1)).toBe(2);
-    expect(logsPerSpot(rules, 9)).toBe(2);
-    expect(logsPerSpot(rules, 10)).toBe(3);
-    expect(rackRules(rules, 3, 10).rack.maxLogs).toBe(3);
-    expect(rackRules(rules, 3, 9).rack.maxLogs).toBe(2);
+  it('holds 2 logs a spot on the small racks and 3 on the racks from level 10', () => {
+    expect(rackRules(rules, 3).rack.maxLogs).toBe(2);
+    expect(rackRules(rules, 4).rack.maxLogs).toBe(2);
+    expect(rackRules(rules, 5).rack.maxLogs).toBe(3);
+    expect(rackRules(rules, 9).rack.maxLogs).toBe(3);
   });
 
   it('makes fair fires at every size', () => {
-    // Each size when it opens, and with 3 logs a spot at level 30.
-    for (const [size, level] of rules.rack.sizes.flatMap((entry) => [
-      [entry, entry.level] as const,
-      [entry, 30] as const,
-    ])) {
-      const sized = rackRules(rules, size.spots, level);
+    for (const size of rules.rack.sizes) {
+      const sized = rackRules(rules, size.spots);
       const { staves, spots, maxLogs } = sized.rack;
       for (let seed = 1; seed <= 60; seed++) {
         const fire = generateFire(sized, feel, seed);
@@ -181,7 +175,7 @@ describe('rack sizes', () => {
   });
 
   it('logs every answer only on racks small enough to search', async () => {
-    const big = rackRules(rules, 9, 30);
+    const big = rackRules(rules, 9);
     const { logger } = testLogger();
     const hooks = {
       logger,

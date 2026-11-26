@@ -54,25 +54,15 @@ export function openRacks(rules: Pick<Firemaking, 'rack'>, level: number): numbe
     .sort((a, b) => a - b);
 }
 
-/** Logs a fuel spot holds at a Firemaking level, on any rack. */
-export function logsPerSpot(rules: Pick<Firemaking, 'rack'>, level: number): number {
-  const open = rules.rack.logsPerSpot.filter((entry) => entry.level <= level);
-  return open[open.length - 1]?.logs ?? rules.rack.logsPerSpot[0]?.logs ?? 1;
-}
-
-/** The fire rules for a rack of `spots` fuel spots (one of the sizes in data) at a level. */
-export function rackRules(
-  rules: Pick<Firemaking, 'rack' | 'generator'>,
-  spots: number,
-  level: number,
-): FireRules {
+/** The fire rules for a rack of `spots` fuel spots (one of the sizes in data). */
+export function rackRules(rules: Pick<Firemaking, 'rack' | 'generator'>, spots: number): FireRules {
   const size = rules.rack.sizes.find((entry) => entry.spots === spots);
   if (!size) throw new Error(`No ${String(spots)}-spot rack in data`);
   return {
     rack: {
       spots,
       staves: spots * rules.rack.stavesPerSpot,
-      maxLogs: logsPerSpot(rules, level),
+      maxLogs: size.logsPerSpot,
       answerLogs: size.answerLogs,
     },
     generator: rules.generator,
