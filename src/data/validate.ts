@@ -76,6 +76,28 @@ function checkReferences(data: GameData, ctx: z.RefinementCtx): void {
     }
   });
 
+  const workers = data.workers;
+  if (!skills.has(workers.skill)) issue(['workers', 'skill'], `Unknown skill "${workers.skill}"`);
+  const jobStations = new Set<string>();
+  workers.jobs.forEach((job, index) => {
+    const path = ['workers', 'jobs', index];
+    const recipe = data.recipes.find((entry) => entry.id === job.recipe);
+    if (!recipe) {
+      issue([...path, 'recipe'], `Unknown recipe "${job.recipe}"`);
+      return;
+    }
+    // One job per station: the station's workers are its crew.
+    if (jobStations.has(recipe.station)) issue([...path, 'recipe'], 'One job per station');
+    jobStations.add(recipe.station);
+    job.extra.forEach((stack, stackIndex) => {
+      if (!itemIds.has(stack.item)) {
+        issue([...path, 'extra', stackIndex, 'item'], `Unknown item "${stack.item}"`);
+      }
+    });
+  });
+  const crew = workers.jobs.reduce((sum, job) => sum + job.start, 0);
+  if (crew > workers.start) issue(['workers', 'jobs'], 'More workers start on jobs than you have');
+
   const firemaking = data.firemaking;
   if (!data.recipes.some((recipe) => recipe.id === firemaking.recipe)) {
     issue(['firemaking', 'recipe'], `Unknown recipe "${firemaking.recipe}"`);

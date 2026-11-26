@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { GameData } from '../data';
 import type { Clock } from './clock';
+import { startingCrew } from './workers';
 import { Inventory } from './inventory';
 import { newGameState, type GameState } from './state';
 import type { KeyValueStore } from './storage';
@@ -22,6 +23,21 @@ const saveFileSchema = z.object({
     lastSeenAt: z.number(),
     // Added after version 1 with a default, so earlier saves still load.
     done: z.array(z.string()).default([]),
+    // Added in M6, the same way: a save without it gets the starting crew.
+    work: z
+      .object({
+        crew: z.record(z.string(), z.number().int().nonnegative()),
+        carry: z.record(z.string(), z.number().nonnegative()),
+        minimums: z.record(z.string(), z.number().int().nonnegative()),
+        piles: z
+          .record(
+            z.string(),
+            z.array(z.object({ item: z.string(), count: z.number().int().nonnegative() })),
+          )
+          .default({}),
+        xp: z.record(z.string(), z.number().nonnegative()).default({}),
+      })
+      .optional(),
   }),
 });
 
@@ -76,6 +92,15 @@ export class SaveStore {
     // Throws on items that no longer exist in the data.
     const inventory = new Inventory(this.#data, file.state.inventory).stacks();
 
+    // Workers' piles too.
+    for (const pile of Object.values(file.state.work?.piles ?? {})) {
+      for (const stack of pile) {
+        if (!this.#data.items.some((item) => item.id === stack.item)) {
+          throw new Error(`Save has a pile of "${stack.item}", which isn't an item`);
+        }
+      }
+    }
+
     const saved = Object.keys(file.state.skills).sort().join(',');
     const current = this.#data.skills
       .map((skill) => skill.id)
@@ -87,6 +112,13 @@ export class SaveStore {
       inventory,
       skills: file.state.skills,
       lastSeenAt: file.state.lastSeenAt,
+      work: file.state.work ?? {
+        crew: startingCrew(this.#data),
+        carry: {},
+        minimums: {},
+        piles: {},
+        xp: {},
+      },
       done: [...new Set(file.state.done)],
     };
   }

@@ -70,7 +70,25 @@ export async function startApp(): Promise<void> {
     showFatal(error);
     return;
   }
-  const { game, logger, clock, feel, choices, haptics, clearings, fastFall } = booted;
+  const { game, logger, clock, feel, choices, haptics, clearings, fastFall, work } = booted;
+
+  // The workers' work is done at the camp only, so they never use what a station has out. What
+  // they make waits on their stations' piles until it's collected.
+  const atCamp = () => document.body.dataset.view === 'camp';
+  const bankWork = () => {
+    work.bank(clock.now());
+  };
+  window.setInterval(() => {
+    if (document.visibilityState !== 'visible') return;
+    if (atCamp()) bankWork();
+    else work.tick(clock.now());
+  }, 60_000);
+  work.onSkip(() => {
+    if (atCamp()) bankWork();
+  });
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && atCamp()) bankWork();
+  });
 
   const phaserElement = byId('screen-phaser');
   const threeElement = byId('screen-three');
@@ -90,6 +108,7 @@ export async function startApp(): Promise<void> {
       const { PhaserView } = await import('./phaserView');
       phaser = await PhaserView.create(phaserElement, {
         game,
+        haptics,
         onStationTap: (stationId) => {
           run(() => navigation.openStation(stationId))();
         },
@@ -243,7 +262,10 @@ export async function startApp(): Promise<void> {
     (view) => {
       document.body.dataset.view = viewName(view);
       backButton.setShown(view.kind !== 'camp');
-      if (view.kind === 'camp') preloader.resume();
+      if (view.kind === 'camp') {
+        bankWork();
+        preloader.resume();
+      }
     },
   );
 
