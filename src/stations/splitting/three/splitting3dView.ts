@@ -10,7 +10,14 @@ import type { SplittingFeel, SplittingLog } from '../../../data';
 import { generateLog } from '../logic/generate';
 import { DEG, inArc, markArc, openHeads, starsFor, type Plan } from '../logic/pattern';
 import { SplittingRound, type SplittingEvent } from '../logic/round';
-import { barkTextures, barkUvs, drawEndGrain, drawSplitGrain } from '../../../app/woodGrain';
+import {
+  BARK_TILE,
+  STAVE_LENGTH,
+  barkTextures,
+  barkUvs,
+  drawEndGrain,
+  drawSplitGrain,
+} from '../../../app/woodGrain';
 
 export interface Splitting3DDeps {
   game: Game;
@@ -65,9 +72,28 @@ const GRIP_DROP = 0.11;
 const HANDLE_CLEARANCE = 0.15;
 /** How wide the cut lines are drawn (world units): thin, so you can see where they cross. */
 const GUIDE_WIDTH = 0.025;
-/** Staves drawn in the burst (past this many, the count says the rest), stacked this many wide. */
+/** Staves drawn in the burst (past this many, the count says the rest). */
 const MAX_STAVES_SHOWN = 64;
-const HEAP_COLUMNS = 8;
+/**
+ * A split stave: a wedge out of the log, its bark side `STAVE_WIDTH` across and its pith side
+ * `STAVE_PITH` of that, `STAVE_THICKNESS` from one to the other.
+ */
+const STAVE_WIDTH = 0.19;
+const STAVE_PITH = 0.45;
+const STAVE_THICKNESS = 0.14;
+/**
+ * The heap: staves lie across in front of the block, stacked in a woodpile (each layer in the
+ * gaps of the one under it, a row fewer each layer up), in one bay or, past `HEAP_ONE_BAY`
+ * staves, two side by side. The gap between staves in a row, how far in front of the block it
+ * starts, and how much each stave strays from its place (across, sideways and turned) so it
+ * reads as a heap thrown down rather than a stack.
+ */
+const HEAP_ONE_BAY = 21;
+const HEAP_GAP = 0.03;
+const HEAP_CLEARANCE = 0.25;
+const HEAP_STRAY = { across: 0.12, along: 0.025, yaw: 0.14, roll: 0.15 };
+/** The share of the heap's staves lying bark up; the rest lie on a split face. */
+const HEAP_BARK_UP = 0.25;
 const SOUNDS: Record<string, string> = Object.fromEntries(
   [
     'chop-1',
@@ -156,8 +182,9 @@ interface StaveFlight {
   launchAt: number;
   seconds: number;
   height: number;
+  /** How it lies in the heap, and how much more it's turned as it sets off (tumbling to rest). */
+  rest: THREE.Euler;
   spin: THREE.Vector3;
-  yaw: number;
   /** Gone from the heap: it has set off into the chest. */
   left?: boolean;
 }
@@ -203,6 +230,8 @@ export class Splitting3DView implements ScreenView {
   #guideLines: THREE.Mesh[] = [];
   #cracks: THREE.Mesh[] = [];
   #staves!: THREE.InstancedMesh;
+  /** The staves' split faces and ends: the log's own split grain, set as it bursts. */
+  #staveWood!: THREE.MeshLambertMaterial;
   #flights: StaveFlight[] = [];
   #pointer:
     | {
@@ -228,6 +257,8 @@ export class Splitting3DView implements ScreenView {
   /** The head's depth into the log as drawn (0–1), easing from one notch to the next. */
   #drive = { from: 0, to: 0, at: 0 };
   #shake = 0;
+  /** How far the camera has eased back for the heap (0 in close, 1 all the way back). */
+  #heapView = 0;
   #frozenUntil = 0;
   #bankedXp: XpDeposit | undefined;
   #lastPhase = '';
@@ -378,19 +409,39 @@ export class Splitting3DView implements ScreenView {
     this.#logRoot.position.y = BLOCK_HEIGHT;
     this.#press = this.#buildPress();
     this.#scene.add(this.#logRoot);
-    // The burst's staves: one mesh drawn many times, so a big log stays smooth on a phone.
-    const stave = new THREE.BoxGeometry(0.09, 0.06, 0.85);
+    // The burst's staves: one mesh drawn many times, so a big log stays smooth on a phone. Each
+    // is a wedge split out of the log: a box narrowed to its pith side (−y), bark on its +y side.
+    const stave = new THREE.BoxGeometry(STAVE_WIDTH, STAVE_THICKNESS, STAVE_LENGTH);
+    const position = stave.getAttribute('position');
+    for (let index = 0; index < position.count; index++) {
+      if (position.getY(index) < 0) position.setX(index, position.getX(index) * STAVE_PITH);
+    }
+    stave.computeVertexNormals();
     // A box's sides map their long edge across u (the ±x sides) or up v (the ±y sides): turn the
-    // ±x sides' UVs so the grain runs the stave's length on all four.
+    // ±x sides' UVs so the grain runs the stave's length on all four, and size the bark (+y, the
+    // 8th to 11th vertices) in world units as it is on the log.
     const uv = stave.getAttribute('uv');
     for (let index = 0; index < 8; index++) uv.setXY(index, uv.getY(index), uv.getX(index));
+    for (let index = 8; index < 12; index++) {
+      uv.setXY(
+        index,
+        (uv.getX(index) * STAVE_WIDTH) / BARK_TILE,
+        (uv.getY(index) * STAVE_LENGTH) / BARK_TILE,
+      );
+    }
     const grain = new THREE.CanvasTexture(drawSplitGrain(64, 256, 5, 3));
     grain.colorSpace = THREE.SRGBColorSpace;
+    this.#staveWood = new THREE.MeshLambertMaterial({ map: grain });
+    const { map, normalMap } = barkTextures();
+    const bark = new THREE.MeshLambertMaterial({ color: COLORS.bark, map, normalMap });
+    // The box's sides in order: ±x, ±y, ±z.
+    const wood = this.#staveWood;
     this.#staves = new THREE.InstancedMesh(
       stave,
-      new THREE.MeshLambertMaterial({ map: grain }),
+      [wood, wood, bark, wood, wood, wood],
       MAX_STAVES_SHOWN,
     );
+    this.#staves.receiveShadow = true;
     this.#staves.castShadow = true;
     this.#staves.count = 0;
     this.#staves.frustumCulled = false;
@@ -941,30 +992,27 @@ export class Splitting3DView implements ScreenView {
     this.#bankedXp = undefined;
     this.#deposit =
       event.banked > 0 ? this.#hud.hold(event.banked, (share) => xp?.arrive(share)) : undefined;
-    // The staves fly from the log into a neat stack in front of the block, a few at a time.
+    // The staves fly from the log onto a heap in front of the block, the bottom of it first. They
+    // show the log's own split grain.
+    this.#staveWood.map = this.#grainFor(log).split;
     const shown = Math.min(event.banked, MAX_STAVES_SHOWN);
     const start = new THREE.Vector3(0, BLOCK_HEIGHT + log.height * 0.8, 0);
-    this.#flights = Array.from({ length: shown }, (_, index) => {
-      const column = index % HEAP_COLUMNS;
-      const layer = Math.floor(index / HEAP_COLUMNS);
-      // Each layer sits in the gaps of the one under it.
-      const to = new THREE.Vector3(
-        (column - (HEAP_COLUMNS - 1) / 2 + (layer % 2) * 0.5) * 0.1 + (Math.random() - 0.5) * 0.02,
-        0.035 + layer * 0.055,
-        1.75 + (Math.random() - 0.5) * 0.12,
-      );
+    const places = heapPlaces(shown);
+    this.#flights = places.map((place, index) => {
+      const seconds = feel.burstSeconds * (0.45 + Math.random() * 0.1);
+      const landAt = round.now + feel.burstSeconds * (0.5 + (0.45 * index) / shown);
       return {
         from: start.clone().add(new THREE.Vector3((Math.random() - 0.5) * 0.4, 0, 0)),
-        to,
-        launchAt: round.now + Math.random() * feel.burstSeconds * 0.25,
-        seconds: feel.burstSeconds * (0.5 + Math.random() * 0.25),
+        to: place.at,
+        rest: place.turn,
+        launchAt: landAt - seconds,
+        seconds,
         height: 1 + Math.random() * 1.2,
         spin: new THREE.Vector3(
           (Math.random() - 0.5) * 14,
           (Math.random() - 0.5) * 8,
           (Math.random() - 0.5) * 14,
         ),
-        yaw: (Math.random() - 0.5) * 0.16,
       };
     });
     this.#staves.count = shown;
@@ -1162,10 +1210,11 @@ export class Splitting3DView implements ScreenView {
         const done = Math.min(t, 1);
         const position = flight.from.clone().lerp(flight.to, done);
         position.y += flight.height * 4 * done * (1 - done);
+        const left = 1 - done;
         const tumble = new THREE.Euler(
-          done < 1 ? flight.spin.x * done : 0,
-          flight.yaw + (done < 1 ? flight.spin.y * done : 0),
-          done < 1 ? flight.spin.z * done : 0,
+          flight.rest.x + flight.spin.x * left,
+          flight.rest.y + flight.spin.y * left,
+          flight.rest.z + flight.spin.z * left,
         );
         rotation.setFromEuler(tumble);
         matrix.compose(position, rotation, scale);
@@ -1179,7 +1228,17 @@ export class Splitting3DView implements ScreenView {
     const log = this.#log;
     const target = new THREE.Vector3(0, BLOCK_HEIGHT + (log?.height ?? 1.6) * 0.55, 0.35);
     const back = new THREE.Vector3(0, Math.sin(CAMERA_ELEVATION), Math.cos(CAMERA_ELEVATION));
-    this.#camera.position.copy(target).addScaledVector(back, CAMERA_DISTANCE);
+    // Back while there's a heap out (until the next log), in close otherwise.
+    const feel = this.#deps.feel.values;
+    const step = dt / feel.heapCameraSeconds;
+    this.#heapView =
+      this.#flights.length > 0
+        ? Math.min(this.#heapView + step, 1)
+        : Math.max(this.#heapView - step, 0);
+    const eased = this.#heapView * this.#heapView * (3 - 2 * this.#heapView);
+    this.#camera.position
+      .copy(target)
+      .addScaledVector(back, CAMERA_DISTANCE + eased * feel.heapCameraBack);
     this.#shake *= Math.exp(-10 * dt);
     if (this.#shake > 0.001) {
       this.#camera.position.add(
@@ -1682,4 +1741,44 @@ function times(value: number): string {
   const fraction = eighths[Math.round(part * 8)];
   if (!fraction || Math.abs(part * 8 - Math.round(part * 8)) > 1e-6) return value.toFixed(2);
   return whole > 0 ? `${String(whole)}${fraction}` : fraction;
+}
+
+/**
+ * Where `count` staves lie in the heap, bottom layer first: a woodpile in front of the block,
+ * staves lying across, a row fewer each layer up and each layer in the gaps of the one under it;
+ * past `HEAP_ONE_BAY` staves, two bays side by side. Each strays a little from its place.
+ */
+function heapPlaces(count: number): { at: THREE.Vector3; turn: THREE.Euler }[] {
+  const bays = count > HEAP_ONE_BAY ? 2 : 1;
+  let rows = 1;
+  while ((bays * rows * (rows + 1)) / 2 < count) rows++;
+  const pitch = STAVE_WIDTH + HEAP_GAP;
+  const middle = BLOCK_SPREAD * 1.12 + HEAP_CLEARANCE + (rows * pitch) / 2;
+  const places: { at: THREE.Vector3; turn: THREE.Euler }[] = [];
+  const stray = (size: number) => (Math.random() - 0.5) * 2 * size;
+  // How far a stave rolls to lie on one of its split faces (they slope in to the pith side).
+  const onSide = Math.PI / 2 - Math.atan((STAVE_WIDTH * (1 - STAVE_PITH)) / 2 / STAVE_THICKNESS);
+  for (let layer = 0; layer < rows; layer++) {
+    const across = rows - layer;
+    for (let row = 0; row < across; row++) {
+      for (let bay = 0; bay < bays; bay++) {
+        if (places.length >= count) return places;
+        places.push({
+          at: new THREE.Vector3(
+            (bay - (bays - 1) / 2) * (STAVE_LENGTH + 0.1) + stray(HEAP_STRAY.across),
+            STAVE_THICKNESS / 2 + layer * STAVE_THICKNESS * 0.85,
+            middle + (row - (across - 1) / 2) * pitch + stray(HEAP_STRAY.along),
+          ),
+          // Lying across (its length along x), on a split face or bark up, a little askew.
+          turn: new THREE.Euler(
+            0,
+            Math.PI / 2 + stray(HEAP_STRAY.yaw),
+            (Math.random() < HEAP_BARK_UP ? 0 : Math.sign(stray(1)) * onSide) +
+              stray(HEAP_STRAY.roll),
+          ),
+        });
+      }
+    }
+  }
+  return places;
 }
