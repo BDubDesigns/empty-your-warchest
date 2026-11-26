@@ -13,7 +13,13 @@ const campSpotSchema = z.object({ x: fraction, y: fraction });
 
 export const skillSchema = z.object({ id, name });
 
-export const itemSchema = z.object({ id, name });
+/**
+ * How an item looks as a piece flying into a warchest: a round log, a split stave, a pointed shaft
+ * (a spear).
+ */
+export const itemLooks = ['round', 'split', 'pointed'] as const;
+
+export const itemSchema = z.object({ id, name, look: z.enum(itemLooks) });
 
 export const itemStackSchema = z.object({
   item: id,
@@ -1086,6 +1092,7 @@ export type GameDataInput = z.input<typeof gameDataShape>;
 export type GameData = z.output<typeof gameDataShape>;
 export type Skill = GameData['skills'][number];
 export type Item = GameData['items'][number];
+export type ItemLook = Item['look'];
 export type ItemStack = z.output<typeof itemStackSchema>;
 export type Station = GameData['stations'][number];
 export type Recipe = GameData['recipes'][number];

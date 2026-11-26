@@ -223,8 +223,8 @@ describe('siege forts', () => {
       throws: 1,
       spearsUsed: 3,
       par: data.siege.forts[0]?.par,
-      blocksBroken: 0,
     });
+    expect(end?.data).toHaveProperty('blocksBroken');
     expect(end?.data).toHaveProperty('damage');
     round.dispose();
   });

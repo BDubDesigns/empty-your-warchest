@@ -60,7 +60,7 @@ describe('game data', () => {
 
   it('fails loudly on duplicate ids', () => {
     expectInvalid((raw) => {
-      raw.items.push({ id: 'log', name: 'Another log' });
+      raw.items.push({ id: 'log', name: 'Another log', look: 'round' });
     }, 'Duplicate id "log"');
   });
 
