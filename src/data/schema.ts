@@ -53,20 +53,66 @@ export const unitSchema = z.object({
   weapon: z.object({ item: id, damage: nonNegative }),
 });
 
-export const enemySchema = z.object({ id, name, hp: positiveInt, damage: nonNegative });
+/**
+ * Enemies fight with a unit's numbers (decided Nov 24, keep it simple): an unarmed bandit is an
+ * unarmed recruit, an armed one fights like that unit with its spear.
+ */
+export const enemySchema = z.object({ id, name, unit: id });
+
+const gateOp = z.enum(['add', 'subtract', 'multiply', 'divide']);
+
+/**
+ * A number rolled for each run (decided Nov 25: random maps, scaled by Command level): a whole
+ * number from `min` to `min + perLevel × (level − 1)`, rounded down. A plain number is fixed.
+ * Brandon's "between 1 and your Command level" is `{ min: 1, perLevel: 1 }`.
+ */
+const rollSchema = z.union([positiveInt, z.object({ min: positiveInt, perLevel: nonNegative })]);
 
 const gateSchema = z.object({
-  op: z.enum(['add', 'subtract', 'multiply', 'divide']),
-  value: positiveInt,
-  /** Attack it on approach to turn it from negative to positive. */
-  flippable: z.boolean().default(false),
+  op: gateOp,
+  value: rollSchema,
+  /**
+   * A guarded gate: enemies stand in front of it in its lane, and a squad on that side has to
+   * fight through them to reach it (decided Nov 24: a blue gate behind enemies reads as "fight for
+   * it"; it replaced the red flip gate, which read as "bad thing, guarded").
+   */
+  guards: z
+    .object({
+      enemy: id,
+      count: rollSchema,
+      /** Share of them carrying spears (rounded); the armed lead and fall first. */
+      armedShare: fraction,
+    })
+    .optional(),
 });
 
 /** `at` is how far along the track the event happens, from 0 (start) to 1 (end). */
 const levelEventSchema = z.discriminatedUnion('type', [
-  z.object({ type: z.literal('gates'), at: fraction, left: gateSchema, right: gateSchema }),
-  z.object({ type: z.literal('enemies'), at: fraction, enemy: id, count: positiveInt }),
-  z.object({ type: z.literal('wall'), at: fraction, hp: positiveInt }),
+  z.object({
+    type: z.literal('gates'),
+    at: fraction,
+    left: gateSchema,
+    right: gateSchema,
+    /** Swap the two sides at random each run, so the greedy side isn't always the same. */
+    shuffle: z.boolean().default(true),
+  }),
+  z.object({
+    type: z.literal('enemies'),
+    at: fraction,
+    enemy: id,
+    count: rollSchema,
+    /** Share of them carrying spears (rounded); the armed lead and fall first. */
+    armedShare: fraction,
+    /** A group in one lane only blocks a squad on that side; `both` blocks the whole track. */
+    lane: z.enum(['both', 'left', 'right']).default('both'),
+  }),
+  z.object({
+    type: z.literal('wall'),
+    at: fraction,
+    hp: rollSchema,
+    /** Archers on the walkway: every `volleySeconds` a volley drops `perVolley` units. */
+    archers: z.object({ volleySeconds: positive, perVolley: positiveInt }),
+  }),
 ]);
 
 export const levelSchema = z.object({
@@ -76,7 +122,9 @@ export const levelSchema = z.object({
   durationSeconds: positive,
   /** The unit every recruit becomes. */
   unit: id,
+  /** Decided Nov 25: always 1, so every run shows the growth from one guy to an army. */
   startingRecruits: positiveInt,
+  /** A template: its rolls are made fresh for each run from the run's seed and Command level. */
   events: z.array(levelEventSchema).min(1),
   rewards: z.object({ xpPerEnemy: nonNegative, xpPerSurvivor: nonNegative }),
 });
@@ -416,6 +464,81 @@ export const woodcuttingSchema = z.object({
   feel: woodcuttingFeelSchema,
 });
 
+/**
+ * The Attack Run's feel: every number here is a debug slider. Distances are metres along the
+ * track; times are seconds.
+ */
+const runnerFeelSchema = z.object({
+  /** Forward speed while nothing blocks the squad (m/s). */
+  runSpeed: positive,
+  /** Fastest the squad can slide sideways (m/s). */
+  steerSpeed: positive,
+  /** How long the squad takes to catch up with the finger (s, time constant). */
+  steerSmoothing: nonNegative,
+  /** Sideways squad travel for a finger slide across the whole screen, in track widths. */
+  dragScale: positive,
+  /** How loose the crowd blob is: its radius is this × √count (m). */
+  crowdSpread: positive,
+  /** How far edge units trail the centre on turns (0 = rigid). */
+  edgeLag: nonNegative,
+  /**
+   * Seconds between the first blows of a clash. The front soldier and the front enemy swap blows
+   * until one falls; the next steps up.
+   */
+  tradeSeconds: positive,
+  /** Each blow's gap is this share of the last, so big fights don't drag. */
+  tradeSpeedup: z.number().positive().max(1),
+  /** Fastest the blows get (s). */
+  tradeMinSeconds: positive,
+  /** Wall damage per second for each point of a unit's damage; the whole squad hits at once. */
+  wallAttackRate: nonNegative,
+  /** Gate labels and the result preview show this many seconds ahead. */
+  gateReadSeconds: positive,
+  /** Camera tilt down from level (degrees). */
+  cameraAngle: z.number().min(5).max(85),
+  /** Camera distance from the squad (m). */
+  cameraDistance: positive,
+  /** How far ahead of the squad the camera aims (m): more puts the squad lower on screen. */
+  cameraLookAhead: nonNegative,
+  /** Extra camera distance per metre of crowd radius, so big crowds fit. */
+  cameraPullback: nonNegative,
+  /** Spears in the run when Debug → Options → Runner spears is set to the slider. */
+  spears: z.number().int().nonnegative(),
+  /** Time runs at this speed for `slowMoSeconds` when the wall breaks. */
+  slowMoScale: z.number().positive().max(1),
+  /**
+   * With the "Slow down" lift option, time runs at this speed while no finger is on the screen
+   * (decided Nov 25: time to think without stalling a re-grip). Fights and the wall ignore it.
+   */
+  liftSlowMoScale: z.number().positive().max(1),
+  slowMoSeconds: nonNegative,
+  /** Vibration pulses (ms). */
+  buzzGoodGateMs: nonNegative,
+  buzzBadGateMs: nonNegative,
+  buzzTradeMs: nonNegative,
+  buzzWallHitMs: nonNegative,
+  buzzVolleyMs: nonNegative,
+  buzzWallBreakMs: nonNegative,
+  buzzLoseMs: nonNegative,
+});
+
+export const runnerSchema = z.object({
+  /** The skirmish the War tent plays (M7a has one). */
+  level: id,
+  /** Track width (m); a gate pair splits it into halves. */
+  trackWidth: positive,
+  /**
+   * The track's length is the level's `durationSeconds` × this, so `durationSeconds` is the run time
+   * at this speed. The run-speed slider changes how fast you run it, not how long it is.
+   */
+  trackMetersPerSecond: positive,
+  /** How far in front of a guarded gate its guards stand (m). */
+  guardGap: positive,
+  /** Room to the side of the track the squad's centre can't enter (m). */
+  edgeMargin: nonNegative,
+  feel: runnerFeelSchema,
+});
+
 export const warchestSchema = z.object({
   /** Items deposited at a station fly from where they came from into the HUD chest. */
   pour: z.object({
@@ -728,6 +851,7 @@ export const gameDataShape = z.object({
   woodcutting: woodcuttingSchema,
   splitting: splittingSchema,
   firemaking: firemakingSchema,
+  runner: runnerSchema,
   warchest: warchestSchema,
   workers: workersSchema,
   tuning: tuningSchema,
@@ -758,3 +882,9 @@ export type Workers = GameData['workers'];
 export type WorkerJob = Workers['jobs'][number];
 export type Firemaking = GameData['firemaking'];
 export type FiremakingFeel = Firemaking['feel'];
+export type Gate = z.output<typeof gateSchema>;
+export type Roll = z.output<typeof rollSchema>;
+export type GateOp = Gate['op'];
+export type LevelEvent = Level['events'][number];
+export type RunnerData = GameData['runner'];
+export type RunnerFeel = RunnerData['feel'];

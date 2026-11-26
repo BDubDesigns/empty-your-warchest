@@ -82,15 +82,15 @@ describe('game data', () => {
     }, 'exactly one wall');
   });
 
-  it('only lets negative gates be flippable', () => {
+  it('only lets known enemies guard a gate', () => {
     expectInvalid((raw) => {
       raw.levels[0]?.events.unshift({
         type: 'gates',
         at: 0,
-        left: { op: 'add', value: 5, flippable: true },
+        left: { op: 'add', value: 5, guards: { enemy: 'wolf', count: 2, armedShare: 0.5 } },
         right: { op: 'subtract', value: 5 },
       });
-    }, 'Only negative gates');
+    }, 'Unknown enemy "wolf"');
   });
 
   it('rejects malformed values with the path to the problem', () => {

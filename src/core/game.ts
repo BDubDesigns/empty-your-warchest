@@ -84,7 +84,10 @@ export class Game {
     this.#changed();
   }
 
-  /** Takes items out of the warchest (e.g. logs burned as fuel). Throws if there aren't enough. */
+  /**
+   * Takes items out of the warchest (e.g. logs burned as fuel, spears spent in a run). Throws if
+   * there aren't enough.
+   */
   removeItems(itemId: string, count: number): void {
     this.#inventory.remove(itemId, count);
     this.#changed();

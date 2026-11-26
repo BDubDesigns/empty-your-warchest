@@ -1,3 +1,3 @@
-// three.js rendering and input for the runner. Filled in by M8.
+// three.js rendering and input for the runner.
 
-export {};
+export { RunnerView, type RunnerViewDeps } from './runnerView';

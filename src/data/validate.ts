@@ -64,8 +64,10 @@ function checkReferences(data: GameData, ctx: z.RefinementCtx): void {
       if (event.type === 'gates') {
         for (const side of ['left', 'right'] as const) {
           const gate = event[side];
-          if (gate.flippable && (gate.op === 'add' || gate.op === 'multiply')) {
-            issue([...eventPath, side], 'Only negative gates (subtract, divide) can be flippable');
+          const guards = gate.guards;
+          if (!guards) continue;
+          if (!enemies.has(guards.enemy)) {
+            issue([...eventPath, side, 'guards', 'enemy'], `Unknown enemy "${guards.enemy}"`);
           }
         }
       }
@@ -199,6 +201,17 @@ function checkReferences(data: GameData, ctx: z.RefinementCtx): void {
   }
   if (splittingGenerator.bad.max > 0 && !splitting.grainKinds.some((kind) => kind.multiplier < 1)) {
     issue(['splitting', 'generator', 'bad'], 'Bad grains need a kind with a multiplier under 1');
+  }
+
+  const runner = data.runner;
+  if (!data.levels.some((level) => level.id === runner.level)) {
+    issue(['runner', 'level'], `Unknown level "${runner.level}"`);
+  }
+  data.enemies.forEach((enemy, index) => {
+    if (!units.has(enemy.unit)) issue(['enemies', index, 'unit'], `Unknown unit "${enemy.unit}"`);
+  });
+  if (runner.feel.tradeMinSeconds > runner.feel.tradeSeconds) {
+    issue(['runner', 'feel', 'tradeMinSeconds'], 'Must not be more than tradeSeconds');
   }
 
   const woodcutting = data.woodcutting;

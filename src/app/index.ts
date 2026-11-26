@@ -50,6 +50,7 @@ function nextFrame(): Promise<void> {
 const woodcuttingView = () => import('../stations/woodcutting/three/woodcutting3dView');
 const splittingView = () => import('../stations/splitting/three/splitting3dView');
 const firemakingView = () => import('../stations/firemaking/three/firemaking3dView');
+const runnerView = () => import('../runner/view');
 
 /** Boots the game core, the debug menu, and the camp. */
 export async function startApp(): Promise<void> {
@@ -60,8 +61,19 @@ export async function startApp(): Promise<void> {
     booted = await bootGame(__BUILD_LABEL__);
     mountDebugMenu(byId('app'), {
       ...booted,
-      tuning: [booted.feel.woodcutting, booted.feel.splitting, booted.feel.firemaking],
-      choices: [booted.choices.treeStyle, booted.choices.scenery, booted.choices.vibration],
+      tuning: [
+        booted.feel.woodcutting,
+        booted.feel.splitting,
+        booted.feel.firemaking,
+        booted.feel.runner,
+      ],
+      choices: [
+        booted.choices.treeStyle,
+        booted.choices.scenery,
+        booted.choices.vibration,
+        booted.choices.runnerSpears,
+        booted.choices.runnerLift,
+      ],
       clearings: booted.clearings,
       buildLabel: __BUILD_LABEL__,
     });
@@ -173,11 +185,19 @@ export async function startApp(): Promise<void> {
     three: lazyScreen(
       threeElement,
       async () => {
-        const { ThreeView } = await import('./threeView');
-        return new ThreeView(threeElement, 'War tent · Attack Run placeholder · drag to spin');
+        const { RunnerView } = await runnerView();
+        return RunnerView.create(threeElement, {
+          game,
+          spearSource: choices.runnerSpears,
+          liftMode: choices.runnerLift,
+          data: game.data,
+          logger,
+          feel: feel.runner,
+          haptics,
+        });
       },
       async () => {
-        await import('./threeView');
+        await runnerView();
       },
     ),
   };

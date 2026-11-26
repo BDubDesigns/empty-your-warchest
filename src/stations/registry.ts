@@ -26,7 +26,6 @@ export const mechanics: Readonly<Record<string, MechanicModule>> = {
   firemaking: { screen: { kind: 'screen', screen: 'firemaking3d' } },
   runner: {
     screen: { kind: 'screen', screen: 'runner' },
-    placeholderNote: 'The Attack Run arrives in M7–M8',
   },
 };
 

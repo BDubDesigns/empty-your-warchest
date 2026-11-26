@@ -118,13 +118,9 @@ describe('save/load', () => {
   it('discards a save that no longer fits the data', () => {
     const { store, saves } = setup();
     saves.save(state);
-    // Spears renamed: the save's spears are no longer an item.
+    // Spears become pikes everywhere in data, so the save's spears no longer exist.
     const changed = dataWith((raw) => {
-      for (const item of raw.items) if (item.id === 'spear') item.id = 'javelin';
-      for (const recipe of raw.recipes) {
-        for (const output of recipe.outputs) if (output.item === 'spear') output.item = 'javelin';
-      }
-      for (const unit of raw.units) if (unit.weapon.item === 'spear') unit.weapon.item = 'javelin';
+      Object.assign(raw, JSON.parse(JSON.stringify(raw).replaceAll('"spear"', '"pike"')));
     });
     const withoutSpears = new SaveStore(store, changed, new ManualClock(0));
     expect(discardReason(withoutSpears.load())).toContain('spear');

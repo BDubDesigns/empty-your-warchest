@@ -6,6 +6,7 @@ import { firemaking } from './firemaking';
 import { items } from './items';
 import { levels } from './levels';
 import { recipes } from './recipes';
+import { runner } from './runner';
 import { splitting } from './splitting';
 import type { GameData, GameDataInput } from './schema';
 import { skills } from './skills';
@@ -30,6 +31,7 @@ export const rawGameData: GameDataInput = {
   levels,
   camp,
   woodcutting,
+  runner,
   splitting,
   firemaking,
   warchest,
