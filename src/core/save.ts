@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { GameData } from '../data';
 import type { Clock } from './clock';
+import { startingCrew } from './workers';
 import { Inventory } from './inventory';
 import { newGameState, type GameState } from './state';
 import type { KeyValueStore } from './storage';
@@ -22,6 +23,14 @@ const saveFileSchema = z.object({
     lastSeenAt: z.number(),
     // Added after version 1 with a default, so earlier saves still load.
     done: z.array(z.string()).default([]),
+    // Added in M6, the same way: a save without it gets the starting crew.
+    work: z
+      .object({
+        crew: z.record(z.string(), z.number().int().nonnegative()),
+        carry: z.record(z.string(), z.number().nonnegative()),
+        minimums: z.record(z.string(), z.number().int().nonnegative()),
+      })
+      .optional(),
   }),
 });
 
@@ -87,6 +96,7 @@ export class SaveStore {
       inventory,
       skills: file.state.skills,
       lastSeenAt: file.state.lastSeenAt,
+      work: file.state.work ?? { crew: startingCrew(this.#data), carry: {}, minimums: {} },
       done: [...new Set(file.state.done)],
     };
   }

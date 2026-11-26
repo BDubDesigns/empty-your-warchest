@@ -25,7 +25,7 @@ async function openWorkbench(page: Page, logs: number) {
           state: {
             inventory: count > 0 ? [{ item: 'log', count }] : [],
             skills: xp,
-            lastSeenAt: 1,
+            lastSeenAt: Date.now(),
             done: ['tutorial.woodcutting'],
           },
         }),

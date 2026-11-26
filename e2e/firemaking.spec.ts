@@ -31,7 +31,7 @@ async function openFirePit(page: Page, staves: number, logs: number, firemakingX
         JSON.stringify({
           version: 1,
           savedAt: 1,
-          state: { inventory, skills: xp, lastSeenAt: 1, done: ['tutorial.woodcutting'] },
+          state: { inventory, skills: xp, lastSeenAt: Date.now(), done: ['tutorial.woodcutting'] },
         }),
       );
     },

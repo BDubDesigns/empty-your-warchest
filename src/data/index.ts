@@ -14,6 +14,7 @@ import { tuning } from './tuning';
 import { enemies, units } from './units';
 import { warchest } from './warchest';
 import { woodcutting } from './woodcutting';
+import { workers } from './workers';
 import { parseGameData } from './validate';
 
 export * from './schema';
@@ -32,6 +33,7 @@ export const rawGameData: GameDataInput = {
   splitting,
   firemaking,
   warchest,
+  workers,
   tuning,
 };
 

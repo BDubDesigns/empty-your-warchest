@@ -89,7 +89,6 @@ export const tuningSchema = z.object({
     doublingLevels: positive,
     divisor: positive,
   }),
-  idle: z.object({ capMinutes: positive }),
   /** Share of used weapons recovered after winning a run. */
   weaponRecoveryOnWin: fraction,
 });
@@ -665,6 +664,35 @@ const firemakingSchema = z.object({
   feel: firemakingFeelSchema,
 });
 
+/**
+ * Workers: how many you have (`start` at level 1 of `skill`, one more every `everyLevels`), and
+ * the job each does at a station: its recipe run `perMinute` times a minute (with `batches` and
+ * `yield` as a played craft would), using up `extra` items too (e.g. fuel), for XP per item as if
+ * played. They work while you play and while you're away (up to `awayCapMinutes`), and never use
+ * an item below the minimum the player keeps back.
+ */
+const workersSchema = z.object({
+  skill: id,
+  start: z.number().int().nonnegative(),
+  everyLevels: positiveInt,
+  awayCapMinutes: positive,
+  cardMinutes: nonNegative,
+  minimumStep: positiveInt,
+  jobs: z
+    .array(
+      z.object({
+        recipe: id,
+        perMinute: positive,
+        batches: positiveInt.default(1),
+        yield: positiveInt.default(1),
+        extra: z.array(z.object({ item: id, count: positiveInt })).default([]),
+        /** Workers here in a new game. */
+        start: z.number().int().nonnegative(),
+      }),
+    )
+    .min(1),
+});
+
 export const gameDataShape = z.object({
   skills: z.array(skillSchema).min(1),
   items: z.array(itemSchema).min(1),
@@ -678,6 +706,7 @@ export const gameDataShape = z.object({
   splitting: splittingSchema,
   firemaking: firemakingSchema,
   warchest: warchestSchema,
+  workers: workersSchema,
   tuning: tuningSchema,
 });
 
@@ -702,5 +731,7 @@ export type SceneryPlantKind = (typeof sceneryPlantKinds)[number];
 export type Splitting = GameData['splitting'];
 export type SplittingLog = Splitting['tutorialLog'];
 export type SplittingFeel = Splitting['feel'];
+export type Workers = GameData['workers'];
+export type WorkerJob = Workers['jobs'][number];
 export type Firemaking = GameData['firemaking'];
 export type FiremakingFeel = Firemaking['feel'];

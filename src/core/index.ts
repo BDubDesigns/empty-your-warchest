@@ -13,4 +13,6 @@ export * from './rng';
 export * from './save';
 export * from './state';
 export * from './storage';
+export * from './workClock';
+export * from './workers';
 export * from './xp';

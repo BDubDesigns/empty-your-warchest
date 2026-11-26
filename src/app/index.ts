@@ -5,6 +5,7 @@ import { Navigation, type View } from './navigation';
 import type { PhaserView } from './phaserView';
 import { lazyScreen } from './screen';
 import { ScreenSwitcher } from './screenSwitcher';
+import { WorkersCard } from './workersCard';
 import type { ScreenId as StationScreenId } from '../stations/registry';
 
 type ScreenId = 'phaser' | 'three' | 'wood3d' | 'splitting3d' | 'firemaking3d';
@@ -53,7 +54,26 @@ export async function startApp(): Promise<void> {
     showFatal(error);
     return;
   }
-  const { game, logger, clock, feel, choices, haptics, clearings, fastFall } = booted;
+  const { game, logger, clock, feel, choices, haptics, clearings, fastFall, work } = booted;
+
+  // The workers' work is banked at the camp only, so they never use what a station has out.
+  const workersCard = new WorkersCard(byId('app'), game);
+  const atCamp = () => document.body.dataset.view === 'camp';
+  const bankWork = () => {
+    const banked = work.bank(clock.now());
+    if (banked) workersCard.show(banked);
+  };
+  window.setInterval(() => {
+    if (document.visibilityState !== 'visible') return;
+    if (atCamp()) bankWork();
+    else work.tick(clock.now());
+  }, 60_000);
+  work.onSkip(() => {
+    if (atCamp()) bankWork();
+  });
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && atCamp()) bankWork();
+  });
 
   const phaserElement = byId('screen-phaser');
   const threeElement = byId('screen-three');
@@ -153,6 +173,7 @@ export async function startApp(): Promise<void> {
     (view) => {
       document.body.dataset.view = viewName(view);
       backButton.setShown(view.kind !== 'camp');
+      if (view.kind === 'camp') bankWork();
     },
   );
 
