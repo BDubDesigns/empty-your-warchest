@@ -466,6 +466,12 @@ export const splittingFeelSchema = z.object({
   burstSeconds: positive,
   heapSeconds: nonNegative,
   /**
+   * While the heap's out, the camera eases back this much further (world units) over
+   * `heapCameraSeconds`, so the whole heap shows, and back in over the same for the next log.
+   */
+  heapCameraBack: nonNegative,
+  heapCameraSeconds: positive,
+  /**
    * Vibration (ms): the head landing, each stroke of the pump (plus up to `buzzPumpBuildMs` more
    * by the last), and the burst.
    */
@@ -628,18 +634,18 @@ const firemakingSchema = z.object({
   recipe: id,
   fuel: id,
   /**
-   * The rack: staves over each fuel spot, logs a spot holds, and its sizes by Firemaking level
-   * (each a number of fuel spots, opening at a level, and how many logs a fire of that size takes
+   * The rack: staves over each fuel spot, and its sizes by Firemaking level (each a number of fuel
+   * spots, opening at a level, the logs a spot holds, and how many logs a fire of that size takes
    * to even out). The biggest open size is the default; any smaller open one can be picked.
    */
   rack: z.object({
     stavesPerSpot: positiveInt,
-    maxLogs: positiveInt,
     sizes: z
       .array(
         z.object({
           spots: positiveInt,
           level: positiveInt,
+          logsPerSpot: positiveInt,
           answerLogs: z.object({ min: positiveInt, max: positiveInt }),
         }),
       )
