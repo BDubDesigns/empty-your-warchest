@@ -10,6 +10,7 @@ import type { EventLogger, Game, LiveTuning } from '../../../core';
 import type { FiremakingFeel } from '../../../data';
 import {
   generateFire,
+  logsPerSpot,
   openRacks,
   rackRules,
   stavesOver,
@@ -330,7 +331,9 @@ export class Firemaking3DView implements ScreenView {
       this.#pickedSpots !== undefined && open.includes(this.#pickedSpots)
         ? this.#pickedSpots
         : biggest;
-    if (spots !== this.#fireRules.rack.spots) this.#buildRig(spots);
+    // The logs a spot holds come with the level, not the size: no rebuild needed for them.
+    if (spots !== this.#fireRules.rack.spots) this.#buildRig(spots, level);
+    else this.#fireRules = rackRules(rules, spots, level);
     const fireRules = this.#fireRules;
     const seed = Date.now() >>> 0;
     const feel = this.#deps.feel.values;
@@ -437,17 +440,18 @@ export class Firemaking3DView implements ScreenView {
     context.fillStyle = gradient;
     context.fillRect(0, 0, 64, 64);
     this.#puffTexture = new THREE.CanvasTexture(canvas);
-    this.#buildRig(rules.rack.sizes[0]?.spots ?? 1);
+    this.#buildRig(rules.rack.sizes[0]?.spots ?? 1, 1);
   }
 
   /**
-   * Builds everything sized to a rack of `spots` fuel spots: the trench and its coals, a glow per
+   * Builds everything sized to a rack of `spots` fuel spots (at Firemaking `level`, for the logs a
+   * spot holds): the trench and its coals, a glow per
    * spot, the rails, the rack's frame and the trough, the yard round them, and the camera's step
    * back to fit them. The heat bars and spot buttons are rebuilt to match.
    */
-  #buildRig(spots: number): void {
+  #buildRig(spots: number, level: number): void {
     const rules = this.#deps.game.data.firemaking;
-    this.#fireRules = rackRules(rules, spots);
+    this.#fireRules = rackRules(rules, spots, level);
     for (const child of [...this.#rig.children, ...this.#rackFrame.children]) {
       child.removeFromParent();
       child.traverse((object) => {
@@ -1595,6 +1599,10 @@ export class Firemaking3DView implements ScreenView {
       const staves = bigger.spots * rules.rack.stavesPerSpot;
       lines.push(`🔓 Bigger rack: ${String(staves)} staves from now on`);
       this.#pickedSpots = undefined;
+    }
+    const logs = logsPerSpot(rules, level);
+    if (logs > logsPerSpot(rules, this.#levelAtStart)) {
+      lines.push(`🔓 Fuel spots hold ${String(logs)} logs now`);
     }
     this.#layers = layers;
     ui.cardTitle.textContent = `${String(result.banked)} spear${result.banked === 1 ? '' : 's'}`;

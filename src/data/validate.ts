@@ -83,6 +83,19 @@ function checkReferences(data: GameData, ctx: z.RefinementCtx): void {
   if (!itemIds.has(firemaking.fuel)) {
     issue(['firemaking', 'fuel'], `Unknown item "${firemaking.fuel}"`);
   }
+  const logsPerSpot = firemaking.rack.logsPerSpot;
+  if (!logsPerSpot.some((entry) => entry.level === 1)) {
+    issue(['firemaking', 'rack', 'logsPerSpot'], 'Spots must hold some logs from level 1');
+  }
+  logsPerSpot.forEach((entry, index) => {
+    const before = logsPerSpot[index - 1];
+    if (before && (entry.logs <= before.logs || entry.level <= before.level)) {
+      issue(['firemaking', 'rack', 'logsPerSpot', index], 'Logs a spot holds must grow, in order');
+    }
+  });
+  /** Logs a spot holds at `level`. */
+  const logsAt = (level: number) =>
+    logsPerSpot.filter((entry) => entry.level <= level).at(-1)?.logs ?? 0;
   const sizes = firemaking.rack.sizes;
   if (!sizes.some((size) => size.level === 1)) {
     issue(['firemaking', 'rack', 'sizes'], 'At least one rack size must be open from level 1');
@@ -95,7 +108,8 @@ function checkReferences(data: GameData, ctx: z.RefinementCtx): void {
     if (size.answerLogs.min > size.answerLogs.max) {
       issue(['firemaking', 'rack', 'sizes', index, 'answerLogs'], 'min must not be more than max');
     }
-    if (size.answerLogs.max > size.spots * firemaking.rack.maxLogs) {
+    // The size opens at its level, so its fires get the logs a spot holds from then on.
+    if (size.answerLogs.max > size.spots * logsAt(size.level)) {
       issue(
         ['firemaking', 'rack', 'sizes', index, 'answerLogs', 'max'],
         'More logs than the spots can hold',

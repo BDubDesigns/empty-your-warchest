@@ -9,15 +9,20 @@ export const firemaking = {
   // puzzle grows other ways (other woods). Bigger fires take more logs to even out.
   rack: {
     stavesPerSpot: 2,
-    maxLogs: 2,
+    // From Firemaking 10 a spot holds 3 logs, on any rack (Brandon, Nov 25): the racks multiply
+    // output by then, so fires can ask for more fuel.
+    logsPerSpot: [
+      { logs: 2, level: 1 },
+      { logs: 3, level: 10 },
+    ],
     sizes: [
       { spots: 3, level: 1, answerLogs: { min: 2, max: 4 } },
       { spots: 4, level: 5, answerLogs: { min: 2, max: 5 } },
-      { spots: 5, level: 10, answerLogs: { min: 3, max: 6 } },
-      { spots: 6, level: 15, answerLogs: { min: 3, max: 7 } },
-      { spots: 7, level: 20, answerLogs: { min: 4, max: 8 } },
-      { spots: 8, level: 25, answerLogs: { min: 4, max: 9 } },
-      { spots: 9, level: 30, answerLogs: { min: 5, max: 10 } },
+      { spots: 5, level: 10, answerLogs: { min: 3, max: 7 } },
+      { spots: 6, level: 15, answerLogs: { min: 4, max: 8 } },
+      { spots: 7, level: 20, answerLogs: { min: 4, max: 9 } },
+      { spots: 8, level: 25, answerLogs: { min: 5, max: 10 } },
+      { spots: 9, level: 30, answerLogs: { min: 5, max: 11 } },
     ],
   },
   // Up to a third of a layer missed is still 2 stars (2 of the starting 6).
@@ -27,7 +32,8 @@ export const firemaking = {
   generator: {
     flat: 10,
     noise: 0.3,
-    minHeat: 3,
+    // 2, not 3: a spot whose answer is 3 logs starts 7.5 heat down, at 2.5.
+    minHeat: 2,
     // The answer's pull window is at least this long (seconds): readable, not a twitch test.
     minWindow: 0.8,
     tries: 40,
