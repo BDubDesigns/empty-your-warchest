@@ -25,6 +25,23 @@ async function tapCampSpot(page: Page, spot: { x: number; y: number }): Promise<
 }
 
 /**
+ * Taps a station at the camp until it opens. Over a long test (CI draws in software) a worker
+ * makes something, and its Collect button comes up where the tap lands: that tap collects, and
+ * the next one opens the station, as it would for a player.
+ */
+async function enter(page: Page, station: { id: string; camp: { x: number; y: number } }) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await tapCampSpot(page, station.camp);
+    const opened = await expect(page.locator('body'))
+      .toHaveAttribute('data-view', `station:${station.id}`, { timeout: 10_000 })
+      .then(() => true)
+      .catch(() => false);
+    if (opened) return;
+  }
+  await viewIs(page, `station:${station.id}`);
+}
+
+/**
  * The game's WebGL contexts (not this test's) on the page and still live. Phaser's one-off probe
  * for WebGL support isn't on the page; it's older than the camp's, so it would go first anyway.
  */
@@ -111,8 +128,7 @@ test('going in and out of the stations many times keeps the camp drawing', async
   const back = page.locator('#back-button');
   const visits = [...stations, siege, siege, ...stations, siege, siege];
   for (const station of visits) {
-    await tapCampSpot(page, station.camp);
-    await viewIs(page, `station:${station.id}`);
+    await enter(page, station);
     if (station.mechanic === 'woodcutting3d') {
       await expect(back).toHaveText('End round');
       await back.tap();
@@ -129,8 +145,7 @@ test('going in and out of the stations many times keeps the camp drawing', async
   await expect.poll(() => campColours(page)).toBeGreaterThan(drawn / 2);
   await page.screenshot({ path: test.info().outputPath('camp-after-visits.png') });
   // And each screen still draws on its next visit, its context given back.
-  await tapCampSpot(page, siege.camp);
-  await viewIs(page, `station:${siege.id}`);
+  await enter(page, siege);
   await expect(page.locator('body')).toHaveAttribute('data-siege', 'aim', { timeout: 30_000 });
   expect(await liveContexts(page)).toBeLessThanOrEqual(AT_CAMP + 2);
   expect(errors).toEqual([]);
