@@ -78,9 +78,9 @@ const MAX_STAVES_SHOWN = 64;
  * A split stave: a wedge out of the log, its bark side `STAVE_WIDTH` across and its pith side
  * `STAVE_PITH` of that, `STAVE_THICKNESS` from one to the other.
  */
-const STAVE_WIDTH = 0.19;
+const STAVE_WIDTH = 0.25;
 const STAVE_PITH = 0.45;
-const STAVE_THICKNESS = 0.14;
+const STAVE_THICKNESS = 0.18;
 /**
  * The heap: staves lie across in front of the block, stacked in a woodpile (each layer in the
  * gaps of the one under it, a row fewer each layer up), in one bay or, past `HEAP_ONE_BAY`
