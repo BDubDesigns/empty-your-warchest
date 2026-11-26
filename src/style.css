@@ -119,6 +119,50 @@ body:not([data-view='camp']) #build-label {
   font-size: 13px;
 }
 
+/* Over the camp while a station's screen loads; it takes taps so a second station can't start. */
+.loading-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: grid;
+  place-items: center;
+  padding: var(--safe-top) var(--safe-right) var(--safe-bottom) var(--safe-left);
+  touch-action: none;
+}
+
+.loading-overlay[hidden] {
+  display: none;
+}
+
+.loading-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  max-width: calc(100% - 32px);
+  padding: 18px 22px;
+  border-radius: 14px;
+  background: rgb(20 24 18 / 0.88);
+  font:
+    700 18px system-ui,
+    sans-serif;
+}
+
+.loading-spinner {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  border: 3px solid rgb(242 234 211 / 0.25);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: loading-spin 0.8s linear infinite;
+}
+
+@keyframes loading-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 /* Debug menu */
 
 /* Under Back to camp, so the top-right stays free for the HUD chest. */

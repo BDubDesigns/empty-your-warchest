@@ -1,4 +1,12 @@
-import type { Choice, EventLogger, Game, LiveTuning, LogEvent, SaveStore } from '../core';
+import type {
+  Choice,
+  EventLogger,
+  Game,
+  LiveTuning,
+  LogEvent,
+  SaveStore,
+  WorkClock,
+} from '../core';
 import type { ClearingPicker } from '../stations/woodcutting';
 import { canShareFile, downloadFile, shareFile } from './exportFile';
 
@@ -12,6 +20,8 @@ export interface DebugDeps {
   choices: readonly Choice[];
   /** Woodcutting's clearing picker, to replay a seed or the tutorial. */
   clearings: ClearingPicker;
+  /** The workers' time: skipping ahead counts as time away. */
+  work: WorkClock;
   buildLabel: string;
 }
 
@@ -220,9 +230,9 @@ export function mountDebugMenu(root: HTMLElement, deps: DebugDeps): void {
   const skipButtons = TIME_SKIPS.map((skip) => {
     const button = el('button', { type: 'button', textContent: skip.label });
     button.addEventListener('click', () => {
-      game.lastSeenAt -= skip.ms;
       logger.log('debug.skipTime', { ms: skip.ms });
-      say(`Skipped ahead ${skip.label.slice(1)} for idle progress`);
+      deps.work.skip(skip.ms);
+      say(`Skipped ahead ${skip.label.slice(1)}: collect what the workers made at the camp`);
     });
     return button;
   });
@@ -406,8 +416,10 @@ export function mountDebugMenu(root: HTMLElement, deps: DebugDeps): void {
           })),
     );
     for (const skill of skillRows) skill.update();
-    const minutes = Math.round((Date.now() - game.lastSeenAt) / MINUTE);
-    lastSeen.textContent = `Last seen: ${minutes <= 0 ? 'just now' : `${minutes} min ago`} (idle progress counts from here, M6)`;
+    const owed = Math.round(deps.work.owed * 10) / 10;
+    lastSeen.textContent = `Workers owed ${String(owed)} min, banked at the camp (${String(
+      game.workers,
+    )} workers, ${String(game.freeWorkers)} free)`;
   };
 
   const closeButton = el('button', {

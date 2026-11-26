@@ -98,4 +98,10 @@ describe('game data', () => {
       raw.tuning.xpCurve.maxLevel = 0;
     }, 'tuning.xpCurve.maxLevel');
   });
+
+  it('fails loudly on a negative loading card delay', () => {
+    expectInvalid((raw) => {
+      raw.tuning.screens.loadingCardDelayMs = -1;
+    }, 'tuning.screens.loadingCardDelayMs');
+  });
 });

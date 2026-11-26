@@ -194,6 +194,12 @@ export function drawSplitGrain(
   return canvas;
 }
 
+/**
+ * A stave's length in world units: the same wherever one is drawn (split off at the workbench,
+ * hardened at the fire pit), so the stations agree.
+ */
+export const STAVE_LENGTH = 1.05;
+
 /** World units one tile of the bark texture covers, round the log and up it. */
 export const BARK_TILE = 1.4;
 

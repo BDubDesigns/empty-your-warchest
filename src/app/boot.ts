@@ -6,6 +6,7 @@ import {
   SaveStore,
   localStorageStore,
   systemClock,
+  WorkClock,
   type Clock,
   type EventSink,
   type LiveChoice,
@@ -59,6 +60,8 @@ export interface Booted {
   clearings: ClearingPicker;
   /** Woodcutting's fast-fall switch, shown once its level is reached. */
   fastFall: LiveChoice<FastFall>;
+  /** The workers' time, banked at the camp. */
+  work: WorkClock;
 }
 
 async function openSink(): Promise<{ sink: EventSink; fallback?: string }> {
@@ -105,12 +108,15 @@ export async function bootGame(buildLabel: string): Promise<Booted> {
   };
   game.onChange(save);
 
+  // The workers' time: away since the save was last seen, then playing and away from here on.
+  const work = new WorkClock(game, clock.now());
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden') {
       logger.log('app.hidden');
-      game.lastSeenAt = clock.now();
+      work.hidden(clock.now());
     } else {
       logger.log('app.visible');
+      work.visible(clock.now());
     }
   });
 
@@ -131,5 +137,5 @@ export async function bootGame(buildLabel: string): Promise<Booted> {
   const clearings = new ClearingPicker(game);
   const fastFall = fastFallChoice(localStorageStore());
 
-  return { game, clock, logger, saves, feel, choices, haptics, clearings, fastFall };
+  return { game, clock, logger, saves, feel, choices, haptics, clearings, fastFall, work };
 }

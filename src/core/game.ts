@@ -3,6 +3,7 @@ import { Inventory, type Stack } from './inventory';
 import type { EventLogger } from './logger';
 import { craft, type CraftOutcome, type CraftResult } from './recipes';
 import type { GameState } from './state';
+import { doWork, jobStation, workerCount, type WorkResult, type WorkState } from './workers';
 import { XpCurve } from './xp';
 
 /** The running game: warchest, skills and recipes, driven by the data. */
@@ -15,6 +16,7 @@ export class Game {
   #xp: Map<string, number>;
   #lastSeenAt: number;
   #done: Set<string>;
+  #work: WorkState;
 
   constructor(data: GameData, state: GameState, logger: EventLogger) {
     this.data = data;
@@ -24,6 +26,7 @@ export class Game {
     this.#xp = new Map(Object.entries(state.skills));
     this.#lastSeenAt = state.lastSeenAt;
     this.#done = new Set(state.done);
+    this.#work = fitCrew(data, state.work, this.workers);
   }
 
   get inventory(): Inventory {
@@ -114,12 +117,104 @@ export class Game {
     return { ...result, xp };
   }
 
+  // Workers
+
+  /** Workers you have, from the workers' skill level. */
+  get workers(): number {
+    return workerCount(this.data, this.level(this.data.workers.skill));
+  }
+
+  /** Workers at `stationId`. */
+  crew(stationId: string): number {
+    return this.#work.crew[stationId] ?? 0;
+  }
+
+  /** Workers not at any station. */
+  get freeWorkers(): number {
+    const working = Object.values(this.#work.crew).reduce((sum, count) => sum + count, 0);
+    return Math.max(this.workers - working, 0);
+  }
+
+  /** Moves a worker to (`+1`) or off (`-1`) a station with a job, if there's one to move. */
+  assignWorker(stationId: string, change: 1 | -1): void {
+    const hasJob = this.data.workers.jobs.some((job) => jobStation(this.data, job) === stationId);
+    const now = this.crew(stationId);
+    if (!hasJob || (change > 0 && this.freeWorkers === 0) || (change < 0 && now === 0)) return;
+    this.#work.crew = { ...this.#work.crew, [stationId]: now + change };
+    this.#logger.log('workers.assign', { station: stationId, crew: now + change });
+    this.#changed();
+  }
+
+  /** The least of an item the workers leave in the warchest. */
+  minimum(itemId: string): number {
+    return this.#work.minimums[itemId] ?? 0;
+  }
+
+  setMinimum(itemId: string, count: number): void {
+    byId(this.data.items, itemId);
+    const next = Math.max(Math.round(count), 0);
+    this.#work.minimums = { ...this.#work.minimums, [itemId]: next };
+    this.#logger.log('workers.minimum', { item: itemId, count: next });
+    this.#changed();
+  }
+
+  /**
+   * The workers' work over `minutes` (playing and away): what they make goes on their stations'
+   * piles, waiting to be collected. `away` is how much of it was time away, for the log.
+   */
+  work(minutes: number, away = 0): WorkResult {
+    const result = doWork(this.data, this.#inventory, this.#work, minutes);
+    this.#logger.log('workers.work', {
+      minutes: Math.round(minutes * 100) / 100,
+      away: Math.round(away * 100) / 100,
+      stations: result.stations.map(({ station, workers, made, used, xp, short }) => ({
+        station,
+        workers,
+        made,
+        used,
+        xp,
+        ...(short && { short }),
+      })),
+    });
+    this.#changed();
+    return result;
+  }
+
+  /** What a station's workers have made and not had collected yet. */
+  pile(stationId: string): readonly Stack[] {
+    return this.#work.piles[stationId] ?? [];
+  }
+
+  /** XP waiting on a station's pile. */
+  pileXp(stationId: string): number {
+    return this.#work.xp[stationId] ?? 0;
+  }
+
+  /**
+   * Collects a station's pile into the warchest and pays its XP. Returns what was collected (the
+   * view pours it in).
+   */
+  collect(stationId: string): { items: Stack[]; xp: number } {
+    const items = this.pile(stationId).filter((stack) => stack.count > 0);
+    const xp = this.pileXp(stationId);
+    if (items.length === 0 && xp === 0) return { items: [], xp: 0 };
+    for (const stack of items) this.#inventory.add(stack.item, stack.count);
+    this.#work.piles = { ...this.#work.piles, [stationId]: [] };
+    this.#work.xp = { ...this.#work.xp, [stationId]: 0 };
+    this.#logger.log('workers.collect', { station: stationId, items, xp });
+    const station = byId(this.data.stations, stationId);
+    if (xp > 0) this.addXp(station.skill, xp);
+    else this.#changed();
+    return { items, xp };
+  }
+
   /** Replaces everything with `state`, e.g. after a save reset. */
   replaceState(state: GameState): void {
     this.#inventory = new Inventory(this.data, state.inventory);
     this.#xp = new Map(Object.entries(state.skills));
     this.#lastSeenAt = state.lastSeenAt;
     this.#done = new Set(state.done);
+    this.#work = fitCrew(this.data, state.work, this.workers);
     this.#changed();
   }
 
@@ -129,6 +224,18 @@ export class Game {
       inventory,
       skills: Object.fromEntries(this.data.skills.map((skill) => [skill.id, this.xp(skill.id)])),
       lastSeenAt: this.#lastSeenAt,
+      work: {
+        crew: { ...this.#work.crew },
+        carry: { ...this.#work.carry },
+        minimums: { ...this.#work.minimums },
+        piles: Object.fromEntries(
+          Object.entries(this.#work.piles).map(([station, pile]) => [
+            station,
+            pile.map((stack) => ({ ...stack })),
+          ]),
+        ),
+        xp: { ...this.#work.xp },
+      },
       done: [...this.#done],
     };
   }
@@ -142,4 +249,31 @@ export class Game {
   #changed(): void {
     for (const listener of this.#listeners) listener();
   }
+}
+
+/**
+ * A saved crew fitted to the data: stations without a job have no workers, and if there are more
+ * workers out than you have (e.g. after a data change), the last jobs give theirs back first.
+ */
+function fitCrew(data: GameData, work: WorkState, workers: number): WorkState {
+  const crew: Record<string, number> = {};
+  let left = workers;
+  for (const job of data.workers.jobs) {
+    const station = jobStation(data, job);
+    const count = Math.min(work.crew[station] ?? 0, left);
+    crew[station] = count;
+    left -= count;
+  }
+  return {
+    crew,
+    carry: { ...work.carry },
+    minimums: { ...work.minimums },
+    piles: Object.fromEntries(
+      Object.entries(work.piles).map(([station, pile]) => [
+        station,
+        pile.map((stack) => ({ ...stack })),
+      ]),
+    ),
+    xp: { ...work.xp },
+  };
 }

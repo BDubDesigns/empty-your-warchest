@@ -50,6 +50,22 @@ export const splittingTunables: readonly Tunable[] = [
     step: 0.05,
     more: true,
   },
+  {
+    key: 'heapCameraBack',
+    label: 'Camera eases back for the heap',
+    min: 0,
+    max: 5,
+    step: 0.1,
+    more: true,
+  },
+  {
+    key: 'heapCameraSeconds',
+    label: 'Camera eases back over (s)',
+    min: 0.05,
+    max: 2,
+    step: 0.05,
+    more: true,
+  },
   { key: 'buzzStrikeMs', label: 'Vibrate: head lands (ms)', min: 0, max: 60, step: 1, more: true },
   { key: 'buzzPumpMs', label: 'Vibrate: each stroke (ms)', min: 0, max: 80, step: 1, more: true },
   {

@@ -85,6 +85,9 @@ export const splitting = {
     pumpSeconds: 0.12,
     burstSeconds: 1.1,
     heapSeconds: 0.6,
+    // Room for a big heap in front of the block (Brandon, Nov 25: the staves looked tiny).
+    heapCameraBack: 3,
+    heapCameraSeconds: 0.5,
     buzzStrikeMs: 20,
     buzzPumpMs: 18,
     buzzPumpBuildMs: 30,
