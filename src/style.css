@@ -2219,7 +2219,7 @@ body:not([data-view='camp']) #build-label {
 /* The forts: each one open, and the next locked until the one before is won. */
 .sg-forts {
   position: absolute;
-  top: calc(var(--safe-top) + 84px);
+  top: calc(var(--safe-top) + 104px);
   left: 0;
   right: 0;
   display: flex;
@@ -2252,7 +2252,7 @@ body:not([data-view='camp']) #build-label {
 
 .sg-status {
   position: absolute;
-  top: calc(var(--safe-top) + 130px);
+  top: calc(var(--safe-top) + 150px);
   left: 0;
   right: 0;
   text-align: center;
@@ -2267,7 +2267,7 @@ body:not([data-view='camp']) #build-label {
   position: absolute;
   left: 16px;
   right: 16px;
-  top: calc(var(--safe-top) + 154px);
+  top: calc(var(--safe-top) + 174px);
   text-align: center;
   font-size: 15px;
   font-weight: 600;
