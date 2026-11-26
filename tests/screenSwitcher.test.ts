@@ -40,6 +40,15 @@ describe('ScreenSwitcher', () => {
     expect(switcher.current).toBe('a');
   });
 
+  it('tells which screens have been mounted', async () => {
+    const switcher = new ScreenSwitcher({ a: fakeScreen('a', []), b: fakeScreen('b', []) });
+
+    await switcher.show('a');
+
+    expect(switcher.isMounted('a')).toBe(true);
+    expect(switcher.isMounted('b')).toBe(false);
+  });
+
   it('keeps going after a screen fails to mount', async () => {
     const log: string[] = [];
     const broken: Screen = {
@@ -51,5 +60,6 @@ describe('ScreenSwitcher', () => {
     await switcher.show('a');
     await expect(switcher.show('b')).rejects.toThrow('no WebGL');
     expect(switcher.current).toBe('a');
+    expect(switcher.isMounted('b')).toBe(false);
   });
 });

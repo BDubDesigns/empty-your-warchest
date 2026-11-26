@@ -290,6 +290,24 @@ const PARTICLES: Record<
   },
 };
 
+/** Every model the view draws (both tree styles, so switching style needs no loading). */
+async function loadModels(): Promise<Models> {
+  const plantKinds = Object.keys(MODELS.plants) as SceneryPlantKind[];
+  const [kenney, quaternius, stump, axe, plantModels] = await Promise.all([
+    Promise.all(MODELS.kenney.map(loadModel)),
+    Promise.all(MODELS.quaternius.map(loadModel)),
+    loadModel(MODELS.stump),
+    loadModel(MODELS.axe),
+    Promise.all(
+      plantKinds.map((kind) => loadModel(`models/quaternius/${MODELS.plants[kind]}.gltf`)),
+    ),
+  ]);
+  const plants = Object.fromEntries(
+    plantKinds.map((kind, index) => [kind, plantModels[index]]),
+  ) as Record<SceneryPlantKind, THREE.Object3D>;
+  return { kenney, quaternius, stump, axe, plants };
+}
+
 function treeSeed(id: string): number {
   let hash = 0;
   for (const char of id) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
@@ -451,21 +469,16 @@ export class Woodcutting3DView implements ScreenView {
     const recipe = game.data.recipes.find((entry) => entry.id === game.data.woodcutting.recipe);
     const item = recipe?.outputs[0]?.item;
     if (!item) throw new Error('The woodcutting recipe makes nothing');
-    const plantKinds = Object.keys(MODELS.plants) as SceneryPlantKind[];
-    const [kenney, quaternius, stump, axe, plantModels, hud] = await Promise.all([
-      Promise.all(MODELS.kenney.map(loadModel)),
-      Promise.all(MODELS.quaternius.map(loadModel)),
-      loadModel(MODELS.stump),
-      loadModel(MODELS.axe),
-      Promise.all(
-        plantKinds.map((kind) => loadModel(`models/quaternius/${MODELS.plants[kind]}.gltf`)),
-      ),
+    const [models, hud] = await Promise.all([
+      loadModels(),
       WarchestHud.create(element, { game, item, haptics: deps.haptics }),
     ]);
-    const plants = Object.fromEntries(
-      plantKinds.map((kind, index) => [kind, plantModels[index]]),
-    ) as Record<SceneryPlantKind, THREE.Object3D>;
-    return new Woodcutting3DView(element, deps, { kenney, quaternius, stump, axe, plants }, hud);
+    return new Woodcutting3DView(element, deps, models, hud);
+  }
+
+  /** Loads the models ahead of time (e.g. at the camp), so `create` doesn't wait for them. */
+  static async preload(): Promise<void> {
+    await Promise.all([loadModels(), WarchestHud.preload()]);
   }
 
   // ScreenView
