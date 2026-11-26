@@ -21,6 +21,10 @@ const SOUNDS = Object.fromEntries(
     'panel-close',
   ].map((name) => [name, `audio/warchest/${name}.mp3`]),
 );
+async function loadHudModels(): Promise<{ chest: THREE.Object3D; log: THREE.Object3D }> {
+  const [chest, log] = await Promise.all([loadModel(MODELS.chest), loadModel(MODELS.log)]);
+  return { chest, log };
+}
 /** Chest and flying pieces, in CSS pixels. */
 const CHEST_SIZE = 46;
 const PIECE_LENGTH = 30;
@@ -199,8 +203,12 @@ export class WarchestHud {
   }
 
   static async create(element: HTMLElement, deps: HudDeps) {
-    const [chest, log] = await Promise.all([loadModel(MODELS.chest), loadModel(MODELS.log)]);
-    return new WarchestHud(element, deps, { chest, log });
+    return new WarchestHud(element, deps, await loadHudModels());
+  }
+
+  /** Loads the models ahead of time (e.g. at the camp), so `create` doesn't wait for them. */
+  static async preload(): Promise<void> {
+    await loadHudModels();
   }
 
   /**

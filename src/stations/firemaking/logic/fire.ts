@@ -62,7 +62,7 @@ export function rackRules(rules: Pick<Firemaking, 'rack' | 'generator'>, spots: 
     rack: {
       spots,
       staves: spots * rules.rack.stavesPerSpot,
-      maxLogs: rules.rack.maxLogs,
+      maxLogs: size.logsPerSpot,
       answerLogs: size.answerLogs,
     },
     generator: rules.generator,

@@ -117,7 +117,7 @@ function checkReferences(data: GameData, ctx: z.RefinementCtx): void {
     if (size.answerLogs.min > size.answerLogs.max) {
       issue(['firemaking', 'rack', 'sizes', index, 'answerLogs'], 'min must not be more than max');
     }
-    if (size.answerLogs.max > size.spots * firemaking.rack.maxLogs) {
+    if (size.answerLogs.max > size.spots * size.logsPerSpot) {
       issue(
         ['firemaking', 'rack', 'sizes', index, 'answerLogs', 'max'],
         'More logs than the spots can hold',

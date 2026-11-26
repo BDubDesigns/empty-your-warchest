@@ -66,7 +66,7 @@ test('every station and the chest can be entered and exited by touch', async ({ 
   await expect(download).toBeEnabled();
   const [file] = await Promise.all([page.waitForEvent('download'), download.tap()]);
   const exported = JSON.parse(await readFile(await file.path(), 'utf8')) as {
-    events: { type: string; data?: { station?: string } }[];
+    events: { type: string; data?: { station?: string; ms?: number } }[];
   };
   const entered = exported.events.filter((event) => event.type === 'station.enter');
   expect(entered.map((event) => event.data?.station)).toEqual(
@@ -76,7 +76,37 @@ test('every station and the chest can be entered and exited by touch', async ({ 
     stations.length,
   );
   expect(exported.events.map((event) => event.type)).toContain('warchest.open');
+  // Every station here has its own screen, loaded on its first visit and timed for tuning.
+  const loads = exported.events.filter((event) => event.type === 'screen.load');
+  expect(loads.map((event) => event.data?.station)).toEqual(stations.map((station) => station.id));
+  for (const load of loads) expect(load.data?.ms).toBeGreaterThanOrEqual(0);
   expect(errors).toEqual([]);
+});
+
+test('a slow station shows the loading card until its screen is ready', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('warchest.woodcutting.treeStyle', 'kenney');
+    localStorage.setItem('warchest.woodcutting.scenery', 'off');
+  });
+  // A slow connection: the station's models take a while, so neither the preload nor the tap
+  // can open it quickly.
+  await page.route('**/models/**', async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    await route.continue();
+  });
+  await page.goto('/');
+  await viewIs(page, 'camp');
+  const station = stations.find((entry) => entry.mechanic === 'woodcutting3d');
+  if (!station) throw new Error('No 3D woodcutting station in data');
+  await tapCampSpot(page, station.camp);
+  const card = page.locator('.loading-overlay');
+  await expect(card).toBeVisible();
+  await expect(card).toHaveText(`Heading to the ${station.name}…`);
+  // The models wait twice (a model, then its buffers), and CI draws 3D in software.
+  await expect(page.locator('body')).toHaveAttribute('data-view', `station:${station.id}`, {
+    timeout: 30_000,
+  });
+  await expect(card).toBeHidden();
 });
 
 test('the camp comes back at the right size after the window resizes in a station', async ({

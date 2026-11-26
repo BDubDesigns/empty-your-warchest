@@ -2,10 +2,22 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
 const loader = new GLTFLoader();
+/** Each model loads once: views clone what they get, so every caller can share one copy. */
+const loaded = new Map<string, Promise<THREE.Object3D>>();
 
-/** Loads a glTF/GLB model's scene, made matte (see `matte`). */
-export async function loadModel(url: string): Promise<THREE.Object3D> {
-  return matte((await loader.loadAsync(url)).scene);
+/**
+ * Loads a glTF/GLB model's scene, made matte (see `matte`). The result is shared by every caller
+ * (and warmed by preloading at the camp), so clone it rather than changing it.
+ */
+export function loadModel(url: string): Promise<THREE.Object3D> {
+  let model = loaded.get(url);
+  if (!model) {
+    model = loader.loadAsync(url).then((gltf) => matte(gltf.scene));
+    // A failed load (say, a dropped connection) is tried again next time, not remembered.
+    void model.catch(() => loaded.delete(url));
+    loaded.set(url, model);
+  }
+  return model;
 }
 
 /**

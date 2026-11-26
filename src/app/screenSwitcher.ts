@@ -20,6 +20,11 @@ export class ScreenSwitcher<Id extends string> {
     return this.#current;
   }
 
+  /** Whether the screen has been shown before (so showing it again needs no loading). */
+  isMounted(id: Id): boolean {
+    return this.#mounted.has(id);
+  }
+
   show(id: Id): Promise<void> {
     const next = this.#queue.then(() => this.#switchTo(id));
     // A failed switch must not block later ones; the caller still sees the error.
