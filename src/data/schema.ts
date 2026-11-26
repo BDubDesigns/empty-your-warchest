@@ -927,12 +927,15 @@ export const siegeFeelSchema = z.object({
   advanceSeconds: positive,
   /**
    * The camera: how high it sits and how far behind the ballista, and where it looks (metres).
-   * `sightBlend` moves it from there (0) to the ballista's sight, looking down the bolt (1).
+   * `cameraTurn` is how much of the ballista's turn it turns with (so what you aim at off to one
+   * side comes into view). `sightBlend` moves it from there (0) to the ballista's sight, looking
+   * down the bolt (1).
    */
   cameraHeight: positive,
   cameraBack: positive,
   cameraLookAhead: positive,
   cameraLookHeight: nonNegative,
+  cameraTurn: fraction,
   sightBlend: fraction,
   /**
    * After a shot the camera follows the lead spear for `followSeconds`, `follow` of the way

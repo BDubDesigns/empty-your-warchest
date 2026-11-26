@@ -991,8 +991,19 @@ export class Siege3DView implements ScreenView {
     const rules = this.#deps.game.data.siege;
     const at = this.#lastBallista;
     const lift = 1 + this.#rolling * 0.25;
-    const behind = new THREE.Vector3(at.x, feel.cameraHeight * lift, at.z + feel.cameraBack * lift);
-    const behindLook = new THREE.Vector3(at.x, feel.cameraLookHeight, at.z - feel.cameraLookAhead);
+    // Behind it, turned part of the way with its aim.
+    const turn = this.#aim.yaw * feel.cameraTurn;
+    const back = feel.cameraBack * lift;
+    const behind = new THREE.Vector3(
+      at.x - Math.sin(turn) * back,
+      feel.cameraHeight * lift,
+      at.z + Math.cos(turn) * back,
+    );
+    const behindLook = new THREE.Vector3(
+      at.x + Math.sin(turn) * feel.cameraLookAhead,
+      feel.cameraLookHeight,
+      at.z - Math.cos(turn) * feel.cameraLookAhead,
+    );
     const way = aimDirection(this.#aim);
     const pivot = new THREE.Vector3(at.x, rules.ballista.pivotHeight, at.z);
     const forward = new THREE.Vector3(way.x, way.y, way.z);

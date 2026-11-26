@@ -205,7 +205,7 @@ export const siege = {
         ...wall(3, 3, { x: 2.5, z: OUTER_WALL_Z }, 'fieldstone'),
         // The courtyard: a low wall two guards duck behind, and a watch platform.
         ...wall(6, 2, { x: 0, z: COURTYARD_Z }, 'fieldstone', false),
-        ...platform(4.5, COURTYARD_Z - 1, 1.6, 2),
+        ...platform(4, COURTYARD_Z - 1, 1.6, 2),
         // The keep, behind its own low wall.
         ...wall(5, 2, { x: 0, z: KEEP_Z + 4 }, 'fieldstone', false),
         ...keep([1.2, 1.2, 1.4], 1, 2.4, 2, 0.3, KEEP_Z),
@@ -223,7 +223,7 @@ export const siege = {
           guards: [
             { at: [-1.5, 0, COURTYARD_Z - 1.2] },
             { at: [1, 0, COURTYARD_Z - 1.2] },
-            { at: [4.5, 2.2, COURTYARD_Z - 1] },
+            { at: [4, 2.2, COURTYARD_Z - 1] },
           ],
           objective: { kind: 'guards_down' },
         },
@@ -270,6 +270,7 @@ export const siege = {
     cameraBack: 8,
     cameraLookAhead: 15,
     cameraLookHeight: 1,
+    cameraTurn: 0.6,
     sightBlend: 0,
     followSeconds: 0.7,
     follow: 0.5,
