@@ -145,7 +145,14 @@ describe('rack sizes', () => {
     expect(openRacks(rules, 5)).toEqual([3, 4]);
     expect(openRacks(rules, 30)).toEqual([3, 4, 5, 6, 7, 8, 9]);
     expect(openRacks(rules, 99)).toEqual([3, 4, 5, 6, 7, 8, 9]);
-    expect(rackRules(rules, 9).rack).toMatchObject({ spots: 9, staves: 18 });
+    expect(rackRules(rules, 9).rack).toMatchObject({ spots: 9, staves: 18, maxLogs: 3 });
+  });
+
+  it('holds 2 logs a spot on the small racks and 3 on the racks from level 10', () => {
+    expect(rackRules(rules, 3).rack.maxLogs).toBe(2);
+    expect(rackRules(rules, 4).rack.maxLogs).toBe(2);
+    expect(rackRules(rules, 5).rack.maxLogs).toBe(3);
+    expect(rackRules(rules, 9).rack.maxLogs).toBe(3);
   });
 
   it('makes fair fires at every size', () => {
