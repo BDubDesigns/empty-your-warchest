@@ -5,7 +5,9 @@ import type {
   SiegeBlock,
   SiegeFeel,
   SiegeFort,
+  SiegeGuard,
   SiegeMaterial,
+  SiegePosition,
 } from '../../../data';
 import { objectiveMet } from './objective';
 import type { Physics } from './physics';
@@ -13,9 +15,11 @@ import { siegeRewards, type SiegeRewards } from './score';
 import {
   flightPath,
   previewLaunches,
-  throwSpears,
+  shotSpears,
+  timeToGround,
   type Aim,
   type Launch,
+  type Spot,
   type ThrowMode,
   type Vec3,
 } from './throw';
@@ -40,31 +44,34 @@ export interface Pose {
 
 export type MaterialKind = SiegeMaterial['kind'];
 
+/** What was hit: a block or a guard, by its index in `blocks` or `guards`. */
+export type Target = { kind: 'block' | 'guard'; index: number };
+
 /** What happened in a step, for the view's juice (and the tests). */
 export type SiegeEvent =
-  /** The line throws `spears` spears; each leaves on its own `launch` (now or a moment later). */
+  /** The ballista shoots `spears` spears; each leaves on its own `launch` (now or a moment later). */
   | { type: 'throw'; mode: ThrowMode; spears: number }
-  /** A spear left a thrower's hand: its index in `spears`. */
-  | { type: 'launch'; spear: number; thrower: number }
-  /** A spear hit a block at `speed` m/s, dealing `damage` (it may have broken it). */
+  /** A spear left the ballista: its index in `spears`. */
+  | { type: 'launch'; spear: number }
+  /** A spear hit a block or a guard at `speed` m/s, dealing `damage` (it may have broken it). */
   | {
       type: 'hit';
       spear: number;
-      block: number;
-      kind: MaterialKind;
+      target: Target;
+      kind: MaterialKind | 'guard';
       speed: number;
       damage: number;
       at: Vec3;
     }
   /**
-   * Every impact on a block, for rules to hook into (damage now; noise, say, later): a spear's
-   * first touch on it, or a sudden change of its speed over `crashMinSpeed` (a crash).
+   * Every impact on a block or a guard, for rules to hook into (damage now; noise, say, later):
+   * a spear's first touch on it, or a sudden change of its speed over `crashMinSpeed` (a crash).
    */
   | {
       type: 'impact';
-      block: number;
+      target: Target;
       material: string;
-      kind: MaterialKind;
+      kind: MaterialKind | 'guard';
       by: 'spear' | 'crash';
       speed: number;
       damage: number;
@@ -77,38 +84,52 @@ export type SiegeEvent =
   | { type: 'break'; block: number; kind: MaterialKind; at: Vec3 }
   /** A block counted as knocked down. */
   | { type: 'down'; block: number }
+  /** A guard is down (no hit points left, or knocked over). */
+  | { type: 'guardDown'; guard: number; at: Vec3 }
+  /** The ballista set off for spot `spot` of the position it's at. */
+  | { type: 'spot'; spot: number }
+  /** Position `position` is won; the ballista rolls on to the next in a moment. */
+  | { type: 'positionWon'; position: number }
+  /** The ballista has arrived at position `position`. */
+  | { type: 'arrived'; position: number }
   /** The banner has tipped far enough to be falling. */
   | { type: 'bannerFalling' }
-  /** The banner is down: the fort has fallen. The round ends once it settles. */
+  /** The last position is won: the fort has fallen. The round ends once it settles. */
   | { type: 'won' }
   | { type: 'end'; result: SiegeResult };
 
 export interface SiegeResult extends SiegeRewards {
   fort: string;
   won: boolean;
-  /** Spears thrown. */
+  /** Spears shot. */
   used: number;
-  /** Throws: releases of the line, aimed or barrage alike (what stars count). */
+  /** Throws: shots of the ballista, aimed or barrage alike, over every position (what stars count). */
   throws: number;
+  /** Throws at each position, in order. */
+  throwsPerPosition: number[];
   par: number;
   /** Blocks knocked down or broken (each counted once). */
   blocksDown: number;
   blocksBroken: number;
-  /** Damage dealt to blocks, by spears and crashes. */
+  guardsDown: number;
+  /** Damage dealt to blocks and guards, by spears and crashes. */
   damage: number;
   /** Round time (physics seconds). */
   seconds: number;
 }
 
-/** Aiming (and throwing); the fort has fallen and is settling; or the round is over. */
-export type SiegePhase = 'aim' | 'won' | 'done';
+/**
+ * Aiming (and shooting); a position won and the ballista about to roll on to the next; the fort
+ * has fallen and is settling; or the round is over.
+ */
+export type SiegePhase = 'aim' | 'advance' | 'won' | 'done';
 
 export interface SiegeHooks {
   logger: EventLogger;
   feel: () => SiegeFeel;
   /** Spears left in the warchest. */
   spears: () => number;
-  /** Takes thrown spears out of the warchest. */
+  /** Takes shot spears out of the warchest. */
   spend: (count: number) => void;
   /** Pays what the round earned (XP, recovered spears). */
   finish: (result: SiegeResult) => void;
@@ -116,10 +137,12 @@ export interface SiegeHooks {
 }
 
 export interface SiegeOptions {
-  /** Throwers in the line (from the Command level). */
-  throwers: number;
-  /** For the throws' random stray: the same seed and throws replay the same round. */
+  /** Spears in an aimed volley (from the Command level). */
+  aimed: number;
+  /** For the shots' random stray: the same seed and shots replay the same round. */
   seed: number;
+  /** Start at this position (for tests): the ones before it count as passed. */
+  position?: number;
 }
 
 /** One of the fort's blocks, as the round sees it. */
@@ -134,21 +157,37 @@ export interface BlockState {
   broken: boolean;
 }
 
-/** A thrown spear. */
+/** One of the fort's guards. */
+export interface GuardState {
+  guard: SiegeGuard;
+  /** The position it guards. */
+  position: number;
+  hp: number;
+  maxHp: number;
+  down: boolean;
+}
+
+/** A shot spear. */
 export interface SpearState {
   /** Still in its first flight: nothing touched yet, so it flies nose first. */
   flying: boolean;
-  /** The throw it was part of, and who threw it. */
+  /** The throw it was part of. */
   throwIndex: number;
-  thrower: number;
 }
 
-/** A spear of a throw still in its thrower's hand: it leaves on step `at`. */
+/** A spear of a shot still on the ballista: it leaves on step `at`. */
 interface Pending {
   at: number;
   launch: Launch;
   throwIndex: number;
-  thrower: number;
+}
+
+/** The ballista moving from one spot to another, over round time `at` to `at + seconds`. */
+interface Move {
+  from: Spot;
+  to: Spot;
+  at: number;
+  seconds: number;
 }
 
 interface Tracked {
@@ -168,22 +207,29 @@ const GROUND = 0x0001;
 const BLOCK = 0x0002;
 const SPEAR = 0x0004;
 const groups = (member: number, filter: number) => (member << 16) | filter;
+/**
+ * How far past a broken block's own size bodies are woken (metres): as far as anything resting
+ * on it can reach (the widest floor in a fort).
+ */
+const WAKE_REACH = 3;
 
 /**
- * One siege: a fort of blocks in a Rapier physics world, the line of throwers and the spears they
- * throw at it, and the rules round them. The world is stepped at a fixed rate (`advance` turns
- * real time into whole steps), so the same throws on the same steps, with the same seed, always
- * knock the fort down the same way. You win when the banner comes down; with no spears left, you
- * lose once everything has settled.
+ * One siege: a fort of blocks and guards in a Rapier physics world, the ballista and the spears
+ * it shoots, and the rules round them. The fort is taken position by position: win one (its
+ * guards down, or at the last the banner) and the ballista rolls on to the next. The world is
+ * stepped at a fixed rate (`advance` turns real time into whole steps), so the same shots on the
+ * same steps, with the same seed, always go the same way. With no spears left, you lose once
+ * everything has settled.
  */
 export class SiegeRound {
   readonly fort: SiegeFort;
   readonly rules: Siege;
   readonly blocks: BlockState[];
+  readonly guards: GuardState[] = [];
   readonly spears: SpearState[] = [];
   readonly bannerIndex: number;
-  /** Throwers in the line. */
-  readonly throwers: number;
+  /** Spears in an aimed volley. */
+  readonly aimed: number;
   phase: SiegePhase = 'aim';
   result: SiegeResult | undefined;
   /** How far between the last step and the next the view should draw (0 to 1). */
@@ -195,12 +241,19 @@ export class SiegeRound {
   readonly #recovery: number;
   readonly #rng: Rng;
   readonly #blockBodies: Tracked[] = [];
+  readonly #guardBodies: Tracked[] = [];
   readonly #spearBodies: Tracked[] = [];
-  /** Which block or spear each collider belongs to. */
-  readonly #colliders = new Map<number, { kind: 'block' | 'spear'; index: number }>();
-  /** Spear and block pairs already reported as hits. */
+  /** Which block, guard or spear each collider belongs to. */
+  readonly #colliders = new Map<number, { kind: 'block' | 'guard' | 'spear'; index: number }>();
+  /** Spear and target pairs already reported as hits. */
   readonly #hits = new Set<string>();
   readonly #lastThud: number[];
+  readonly #throwsAt: number[];
+  #position: number;
+  #spot = 0;
+  #move: Move | undefined;
+  /** Won the position at `at`; rolling on to `next`. */
+  #advance: { at: number; next: number; rolling: boolean } | undefined;
   #pending: Pending[] = [];
   #steps = 0;
   #carry = 0;
@@ -223,11 +276,14 @@ export class SiegeRound {
     if (!fort) throw new Error(`Unknown fort "${fortId}"`);
     this.fort = fort;
     this.rules = data.siege;
-    this.throwers = options.throwers;
+    this.aimed = options.aimed;
     this.#physics = physics;
     this.#hooks = hooks;
     this.#recovery = data.tuning.weaponRecoveryOnWin;
     this.#rng = new Rng(options.seed);
+    this.#position = Math.min(Math.max(options.position ?? 0, 0), fort.positions.length - 1);
+    this.#throwsAt = fort.positions.map(() => 0);
+    this.#spot = middleSpot(fort.positions[this.#position]);
     const settings = this.rules.physics;
     this.#world = new physics.World({ x: 0, y: -settings.gravity, z: 0 });
     this.#world.timestep = settings.timestep;
@@ -244,23 +300,21 @@ export class SiegeRound {
       ground,
     );
 
+    // The fort starts awake, every block resting exactly on the ones below (checked at startup),
+    // so it stands still on its own; the engine puts it to sleep once it's still. (Starting it
+    // asleep was worse: blocks put to sleep before their contacts are known drift once woken.)
     this.blocks = fort.blocks.map((block, index) => {
       const material = this.rules.materials.find((entry) => entry.id === block.material);
       if (!material) throw new Error(`Unknown material "${block.material}"`);
       const [x, y, z] = block.at;
-      const body = this.#world.createRigidBody(
-        physics.RigidBodyDesc.dynamic().setTranslation(x, y, z),
+      const tracked = this.#addBox(
+        { x, y, z },
+        block.size,
+        { density: material.density, friction: material.friction },
+        material.restitution,
+        { kind: 'block', index },
       );
-      const collider = this.#world.createCollider(
-        physics.ColliderDesc.cuboid(block.size[0] / 2, block.size[1] / 2, block.size[2] / 2)
-          .setDensity(material.density)
-          .setFriction(material.friction)
-          .setRestitution(material.restitution)
-          .setCollisionGroups(groups(BLOCK, GROUND | BLOCK | SPEAR)),
-        body,
-      );
-      this.#colliders.set(collider.handle, { kind: 'block', index });
-      this.#blockBodies.push(track(body, collider.handle));
+      this.#blockBodies.push(tracked);
       const hp = block.hp ?? material.hp;
       return {
         block,
@@ -272,9 +326,29 @@ export class SiegeRound {
         broken: false,
       };
     });
-    // The fort starts awake, every block resting exactly on the ones below (checked at startup),
-    // so it stands still on its own; the engine puts it to sleep once it's still. (Starting it
-    // asleep was worse: blocks put to sleep before their contacts are known drift once woken.)
+    const { guard: rules } = this.rules;
+    fort.positions.forEach((position, positionIndex) => {
+      for (const guard of position.guards) {
+        const [x, y, z] = guard.at;
+        const index = this.guards.length;
+        this.#guardBodies.push(
+          this.#addBox(
+            { x, y: y + rules.size[1] / 2, z },
+            rules.size,
+            { density: rules.density, friction: rules.friction },
+            0,
+            { kind: 'guard', index },
+          ),
+        );
+        this.guards.push({
+          guard,
+          position: positionIndex,
+          hp: rules.hp,
+          maxHp: rules.hp,
+          down: false,
+        });
+      }
+    });
     this.#lastThud = this.blocks.map(() => -Infinity);
     this.bannerIndex = fort.blocks.findIndex((block) => block.banner);
 
@@ -283,8 +357,14 @@ export class SiegeRound {
       blocks: fort.blocks.length,
       par: fort.par,
       spears: hooks.spears(),
-      throwers: options.throwers,
+      aimed: options.aimed,
       seed: options.seed,
+      positions: fort.positions.map((position) => ({
+        name: position.name,
+        objective: position.objective.kind,
+        guards: position.guards.length,
+        spots: position.spots.length,
+      })),
       feel: hooks.feel(),
     });
   }
@@ -298,14 +378,30 @@ export class SiegeRound {
     return this.#steps;
   }
 
-  /** Spears thrown so far. */
+  /** Spears shot so far. */
   get used(): number {
     return this.#used;
   }
 
-  /** Throws so far: releases of the line. */
+  /** Throws so far: shots of the ballista. */
   get throws(): number {
     return this.#throws;
+  }
+
+  /** The position the ballista is at (or leaving). */
+  get position(): number {
+    return this.#position;
+  }
+
+  get currentPosition(): SiegePosition {
+    const position = this.fort.positions[this.#position];
+    if (!position) throw new Error('No position');
+    return position;
+  }
+
+  /** The spot the ballista is at (or moving to), at its position. */
+  get spot(): number {
+    return this.#spot;
   }
 
   /** Blocks knocked down or broken, each counted once. */
@@ -317,12 +413,39 @@ export class SiegeRound {
     return this.blocks.filter((block) => block.broken).length;
   }
 
+  get guardsDown(): number {
+    return this.guards.filter((guard) => guard.down).length;
+  }
+
+  /** Guards still up at the ballista's position. */
+  get guardsLeft(): number {
+    return this.guards.filter((guard) => guard.position === this.#position && !guard.down).length;
+  }
+
   /** Damage dealt so far, by spears and crashes. */
   get damage(): number {
     return this.#damage;
   }
 
-  /** The last throw is still leaving the line, or its spears are in the air and it's too soon. */
+  /** Where the ballista is now: at its spot, or on its way to the next. */
+  ballista(): Spot {
+    const move = this.#move;
+    if (!move) return this.#spotAt(this.#position, this.#spot);
+    const share = Math.min(Math.max((this.seconds - move.at) / move.seconds, 0), 1);
+    // Eased: it sets off and pulls up gently.
+    const eased = share * share * (3 - 2 * share);
+    return {
+      x: move.from.x + (move.to.x - move.from.x) * eased,
+      z: move.from.z + (move.to.z - move.from.z) * eased,
+    };
+  }
+
+  /** The ballista is moving (between spots, or on to the next position). */
+  get moving(): boolean {
+    return this.#move !== undefined || this.phase === 'advance';
+  }
+
+  /** The last shot is still leaving the ballista, or its spears are in the air and it's too soon. */
   get reloading(): boolean {
     if (this.#pending.length > 0) return true;
     const last = this.#lastThrow;
@@ -331,31 +454,56 @@ export class SiegeRound {
     return this.spears.some((spear) => spear.throwIndex === last.index && spear.flying);
   }
 
-  /** Whether the line can throw now: aiming, not reloading, and at least a spear left. */
+  /** Whether the ballista can shoot now: aiming, still, loaded, and at least a spear left. */
   get canThrow(): boolean {
-    return this.phase === 'aim' && !this.reloading && this.#hooks.spears() >= 1;
-  }
-
-  /** The dotted arcs while aiming: the first part of the flight, longer for an aimed throw. */
-  preview(mode: ThrowMode, aim: Aim, points: number): Vec3[][] {
-    const feel = this.#hooks.feel();
-    const seconds = mode === 'aimed' ? feel.aimedPreviewSeconds : feel.barragePreviewSeconds;
-    return previewLaunches(mode, aim, this.throwers, this.rules, feel).map((launch) =>
-      flightPath(launch, this.rules.physics.gravity, seconds, points),
-    );
+    return this.phase === 'aim' && !this.moving && !this.reloading && this.#hooks.spears() >= 1;
   }
 
   /**
-   * The whole line throws (taking the spears from the warchest), if it can. Spears that leave
-   * straight away go on the next step; a barrage's later ones a moment after.
+   * The dotted arcs while aiming: the first `previewShare` of each arc's flight to the ground,
+   * from the same launch the shot would have (one arc aimed, a fan of three for a barrage).
+   */
+  preview(mode: ThrowMode, aim: Aim, points: number): Vec3[][] {
+    const feel = this.#hooks.feel();
+    const { gravity } = this.rules.physics;
+    return previewLaunches(mode, aim, this.ballista(), this.rules, feel).map((launch) =>
+      flightPath(launch, gravity, timeToGround(launch, gravity) * feel.previewShare, points),
+    );
+  }
+
+  /** Sends the ballista to another spot of its position. Returns false if it can't go now. */
+  moveTo(spot: number): boolean {
+    const spots = this.currentPosition.spots;
+    if (this.phase !== 'aim' || this.moving || spot === this.#spot || !spots[spot]) return false;
+    this.#move = {
+      from: this.ballista(),
+      to: this.#spotAt(this.#position, spot),
+      at: this.seconds,
+      seconds: this.#hooks.feel().spotSeconds,
+    };
+    this.#spot = spot;
+    this.#hooks.logger.log('siege.spot', {
+      fort: this.fort.id,
+      position: this.#position,
+      spot,
+      step: this.#steps,
+    });
+    this.#hooks.onEvent({ type: 'spot', spot });
+    return true;
+  }
+
+  /**
+   * The ballista shoots (taking the spears from the warchest), if it can. Spears that leave
+   * straight away go on the next step; the rest of a volley a moment after.
    */
   throw(mode: ThrowMode, aim: Aim): boolean {
     if (!this.canThrow) return false;
     const feel = this.#hooks.feel();
-    const spears = throwSpears(
+    const spears = shotSpears(
       mode,
       aim,
-      this.throwers,
+      this.ballista(),
+      this.aimed,
       this.#hooks.spears(),
       this.rules,
       feel,
@@ -364,13 +512,13 @@ export class SiegeRound {
     this.#hooks.spend(spears.length);
     this.#used += spears.length;
     const index = this.#throws++;
+    this.#throwsAt[this.#position] = (this.#throwsAt[this.#position] ?? 0) + 1;
     const { timestep } = this.rules.physics;
     for (const spear of spears) {
       this.#pending.push({
         at: this.#steps + Math.round(spear.delay / timestep),
         launch: spear,
         throwIndex: index,
-        thrower: spear.thrower,
       });
     }
     this.#lastThrow = { at: this.seconds, index };
@@ -378,10 +526,12 @@ export class SiegeRound {
     this.#hooks.logger.log('siege.throw', {
       fort: this.fort.id,
       mode,
-      power: round2(aim.power),
-      angle: Math.round((aim.yaw / DEG) * 10) / 10,
+      yaw: Math.round((aim.yaw / DEG) * 10) / 10,
+      tilt: Math.round((aim.tilt / DEG) * 10) / 10,
       spears: spears.length,
-      throwers: this.throwers,
+      position: this.#position,
+      spot: this.#spot,
+      sightBlend: feel.sightBlend,
       left: this.#hooks.spears(),
       step: this.#steps,
     });
@@ -421,11 +571,12 @@ export class SiegeRound {
       tracked.body.setRotation(alongY(tracked.body.linvel()), false);
       tracked.body.setAngvel({ x: 0, y: 0, z: 0 }, false);
     });
-    for (const tracked of [...this.#blockBodies, ...this.#spearBodies]) {
+    for (const tracked of [...this.#blockBodies, ...this.#guardBodies, ...this.#spearBodies]) {
       if (!tracked.gone) remember(tracked);
     }
     this.#world.step(this.#queue);
     this.#steps++;
+    const now = this.seconds;
 
     // Blocks hit this step, broken once everything's been counted (in order, so it replays).
     const breaking = new Set<number>();
@@ -436,25 +587,20 @@ export class SiegeRound {
       const spear = a?.kind === 'spear' ? a : b?.kind === 'spear' ? b : undefined;
       if (!spear) return;
       const other = spear === a ? b : a;
-      const block = other?.kind === 'block' ? other.index : undefined;
-      this.#spearTouched(spear.index, block, feel, breaking);
+      const target =
+        other && other.kind !== 'spear' ? { kind: other.kind, index: other.index } : undefined;
+      this.#spearTouched(spear.index, target, feel, breaking);
     });
 
-    const now = this.seconds;
     const { damage } = this.rules;
     this.#blockBodies.forEach((tracked, index) => {
       const state = this.blocks[index];
       if (!state || tracked.gone || tracked.body.isSleeping()) return;
-      const velocity = tracked.body.linvel();
-      const change = Math.hypot(
-        velocity.x - tracked.velocity.x,
-        velocity.y - tracked.velocity.y,
-        velocity.z - tracked.velocity.z,
-      );
+      const change = suddenChange(tracked);
       if (change > damage.crashMinSpeed) {
         const amount = (change - damage.crashMinSpeed) * damage.crashPerSpeed;
-        this.#impact(index, 'crash', change, amount);
-        if (this.#hurt(index, amount)) breaking.add(index);
+        this.#impact({ kind: 'block', index }, 'crash', change, amount);
+        if (this.#hurt({ kind: 'block', index }, amount)) breaking.add(index);
       }
       if (change >= feel.thudSpeed && now - (this.#lastThud[index] ?? 0) >= feel.thudGapSeconds) {
         this.#lastThud[index] = now;
@@ -477,6 +623,20 @@ export class SiegeRound {
     });
     for (const index of [...breaking].sort((a, b) => a - b)) this.#break(index);
 
+    this.#guardBodies.forEach((tracked, index) => {
+      const state = this.guards[index];
+      if (!state || state.down || tracked.body.isSleeping()) return;
+      const change = suddenChange(tracked);
+      if (change > damage.crashMinSpeed) {
+        const amount = (change - damage.crashMinSpeed) * damage.crashPerSpeed;
+        this.#impact({ kind: 'guard', index }, 'crash', change, amount);
+        this.#hurt({ kind: 'guard', index }, amount);
+      }
+      if (state.hp <= 0 || tiltOf(tracked.body.rotation()) >= this.rules.guard.downTilt) {
+        this.#guardDown(index);
+      }
+    });
+
     const banner = this.#blockBodies[this.bannerIndex];
     const standing = banner && !banner.gone ? banner.body : undefined;
     if (standing && !this.#bannerFalling) {
@@ -485,11 +645,54 @@ export class SiegeRound {
         this.#hooks.onEvent({ type: 'bannerFalling' });
       }
     }
-    const view = { rules: this.rules, bannerHeight: standing?.translation().y };
-    if (this.phase === 'aim' && objectiveMet(this.fort.objective, view)) {
-      this.phase = 'won';
-      this.#wonAt = now;
-      this.#hooks.onEvent({ type: 'won' });
+
+    // The ballista arriving at a spot, or at the next position.
+    const move = this.#move;
+    if (move && now >= move.at + move.seconds) {
+      this.#move = undefined;
+      const advance = this.#advance;
+      if (advance?.rolling) {
+        this.#advance = undefined;
+        this.#position = advance.next;
+        this.#spot = middleSpot(this.currentPosition);
+        this.phase = 'aim';
+        this.#hooks.logger.log('siege.position', {
+          fort: this.fort.id,
+          position: this.#position,
+          name: this.currentPosition.name,
+          throws: this.#throws,
+          step: this.#steps,
+        });
+        this.#hooks.onEvent({ type: 'arrived', position: this.#position });
+      }
+    }
+    const advance = this.#advance;
+    if (advance && !advance.rolling && now >= advance.at + feel.advanceDelaySeconds) {
+      advance.rolling = true;
+      this.#move = {
+        from: this.ballista(),
+        to: this.#spotAt(advance.next, middleSpot(this.fort.positions[advance.next])),
+        at: now,
+        seconds: feel.advanceSeconds,
+      };
+    }
+
+    const view = {
+      rules: this.rules,
+      bannerHeight: standing?.translation().y,
+      guardsLeft: this.guardsLeft,
+    };
+    if (this.phase === 'aim' && objectiveMet(this.currentPosition.objective, view)) {
+      const next = this.#position + 1;
+      if (next >= this.fort.positions.length) {
+        this.phase = 'won';
+        this.#wonAt = now;
+        this.#hooks.onEvent({ type: 'won' });
+      } else {
+        this.phase = 'advance';
+        this.#advance = { at: now, next, rolling: false };
+        this.#hooks.onEvent({ type: 'positionWon', position: this.#position });
+      }
     }
 
     this.#calmFor = this.#calm() ? this.#calmFor + this.rules.physics.timestep : 0;
@@ -514,6 +717,11 @@ export class SiegeRound {
     return tracked ? between(tracked, this.alpha, out) : out;
   }
 
+  guardPose(index: number, out: Pose): Pose {
+    const tracked = this.#guardBodies[index];
+    return tracked ? between(tracked, this.alpha, out) : out;
+  }
+
   spearPose(index: number, out: Pose): Pose {
     const tracked = this.#spearBodies[index];
     return tracked ? between(tracked, this.alpha, out) : out;
@@ -525,14 +733,16 @@ export class SiegeRound {
     return velocity ? Math.hypot(velocity.x, velocity.y, velocity.z) : 0;
   }
 
-  /** Leaving mid-round: the thrown spears are spent. */
+  /** Leaving mid-round: the shot spears are spent. */
   quit(): void {
     if (this.phase === 'done') return;
     this.phase = 'done';
     this.#hooks.logger.log('siege.quit', {
       fort: this.fort.id,
       used: this.#used,
+      position: this.#position,
       blocksDown: this.blocksDown,
+      guardsDown: this.guardsDown,
       seconds: round2(this.seconds),
     });
   }
@@ -543,14 +753,43 @@ export class SiegeRound {
     this.#world.free();
   }
 
-  /** Sends off every spear of the last throw whose moment has come. */
+  #spotAt(position: number, spot: number): Spot {
+    const at = this.fort.positions[position]?.spots[spot] ?? [0, 0];
+    return { x: at[0], z: at[1] };
+  }
+
+  /** A box body: a block, or a guard. */
+  #addBox(
+    at: Vec3,
+    size: readonly [number, number, number],
+    stuff: { density: number; friction: number },
+    restitution: number,
+    owner: { kind: 'block' | 'guard'; index: number },
+  ): Tracked {
+    const physics = this.#physics;
+    const body = this.#world.createRigidBody(
+      physics.RigidBodyDesc.dynamic().setTranslation(at.x, at.y, at.z),
+    );
+    const collider = this.#world.createCollider(
+      physics.ColliderDesc.cuboid(size[0] / 2, size[1] / 2, size[2] / 2)
+        .setDensity(stuff.density)
+        .setFriction(stuff.friction)
+        .setRestitution(restitution)
+        .setCollisionGroups(groups(BLOCK, GROUND | BLOCK | SPEAR)),
+      body,
+    );
+    this.#colliders.set(collider.handle, owner);
+    return track(body, collider.handle);
+  }
+
+  /** Sends off every spear of the last shot whose moment has come. */
   #launchDue(feel: SiegeFeel): void {
     if (this.#pending.length === 0) return;
     const due = this.#pending.filter((pending) => pending.at <= this.#steps);
     this.#pending = this.#pending.filter((pending) => pending.at > this.#steps);
     for (const pending of due) {
       const spear = this.#addSpear(pending, feel);
-      this.#hooks.onEvent({ type: 'launch', spear, thrower: pending.thrower });
+      this.#hooks.onEvent({ type: 'launch', spear });
     }
   }
 
@@ -578,14 +817,14 @@ export class SiegeRound {
     const index = this.spears.length;
     this.#colliders.set(collider.handle, { kind: 'spear', index });
     this.#spearBodies.push(track(body, collider.handle));
-    this.spears.push({ flying: true, throwIndex: pending.throwIndex, thrower: pending.thrower });
+    this.spears.push({ flying: true, throwIndex: pending.throwIndex });
     return index;
   }
 
-  /** A spear touched a block (or the ground, `block` undefined). */
+  /** A spear touched a block or a guard (or the ground, `target` undefined). */
   #spearTouched(
     index: number,
-    block: number | undefined,
+    target: Target | undefined,
     feel: SiegeFeel,
     breaking: Set<number>,
   ): void {
@@ -600,52 +839,91 @@ export class SiegeRound {
       tracked.body.setAngularDamping(this.rules.projectile.landedSpinDamping);
     }
     const at = tip(tracked.body, this.rules.projectile.length / 2);
-    if (block === undefined) {
+    if (!target) {
       if (speed >= feel.thudSpeed) this.#hooks.onEvent({ type: 'land', spear: index, speed, at });
       return;
     }
-    const key = `${String(index)}:${String(block)}`;
-    const state = this.blocks[block];
-    if (this.#hits.has(key) || !state || state.broken) return;
+    const key = `${String(index)}:${target.kind}:${String(target.index)}`;
+    if (this.#hits.has(key) || this.#gone(target)) return;
     this.#hits.add(key);
     const { spearMinSpeed, spearPerSpeed } = this.rules.damage;
     const damage = Math.max(speed - spearMinSpeed, 0) * spearPerSpeed;
-    this.#impact(block, 'spear', speed, damage);
-    if (this.#hurt(block, damage)) breaking.add(block);
+    this.#impact(target, 'spear', speed, damage);
+    if (this.#hurt(target, damage) && target.kind === 'block') breaking.add(target.index);
     if (speed < feel.thudSpeed && damage <= 0) return;
     this.#hooks.onEvent({
       type: 'hit',
       spear: index,
-      block,
-      kind: state.kind,
+      target,
+      kind: this.#kindOf(target),
       speed,
       damage: round2(damage),
       at,
     });
   }
 
-  #impact(index: number, by: 'spear' | 'crash', speed: number, damage: number): void {
-    const state = this.blocks[index];
-    if (!state || state.broken) return;
+  #kindOf(target: Target): MaterialKind | 'guard' {
+    return target.kind === 'guard' ? 'guard' : (this.blocks[target.index]?.kind ?? 'stone');
+  }
+
+  /** Broken (a block) or down (a guard): spears and crashes do it no more harm. */
+  #gone(target: Target): boolean {
+    return target.kind === 'block'
+      ? this.blocks[target.index]?.broken !== false
+      : this.guards[target.index]?.down !== false;
+  }
+
+  #impact(target: Target, by: 'spear' | 'crash', speed: number, damage: number): void {
+    if (this.#gone(target)) return;
+    const material =
+      target.kind === 'guard' ? 'guard' : (this.blocks[target.index]?.block.material ?? '');
     this.#hooks.onEvent({
       type: 'impact',
-      block: index,
-      material: state.block.material,
-      kind: state.kind,
+      target,
+      material,
+      kind: this.#kindOf(target),
       by,
       speed: round2(speed),
       damage: round2(damage),
     });
   }
 
-  /** Deals `amount` damage to a block. Returns true if that leaves it with none. */
-  #hurt(index: number, amount: number): boolean {
-    const state = this.blocks[index];
-    if (!state || state.broken || amount <= 0) return false;
+  /** Deals `amount` damage to a block or a guard. Returns true if that leaves it with none. */
+  #hurt(target: Target, amount: number): boolean {
+    const state = target.kind === 'block' ? this.blocks[target.index] : this.guards[target.index];
+    if (!state || this.#gone(target) || amount <= 0) return false;
     const dealt = Math.min(amount, state.hp);
     state.hp -= dealt;
     this.#damage += dealt;
     return state.hp <= 0;
+  }
+
+  /** A guard is down: pushed over if it's still standing, and it lies where it falls. */
+  #guardDown(index: number): void {
+    const state = this.guards[index];
+    const tracked = this.#guardBodies[index];
+    if (!state || !tracked || state.down) return;
+    state.down = true;
+    state.hp = 0;
+    const { body } = tracked;
+    const at = copy(body.translation());
+    if (tiltOf(body.rotation()) < this.rules.guard.downTilt) {
+      // Its head goes back, away from the ballista, and it topples.
+      const { size, topple } = this.rules.guard;
+      body.applyImpulseAtPoint(
+        { x: 0, y: 0, z: -topple * body.mass() },
+        { x: at.x, y: at.y + size[1] / 2, z: at.z },
+        true,
+      );
+    }
+    this.#hooks.logger.log('siege.guardDown', {
+      fort: this.fort.id,
+      guard: index,
+      position: state.position,
+      atPosition: this.#position,
+      step: this.#steps,
+    });
+    this.#hooks.onEvent({ type: 'guardDown', guard: index, at });
   }
 
   /** A block at 0 hit points breaks: out of the world, so what it held up falls. */
@@ -657,10 +935,15 @@ export class SiegeRound {
     state.hp = 0;
     const at = copy(tracked.body.translation());
     remember(tracked);
-    // Whatever rested on it falls: wake the blocks it touched before taking it away.
-    this.#world.contactPairsWith(tracked.body.collider(0), (other) => {
-      other.parent()?.wakeUp();
-    });
+    // Whatever rested on it falls: wake everything near it before taking it away. (Asleep, a
+    // body resting on it would stay up in the air; resting bodies don't always still list their
+    // contacts once asleep, so it goes by distance.)
+    const reach = Math.hypot(...state.block.size) / 2 + WAKE_REACH;
+    for (const other of [...this.#blockBodies, ...this.#guardBodies]) {
+      if (other.gone || other === tracked) continue;
+      const there = other.body.translation();
+      if (Math.hypot(there.x - at.x, there.y - at.y, there.z - at.z) <= reach) other.body.wakeUp();
+    }
     this.#colliders.delete(tracked.collider);
     this.#world.removeRigidBody(tracked.body);
     tracked.gone = true;
@@ -679,15 +962,16 @@ export class SiegeRound {
     // A spear lying on the ground jiggles round its length, quickly for something so thin, while
     // going nowhere: only how fast it moves counts.
     return (
-      this.#blockBodies.every((tracked) => still(tracked, true)) &&
+      [...this.#blockBodies, ...this.#guardBodies].every((tracked) => still(tracked, true)) &&
       this.#spearBodies.every((tracked) => still(tracked, false))
     );
   }
 
   #finish(won: boolean): void {
     const blocksDown = this.blocksDown;
+    const guardsDown = this.guardsDown;
     const rewards = siegeRewards(
-      { won, used: this.#used, throws: this.#throws, blocksDown },
+      { won, used: this.#used, throws: this.#throws, blocksDown, guardsDown },
       this.fort,
       this.rules,
       this.#recovery,
@@ -698,9 +982,11 @@ export class SiegeRound {
       won,
       used: this.#used,
       throws: this.#throws,
+      throwsPerPosition: [...this.#throwsAt],
       par: this.fort.par,
       blocksDown,
       blocksBroken: this.blocksBroken,
+      guardsDown,
       damage: Math.round(this.#damage),
       seconds: round2(this.seconds),
     };
@@ -711,6 +997,7 @@ export class SiegeRound {
       fort: result.fort,
       won,
       throws: result.throws,
+      throwsPerPosition: result.throwsPerPosition,
       spearsUsed: result.used,
       par: result.par,
       stars: result.stars,
@@ -718,13 +1005,25 @@ export class SiegeRound {
       recovered: result.recovered,
       blocksDown,
       blocksBroken: result.blocksBroken,
+      guardsDown,
       damage: result.damage,
-      throwers: this.throwers,
+      position: this.#position,
+      aimed: this.aimed,
       seconds: result.seconds,
     });
     this.#hooks.finish(result);
     this.#hooks.onEvent({ type: 'end', result });
   }
+}
+
+/** The spot a position starts at: the one nearest the middle of the field. */
+function middleSpot(position: SiegePosition | undefined): number {
+  const spots = position?.spots ?? [];
+  let best = 0;
+  spots.forEach(([x], index) => {
+    if (Math.abs(x) < Math.abs(spots[best]?.[0] ?? Infinity)) best = index;
+  });
+  return best;
 }
 
 function track(body: Body, collider: number): Tracked {
@@ -753,6 +1052,16 @@ function remember(tracked: Tracked): void {
   before.rotation.z = turn.z;
   before.rotation.w = turn.w;
   tracked.velocity = { x: velocity.x, y: velocity.y, z: velocity.z };
+}
+
+/** How much a body's velocity changed in the last step (m/s): a crash, if it's big. */
+function suddenChange(tracked: Tracked): number {
+  const velocity = tracked.body.linvel();
+  return Math.hypot(
+    velocity.x - tracked.velocity.x,
+    velocity.y - tracked.velocity.y,
+    velocity.z - tracked.velocity.z,
+  );
 }
 
 /** A body's pose `alpha` of the way from before the last step to now (where it was, if gone). */

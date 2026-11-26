@@ -7,9 +7,10 @@ export interface SiegeOutcome {
   won: boolean;
   /** Spears thrown. */
   used: number;
-  /** Throws: releases of the line, aimed or barrage alike. */
+  /** Throws: shots of the ballista, aimed or barrage alike, over every position. */
   throws: number;
   blocksDown: number;
+  guardsDown: number;
 }
 
 /** What stars are measured by, one small function per kind (the data picks one). */
@@ -38,9 +39,10 @@ export interface SiegeRewards {
 }
 
 /**
- * A siege pays Command XP for every block knocked down, and the fort's win bonus if you won. A
- * win also gets back the share of the spears thrown that every attack recovers. Stars add their
- * bonus share to both, as at every station. A loss pays only for the blocks.
+ * A siege pays Command XP for every block knocked down and guard brought down, and the fort's win
+ * bonus if you won. A win also gets back the share of the spears thrown that every attack
+ * recovers. Stars add their bonus share to both, as at every station. A loss pays only for the
+ * blocks and guards.
  */
 export function siegeRewards(
   result: SiegeOutcome,
@@ -49,7 +51,11 @@ export function siegeRewards(
   recoveryOnWin: number,
 ): SiegeRewards {
   const stars = siegeStars(result, fort.par, rules.stars);
-  const xp = result.blocksDown * fort.rewards.xpPerBlock + (result.won ? fort.rewards.winXp : 0);
+  const { rewards } = fort;
+  const xp =
+    result.blocksDown * rewards.xpPerBlock +
+    result.guardsDown * rewards.xpPerGuard +
+    (result.won ? rewards.winXp : 0);
   const recovered = recoveredSpears(result.used, result.won, recoveryOnWin);
   const starXp = starBonus(xp, stars, rules.starBonus);
   const starSpears = starBonus(recovered, stars, rules.starBonus);

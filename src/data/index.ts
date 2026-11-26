@@ -20,7 +20,7 @@ import { workers } from './workers';
 import { parseGameData } from './validate';
 
 export * from './schema';
-export { GameDataError, parseGameData } from './validate';
+export { GameDataError, farthestShot, parseGameData } from './validate';
 
 export const rawGameData: GameDataInput = {
   skills,

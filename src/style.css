@@ -2262,24 +2262,115 @@ body:not([data-view='camp']) #build-label {
   text-shadow: 0 1px 3px rgb(0 0 0 / 0.85);
 }
 
-/* Just over the Aimed and Barrage buttons: up top it would cover the keep and its banner. */
+/* Just over the spot and shot buttons: up top it would cover the fort. */
 .sg-hint {
   position: absolute;
   left: 16px;
   right: 16px;
-  bottom: calc(var(--safe-bottom) + 92px);
+  bottom: calc(var(--safe-bottom) + 136px);
   text-align: center;
   font-size: 14px;
   font-weight: 600;
   text-shadow: 0 1px 4px rgb(0 0 0 / 0.9);
 }
 
-/* Aimed or Barrage: how the line throws, and what it costs. */
-.sg-modes {
+/* What the position asks for, just under the throws and par. */
+.sg-goal {
   position: absolute;
-  left: 50%;
-  bottom: calc(var(--safe-bottom) + 20px);
-  transform: translateX(-50%);
+  top: calc(var(--safe-top) + 170px);
+  left: 12px;
+  right: 12px;
+  text-align: center;
+  font:
+    800 15px system-ui,
+    sans-serif;
+  color: #f0cd5c;
+  text-shadow: 0 1px 4px rgb(0 0 0 / 0.9);
+}
+
+/* The next position's name, big, as the ballista rolls on to it. */
+.sg-title {
+  position: absolute;
+  top: 30%;
+  left: 12px;
+  right: 12px;
+  text-align: center;
+  white-space: pre-line;
+  font:
+    900 30px/1.25 system-ui,
+    sans-serif;
+  text-shadow: 0 2px 8px rgb(0 0 0 / 0.85);
+  animation: sg-title 2.4s ease-out forwards;
+}
+
+@keyframes sg-title {
+  0% {
+    opacity: 0;
+    transform: translateY(12px) scale(0.96);
+  }
+  15%,
+  75% {
+    opacity: 1;
+    transform: none;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+/* Where the ballista stands, and how it shoots, at the bottom. */
+.sg-controls {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(var(--safe-bottom) + 14px);
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+}
+
+.sg-spots {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 4px 3px 10px;
+  border-radius: 999px;
+  background: rgb(20 16 12 / 0.55);
+}
+
+.sg-spots-label {
+  font:
+    700 12px system-ui,
+    sans-serif;
+  color: var(--muted);
+}
+
+.sg-spot-buttons {
+  display: flex;
+  gap: 4px;
+}
+
+.sg-spot {
+  width: 40px;
+  height: 40px;
+  border: 2px solid rgb(255 255 255 / 0.5);
+  border-radius: 50%;
+  background: transparent;
+  color: var(--fg);
+  font:
+    800 16px system-ui,
+    sans-serif;
+  touch-action: manipulation;
+}
+
+.sg-spot[aria-checked='true'] {
+  border-color: #f0cd5c;
+  background: rgb(240 205 92 / 0.25);
+  color: #f0cd5c;
+}
+
+/* Aimed or Barrage: how the ballista shoots, and what it costs. */
+.sg-modes {
   display: flex;
   gap: 4px;
   padding: 4px;

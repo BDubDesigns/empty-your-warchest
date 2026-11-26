@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { gameDataShape, type GameData, type SiegeObjective } from './schema';
+import { gameDataShape, type GameData, type SiegeObjective, type SiegePosition } from './schema';
 
 type Path = (string | number)[];
 
@@ -341,8 +341,13 @@ function checkSiege(data: GameData, issue: (path: Path, message: string) => void
   if (!data.items.some((item) => item.id === siege.item)) {
     issue(['siege', 'item'], `Unknown item "${siege.item}"`);
   }
-  if (!data.skills.some((skill) => skill.id === siege.throwers.skill)) {
-    issue(['siege', 'throwers', 'skill'], `Unknown skill "${siege.throwers.skill}"`);
+  const { ballista } = siege;
+  if (!data.skills.some((skill) => skill.id === ballista.skill)) {
+    issue(['siege', 'ballista', 'skill'], `Unknown skill "${ballista.skill}"`);
+  }
+  const { tilt } = ballista;
+  if (tilt.min >= tilt.max || tilt.start < tilt.min || tilt.start > tilt.max) {
+    issue(['siege', 'ballista', 'tilt'], 'Needs min under max, and start between them');
   }
   const materials = new Set<string>();
   siege.materials.forEach((material, index) => {
@@ -351,6 +356,15 @@ function checkSiege(data: GameData, issue: (path: Path, message: string) => void
     }
     materials.add(material.id);
   });
+  // The farthest any spear reaches on the flat: the fastest a barrage's stray allows, at the best
+  // tilt the ballista has, from its muzzle at its lowest.
+  const reach = farthestShot(
+    ballista.speed * (1 + siege.feel.barrageSpeedStray),
+    ballista.pivotHeight,
+    ballista.muzzle,
+    tilt,
+    siege.physics.gravity,
+  );
   const forts = new Set<string>();
   siege.forts.forEach((fort, fortIndex) => {
     const path = ['siege', 'forts', fortIndex];
@@ -359,26 +373,77 @@ function checkSiege(data: GameData, issue: (path: Path, message: string) => void
     const banners = fort.blocks.filter((block) => block.banner);
     if (banners.length > 1) issue([...path, 'blocks'], 'A fort has one banner at most');
     const banner = banners[0];
-    // Each kind of objective checks what it needs (one kind so far).
+    const last = fort.positions.length - 1;
+    if (fort.positions[last]?.objective.kind !== 'banner_down') {
+      issue([...path, 'positions', last, 'objective'], 'The last position brings the banner down');
+    }
+    // Each kind of objective checks what it needs.
     const objectives: {
-      [K in SiegeObjective['kind']]: (objective: Extract<SiegeObjective, { kind: K }>) => void;
+      [K in SiegeObjective['kind']]: (
+        objective: Extract<SiegeObjective, { kind: K }>,
+        position: SiegePosition,
+        at: Path,
+      ) => void;
     } = {
-      banner_down: (objective) => {
+      guards_down: (_, position, at) => {
+        if (position.guards.length === 0) issue(at, 'Bringing the guards down needs guards');
+      },
+      banner_down: (objective, _, at) => {
         const height = objective.height ?? siege.banner.winHeight;
-        if (!banner) issue([...path, 'blocks'], 'Bringing the banner down needs a banner');
-        else if (banner.at[1] <= height) {
-          issue([...path, 'blocks'], 'The banner must start above the win height');
-        }
+        if (!banner) issue(at, 'Bringing the banner down needs a banner');
+        else if (banner.at[1] <= height) issue(at, 'The banner must start above the win height');
       },
     };
-    objectives[fort.objective.kind](fort.objective);
-    const box = (block: (typeof fort.blocks)[number]) => ({
+    fort.positions.forEach((position, positionIndex) => {
+      const at = [...path, 'positions', positionIndex];
+      objectives[position.objective.kind](position.objective as never, position, [
+        ...at,
+        'objective',
+      ]);
+      // Only the last position can bring the banner down: it's out of reach from the others.
+      if (banner && positionIndex < last) {
+        position.spots.forEach(([x, z], spotIndex) => {
+          if (Math.hypot(banner.at[0] - x, banner.at[2] - z) <= reach) {
+            issue(
+              [...at, 'spots', spotIndex],
+              `The banner is in reach (${reach.toFixed(1)} m) before the last position`,
+            );
+          }
+        });
+      }
+    });
+
+    type Box = { min: number[]; max: number[] };
+    const overlap = (a: Box, b: Box, axis: number) =>
+      Math.min(a.max[axis] ?? 0, b.max[axis] ?? 0) - Math.max(a.min[axis] ?? 0, b.min[axis] ?? 0);
+    const boxes: Box[] = fort.blocks.map((block) => ({
       min: block.at.map((value, axis) => value - (block.size[axis] ?? 0) / 2),
       max: block.at.map((value, axis) => value + (block.size[axis] ?? 0) / 2),
-    });
-    const boxes = fort.blocks.map(box);
-    const overlap = (a: (typeof boxes)[number], b: (typeof boxes)[number], axis: number) =>
-      Math.min(a.max[axis] ?? 0, b.max[axis] ?? 0) - Math.max(a.min[axis] ?? 0, b.min[axis] ?? 0);
+    }));
+    /** Why a box can't stand where it is, if it can't: floating, or overhanging what holds it. */
+    const unsupported = (own: Box): string | undefined => {
+      const bottom = own.min[1] ?? 0;
+      if (Math.abs(bottom) <= TOUCH) return undefined;
+      // What it stands on: blocks whose tops meet its bottom, under part of it.
+      const under = boxes.filter(
+        (other) =>
+          Math.abs((other.max[1] ?? 0) - bottom) <= TOUCH &&
+          overlap(own, other, 0) > TOUCH &&
+          overlap(own, other, 2) > TOUCH,
+      );
+      if (under.length === 0) return 'Floats: it must rest on the ground or on a block';
+      const span = (axis: number) => ({
+        min: Math.min(...under.map((other) => Math.max(other.min[axis] ?? 0, own.min[axis] ?? 0))),
+        max: Math.max(...under.map((other) => Math.min(other.max[axis] ?? 0, own.max[axis] ?? 0))),
+      });
+      const middle = (axis: number) => ((own.min[axis] ?? 0) + (own.max[axis] ?? 0)) / 2;
+      const x = span(0);
+      const z = span(2);
+      if (middle(0) < x.min || middle(0) > x.max || middle(2) < z.min || middle(2) > z.max) {
+        return 'Overhangs: its middle must be over what holds it up';
+      }
+      return undefined;
+    };
     fort.blocks.forEach((block, index) => {
       const blockPath = [...path, 'blocks', index];
       if (!materials.has(block.material)) {
@@ -392,43 +457,54 @@ function checkSiege(data: GameData, issue: (path: Path, message: string) => void
           issue(blockPath, `Overlaps block ${String(otherIndex)}`);
         }
       });
-      const bottom = own.min[1] ?? 0;
-      if (Math.abs(bottom) <= TOUCH) return;
-      // What it stands on: blocks whose tops meet its bottom, under part of it.
-      const under = boxes.filter(
-        (other) =>
-          Math.abs((other.max[1] ?? 0) - bottom) <= TOUCH &&
-          overlap(own, other, 0) > TOUCH &&
-          overlap(own, other, 2) > TOUCH,
+      const problem = unsupported(own);
+      if (problem) issue(blockPath, problem);
+    });
+    // Guards stand on the ground or on blocks, clear of every block and each other.
+    const [width, height, depth] = siege.guard.size;
+    const guards = fort.positions.flatMap((position, positionIndex) =>
+      position.guards.map((guard, guardIndex) => ({
+        path: [...path, 'positions', positionIndex, 'guards', guardIndex],
+        box: {
+          min: [guard.at[0] - width / 2, guard.at[1], guard.at[2] - depth / 2],
+          max: [guard.at[0] + width / 2, guard.at[1] + height, guard.at[2] + depth / 2],
+        },
+      })),
+    );
+    guards.forEach((guard, index) => {
+      const hits = [...boxes, ...guards.slice(index + 1).map((other) => other.box)].some((other) =>
+        [0, 1, 2].every((axis) => overlap(guard.box, other, axis) > TOUCH),
       );
-      if (under.length === 0) {
-        issue(blockPath, 'Floats: it must rest on the ground or on a block');
-        return;
-      }
-      const reach = (axis: number) => ({
-        min: Math.min(...under.map((other) => Math.max(other.min[axis] ?? 0, own.min[axis] ?? 0))),
-        max: Math.max(...under.map((other) => Math.min(other.max[axis] ?? 0, own.max[axis] ?? 0))),
-      });
-      const x = reach(0);
-      const z = reach(2);
-      if (
-        block.at[0] < x.min ||
-        block.at[0] > x.max ||
-        block.at[2] < z.min ||
-        block.at[2] > z.max
-      ) {
-        issue(blockPath, 'Overhangs: its middle must be over what holds it up');
-      }
+      if (hits) issue(guard.path, 'Overlaps a block or another guard');
+      const problem = unsupported(guard.box);
+      if (problem) issue(guard.path, problem);
     });
   });
-  const feel = siege.feel;
-  if (feel.minSpeed >= feel.maxSpeed) {
-    issue(['siege', 'feel', 'minSpeed'], 'Must be under maxSpeed');
-  }
-  if (feel.deadPx >= feel.pullPx) issue(['siege', 'feel', 'deadPx'], 'Must be under pullPx');
   if (siege.stars.three > siege.stars.two) {
-    issue(['siege', 'stars'], 'Three stars must not allow more spears than two');
+    issue(['siege', 'stars'], 'Three stars must not allow more throws than two');
   }
+}
+
+/**
+ * The farthest a spear at `speed` lands on the flat, tilted anywhere in `tilt` (degrees), leaving
+ * a muzzle `muzzle` along the bolt from a pivot `pivot` up.
+ */
+export function farthestShot(
+  speed: number,
+  pivot: number,
+  muzzle: number,
+  tilt: { min: number; max: number },
+  gravity: number,
+): number {
+  let best = 0;
+  for (let degrees = tilt.min; degrees <= tilt.max; degrees += 0.25) {
+    const angle = (degrees * Math.PI) / 180;
+    const up = speed * Math.sin(angle);
+    const height = pivot + muzzle * Math.sin(angle);
+    const time = (up + Math.sqrt(up * up + 2 * gravity * Math.max(height, 0))) / gravity;
+    best = Math.max(best, muzzle * Math.cos(angle) + speed * Math.cos(angle) * time);
+  }
+  return best;
 }
 
 export const gameDataSchema = gameDataShape.superRefine(checkReferences);
