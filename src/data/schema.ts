@@ -92,6 +92,17 @@ export const tuningSchema = z.object({
   idle: z.object({ capMinutes: positive }),
   /** Share of used weapons recovered after winning a run. */
   weaponRecoveryOnWin: fraction,
+  /** Opening the stations' own (3D) screens. */
+  screens: z.object({
+    /**
+     * At the camp, each station screen's code and models load in the background when the
+     * browser is idle; this is the longest wait for an idle moment before loading the next one
+     * anyway (ms). Without idle callbacks (Safari) each one waits this long.
+     */
+    preloadIdleTimeoutMs: positive,
+    /** How long a station may take to open before the loading card shows (ms). */
+    loadingCardDelayMs: nonNegative,
+  }),
 });
 
 const clearingSchema = z.object({

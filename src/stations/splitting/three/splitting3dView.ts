@@ -302,6 +302,11 @@ export class Splitting3DView implements ScreenView {
     return new Splitting3DView(element, deps, hud);
   }
 
+  /** Loads the models ahead of time (e.g. at the camp), so `create` doesn't wait for them. */
+  static async preload(): Promise<void> {
+    await WarchestHud.preload();
+  }
+
   // ScreenView
 
   start(): void {

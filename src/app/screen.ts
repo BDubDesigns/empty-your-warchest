@@ -14,13 +14,27 @@ export interface ScreenView {
   stop(): void;
 }
 
+/** A screen whose view loads on first use, and can warm that load ahead of time. */
+export interface LazyScreen extends Screen {
+  /**
+   * Downloads the screen's code and assets without creating its view (no renderer yet), so a
+   * later `mount` finds them ready.
+   */
+  preload(): Promise<void>;
+}
+
 /**
  * Wraps a view that is loaded on first use, so each renderer's code is only
- * downloaded when its screen is first opened.
+ * downloaded when its screen is first opened (or preloaded).
  */
-export function lazyScreen(element: HTMLElement, load: () => Promise<ScreenView>): Screen {
+export function lazyScreen(
+  element: HTMLElement,
+  load: () => Promise<ScreenView>,
+  preload: () => Promise<void> = () => Promise.resolve(),
+): LazyScreen {
   let view: ScreenView | undefined;
   return {
+    preload,
     async mount() {
       // The view is created while visible so it can measure its container.
       element.hidden = false;
