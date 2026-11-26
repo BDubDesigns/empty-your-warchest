@@ -678,6 +678,12 @@ const workersSchema = z.object({
   awayCapMinutes: positive,
   cardMinutes: nonNegative,
   minimumStep: positiveInt,
+  pour: z.object({
+    maxPieces: positiveInt,
+    staggerSeconds: nonNegative,
+    flightSeconds: positive,
+    buzzMs: nonNegative,
+  }),
   jobs: z
     .array(
       z.object({

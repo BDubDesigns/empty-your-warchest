@@ -156,15 +156,11 @@ export class Game {
   }
 
   /**
-   * The workers' work over `minutes` (playing and away), banked into the warchest with its XP.
-   * `away` is how much of it was time away, for the log.
+   * The workers' work over `minutes` (playing and away): what they make goes on their stations'
+   * piles, waiting to be collected. `away` is how much of it was time away, for the log.
    */
   work(minutes: number, away = 0): WorkResult {
     const result = doWork(this.data, this.#inventory, this.#work, minutes);
-    this.#work.carry = result.carry;
-    for (const station of result.stations) {
-      if (station.xp > 0) this.addXp(station.skill, station.xp);
-    }
     this.#logger.log('workers.work', {
       minutes: Math.round(minutes * 100) / 100,
       away: Math.round(away * 100) / 100,
@@ -179,6 +175,34 @@ export class Game {
     });
     this.#changed();
     return result;
+  }
+
+  /** What a station's workers have made and not had collected yet. */
+  pile(stationId: string): readonly Stack[] {
+    return this.#work.piles[stationId] ?? [];
+  }
+
+  /** XP waiting on a station's pile. */
+  pileXp(stationId: string): number {
+    return this.#work.xp[stationId] ?? 0;
+  }
+
+  /**
+   * Collects a station's pile into the warchest and pays its XP. Returns what was collected (the
+   * view pours it in).
+   */
+  collect(stationId: string): { items: Stack[]; xp: number } {
+    const items = this.pile(stationId).filter((stack) => stack.count > 0);
+    const xp = this.pileXp(stationId);
+    if (items.length === 0 && xp === 0) return { items: [], xp: 0 };
+    for (const stack of items) this.#inventory.add(stack.item, stack.count);
+    this.#work.piles = { ...this.#work.piles, [stationId]: [] };
+    this.#work.xp = { ...this.#work.xp, [stationId]: 0 };
+    this.#logger.log('workers.collect', { station: stationId, items, xp });
+    const station = byId(this.data.stations, stationId);
+    if (xp > 0) this.addXp(station.skill, xp);
+    else this.#changed();
+    return { items, xp };
   }
 
   /** Replaces everything with `state`, e.g. after a save reset. */
@@ -201,6 +225,13 @@ export class Game {
         crew: { ...this.#work.crew },
         carry: { ...this.#work.carry },
         minimums: { ...this.#work.minimums },
+        piles: Object.fromEntries(
+          Object.entries(this.#work.piles).map(([station, pile]) => [
+            station,
+            pile.map((stack) => ({ ...stack })),
+          ]),
+        ),
+        xp: { ...this.#work.xp },
       },
       done: [...this.#done],
     };
@@ -230,5 +261,16 @@ function fitCrew(data: GameData, work: WorkState, workers: number): WorkState {
     crew[station] = count;
     left -= count;
   }
-  return { crew, carry: { ...work.carry }, minimums: { ...work.minimums } };
+  return {
+    crew,
+    carry: { ...work.carry },
+    minimums: { ...work.minimums },
+    piles: Object.fromEntries(
+      Object.entries(work.piles).map(([station, pile]) => [
+        station,
+        pile.map((stack) => ({ ...stack })),
+      ]),
+    ),
+    xp: { ...work.xp },
+  };
 }

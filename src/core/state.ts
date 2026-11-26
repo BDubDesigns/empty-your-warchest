@@ -20,7 +20,7 @@ export function newGameState(data: GameData, now: number): GameState {
     inventory: [],
     skills: Object.fromEntries(data.skills.map((skill) => [skill.id, 0])),
     lastSeenAt: now,
-    work: { crew: startingCrew(data), carry: {}, minimums: {} },
+    work: { crew: startingCrew(data), carry: {}, minimums: {}, piles: {}, xp: {} },
     done: [],
   };
 }

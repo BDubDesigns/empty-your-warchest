@@ -101,13 +101,8 @@ test('3D woodcutting: aim, Chop, chop in the close-up, the tree falls, logs to t
   await summary.getByRole('button', { name: 'Back to camp' }).tap();
   await expect(page.locator('body')).toHaveAttribute('data-view', 'camp');
   await page.getByRole('button', { name: 'Open debug menu' }).tap();
-  const logs = page.getByText(/^Log × \d+$/);
-  await expect(logs).toBeVisible();
-  // The warchest has what the chest showed, plus anything the Tree line's worker banked back at
-  // the camp (a long round in software rendering can pass a minute).
-  const inChest = Number((await logs.textContent())?.replace(/\D/g, ''));
-  expect(inChest).toBeGreaterThanOrEqual(Number(shown));
-  expect(inChest).toBeLessThanOrEqual(Number(shown) + 3);
+  await expect(page.getByText(/^Log × \d+$/)).toBeVisible();
+  await expect(page.getByText(`Log × ${shown ?? '?'}`)).toBeVisible();
   const download = page.getByRole('button', { name: 'Download logs' });
   await expect(download).toBeEnabled();
   const [file] = await Promise.all([page.waitForEvent('download'), download.tap()]);

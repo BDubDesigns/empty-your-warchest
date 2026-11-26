@@ -66,30 +66,57 @@ describe('workers', () => {
   });
 });
 
+const pile = (game: Game, station: string, item: string) =>
+  game.pile(station).find((stack) => stack.item === item)?.count ?? 0;
+
 describe('work', () => {
-  it('flows down the chain: 30 minutes from nothing chops, splits and hardens', () => {
+  it('flows down the chain, passing things along: 30 minutes from nothing', () => {
     const { game } = newGame();
     const result = game.work(30);
     // 30 logs chopped; logs split at 10, 20 and 30 minutes (18 staves); staves hardened in twos
-    // every 4 minutes once there are some (12, 16, 20, 24, 28), each burning a log.
-    expect(count(game, 'spear')).toBe(10);
-    expect(count(game, 'stave')).toBe(18 - 10);
-    expect(count(game, 'log')).toBe(30 - 3 - 5);
+    // every 4 minutes once there are some (12, 16, 20, 24, 28), each burning a log. The workers
+    // take from each other's piles; what's left waits at each station.
+    expect(pile(game, 'tree_line', 'log')).toBe(30 - 3 - 5);
+    expect(pile(game, 'workbench', 'stave')).toBe(18 - 10);
+    expect(pile(game, 'fire_pit', 'spear')).toBe(10);
+    expect(game.inventory.stacks()).toEqual([]);
     const fire = result.stations.find((station) => station.station === 'fire_pit');
     expect(fire).toMatchObject({ xp: 10 * 5, short: 'stave' });
-    expect(game.xp('woodcutting')).toBe(30 * 5);
-    expect(game.xp('splitting')).toBe(18 * 5);
+    // XP waits with the pile.
+    expect(game.pileXp('tree_line')).toBe(30 * 5);
+    expect(game.xp('woodcutting')).toBe(0);
   });
 
-  it('never takes an item below the minimum kept back', () => {
+  it('pays a pile into the warchest, with its XP, when collected', () => {
+    const { game } = newGame();
+    game.work(30);
+    expect(game.collect('tree_line')).toEqual({ items: [{ item: 'log', count: 22 }], xp: 150 });
+    expect(count(game, 'log')).toBe(22);
+    expect(game.xp('woodcutting')).toBe(150);
+    expect(game.pile('tree_line')).toEqual([]);
+    expect(game.collect('tree_line')).toEqual({ items: [], xp: 0 });
+  });
+
+  it('never takes an item out of the warchest below the minimum kept back', () => {
     const { game } = newGame({ log: 20, stave: 4 });
-    game.setMinimum('log', 100);
+    game.assignWorker('tree_line', -1);
+    game.setMinimum('log', 20);
     game.setMinimum('stave', 4);
     const result = game.work(30);
+    expect(count(game, 'log')).toBe(20);
     expect(count(game, 'stave')).toBe(4);
-    expect(count(game, 'spear')).toBe(0);
-    expect(count(game, 'log')).toBe(50);
+    expect(pile(game, 'fire_pit', 'spear')).toBe(0);
     expect(result.stations.map((station) => station.short)).toEqual([undefined, 'log', 'stave']);
+  });
+
+  it('uses the warchest above the minimum when the line runs dry', () => {
+    const { game } = newGame({ log: 5 });
+    game.assignWorker('tree_line', -1);
+    game.setMinimum('log', 3);
+    game.work(30);
+    // Splits at 10, 20 and 30 minutes would need 3 logs, but only 2 are spare.
+    expect(count(game, 'log')).toBe(3);
+    expect(pile(game, 'workbench', 'stave')).toBeGreaterThan(0);
   });
 
   it('carries fractions over, so ten 1-minute stretches make what one 10-minute stretch does', () => {
@@ -97,14 +124,15 @@ describe('work', () => {
     for (let minute = 0; minute < 10; minute++) one.work(1);
     const ten = newGame({ log: 5, stave: 5 }).game;
     ten.work(10);
-    for (const item of ['log', 'stave', 'spear']) expect(count(one, item)).toBe(count(ten, item));
+    expect(one.snapshot().work).toEqual(ten.snapshot().work);
+    expect(one.snapshot().inventory).toEqual(ten.snapshot().inventory);
   });
 
   it('does nothing with no one on the station', () => {
     const { game } = newGame();
     game.assignWorker('tree_line', -1);
     game.work(30);
-    expect(count(game, 'log')).toBe(0);
+    expect(game.pile('tree_line')).toEqual([]);
   });
 
   it('works twice as fast with two', () => {
@@ -112,15 +140,22 @@ describe('work', () => {
     game.assignWorker('fire_pit', -1);
     game.assignWorker('tree_line', 1);
     game.work(10);
-    expect(count(game, 'log')).toBe(20 - 1);
+    expect(pile(game, 'tree_line', 'log')).toBe(20 - 1);
   });
 
-  it('logs what it did', async () => {
+  it('logs what it did, and what was collected', async () => {
     const { game, logger } = newGame();
     game.work(5, 5);
+    game.collect('tree_line');
     const events = await logger.readAll();
-    const work = events.find((event) => event.type === 'workers.work');
-    expect(work?.data).toMatchObject({ minutes: 5, away: 5 });
+    expect(events.find((event) => event.type === 'workers.work')?.data).toMatchObject({
+      minutes: 5,
+      away: 5,
+    });
+    expect(events.find((event) => event.type === 'workers.collect')?.data).toMatchObject({
+      station: 'tree_line',
+      items: [{ item: 'log', count: 5 }],
+    });
   });
 });
 
@@ -140,7 +175,7 @@ describe('the work clock', () => {
     expect(banked).toMatchObject({ away: 10, awayReal: 10 });
     // 10 logs chopped, and one split at the 10-minute mark.
     expect(banked?.result.stations[0]?.made).toEqual([{ item: 'log', count: 10 }]);
-    expect(count(game, 'stave')).toBe(6);
+    expect(pile(game, 'workbench', 'stave')).toBe(6);
     expect(clock.bank(10 * MINUTE)).toBeUndefined();
     clock.hidden(12 * MINUTE);
     clock.visible(20 * MINUTE);
@@ -174,6 +209,8 @@ describe('saved workers', () => {
       crew: { tree_line: 1, workbench: 1, fire_pit: 0 },
       carry: { fell_tree: 0.5, split_stave: 0.05 },
       minimums: { log: 10 },
+      piles: {},
+      xp: {},
     });
     const old = JSON.parse(store.get('warchest.save') ?? '{}') as { state: { work?: unknown } };
     delete old.state.work;

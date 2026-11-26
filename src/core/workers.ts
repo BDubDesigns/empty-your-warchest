@@ -1,6 +1,5 @@
 import { byId, type GameData, type WorkerJob } from '../data';
 import type { Inventory, Stack } from './inventory';
-import { craft } from './recipes';
 
 /** Where the workers are and what they're owed: saved with the game. */
 export interface WorkState {
@@ -10,6 +9,10 @@ export interface WorkState {
   carry: Record<string, number>;
   /** Items the workers never use below, by item id. */
   minimums: Record<string, number>;
+  /** What each station's workers made and haven't been collected yet, by station id. */
+  piles: Record<string, Stack[]>;
+  /** XP each station's workers earned, paid when its pile is collected, by station id. */
+  xp: Record<string, number>;
 }
 
 /** What one station's workers did over a stretch of time. */
@@ -27,7 +30,6 @@ export interface StationWork {
 export interface WorkResult {
   minutes: number;
   stations: StationWork[];
-  carry: Record<string, number>;
 }
 
 /** Workers you have at a level of the workers' skill. */
@@ -69,10 +71,12 @@ export function workerInputs(data: Pick<GameData, 'workers' | 'recipes'>): strin
 }
 
 /**
- * The workers' work over `minutes`, done to `inventory`: minute by minute, each station in the
- * data's order (down the chain), its workers run their job `perMinute` times a minute each. Whole
- * jobs are done as they come due, as far as the inputs above the minimums go; the fraction of a
- * job still owed carries over, but a job held up for want of inputs is dropped, not saved up.
+ * The workers' work over `minutes`, done to `state` (and the warchest): minute by minute, each
+ * station in the data's order (down the chain), its workers run their job `perMinute` times a
+ * minute each. They pass things down the line: a job takes its inputs from the other stations'
+ * piles first, then from the warchest as far as it's above the minimums. What they make goes on
+ * their own station's pile, and its XP waits with it. Whole jobs are done as they come due; the
+ * fraction still owed carries over, but a job held up for want of inputs is dropped, not saved up.
  */
 export function doWork(
   data: GameData,
@@ -80,7 +84,29 @@ export function doWork(
   state: WorkState,
   minutes: number,
 ): WorkResult {
-  const carry = { ...state.carry };
+  const piles = (station: string): Stack[] => (state.piles[station] ??= []);
+  /** How many of `item` the workers can take: on other stations' piles, and spare in the warchest. */
+  const spare = (item: string, station: string): number => {
+    let count = Math.max(inventory.count(item) - (state.minimums[item] ?? 0), 0);
+    for (const [other, pile] of Object.entries(state.piles)) {
+      if (other !== station) count += pile.find((stack) => stack.item === item)?.count ?? 0;
+    }
+    return count;
+  };
+  /** Takes `count` of `item`, from the other piles first, then the warchest. */
+  const take = (item: string, count: number, station: string): void => {
+    let left = count;
+    for (const [other, pile] of Object.entries(state.piles)) {
+      if (other === station || left === 0) continue;
+      const stack = pile.find((entry) => entry.item === item);
+      if (!stack) continue;
+      const taken = Math.min(stack.count, left);
+      stack.count -= taken;
+      left -= taken;
+      if (stack.count === 0) pile.splice(pile.indexOf(stack), 1);
+    }
+    if (left > 0) inventory.remove(item, left);
+  };
   const stations = data.workers.jobs.map((job): StationWork => {
     const station = byId(data.stations, jobStation(data, job));
     return {
@@ -99,9 +125,9 @@ export function doWork(
     data.workers.jobs.forEach((job, index) => {
       const work = stations[index];
       if (!work || work.workers <= 0) return;
-      const owed = (carry[job.recipe] ?? 0) + job.perMinute * work.workers * step;
+      const owed = (state.carry[job.recipe] ?? 0) + job.perMinute * work.workers * step;
       const due = Math.floor(owed + 1e-9);
-      carry[job.recipe] = Math.max(owed - due, 0);
+      state.carry[job.recipe] = Math.max(owed - due, 0);
       if (due === 0) return;
       const recipe = byId(data.recipes, job.recipe);
       const needs = [
@@ -110,25 +136,28 @@ export function doWork(
       ];
       let jobs = due;
       for (const need of needs) {
-        const spare = inventory.count(need.item) - (state.minimums[need.item] ?? 0);
-        const can = Math.max(Math.floor(spare / need.count), 0);
+        const can = Math.floor(spare(need.item, work.station) / need.count);
         if (can < jobs) {
           jobs = can;
           work.short = need.item;
         }
       }
       if (jobs === 0) return;
-      const result = craft(inventory, recipe, { batches: job.batches * jobs, yield: job.yield });
-      for (const extra of job.extra) inventory.remove(extra.item, extra.count * jobs);
-      addStacks(work.made, result.produced);
-      addStacks(work.used, [
-        ...result.consumed,
-        ...job.extra.map((extra) => ({ item: extra.item, count: extra.count * jobs })),
-      ]);
-      work.xp += result.xp;
+      const used = needs.map((need) => ({ item: need.item, count: need.count * jobs }));
+      for (const stack of used) take(stack.item, stack.count, work.station);
+      const made = recipe.outputs.map((output) => ({
+        item: output.item,
+        count: output.count * job.batches * job.yield * jobs,
+      }));
+      addStacks(piles(work.station), made);
+      addStacks(work.made, made);
+      addStacks(work.used, used);
+      const xp = recipe.xp * job.batches * job.yield * jobs;
+      state.xp[work.station] = (state.xp[work.station] ?? 0) + xp;
+      work.xp += xp;
     });
   }
-  return { minutes: Math.max(minutes, 0), stations, carry };
+  return { minutes: Math.max(minutes, 0), stations };
 }
 
 function addStacks(into: Stack[], stacks: readonly Stack[]): void {

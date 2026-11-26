@@ -232,7 +232,7 @@ export function mountDebugMenu(root: HTMLElement, deps: DebugDeps): void {
     button.addEventListener('click', () => {
       logger.log('debug.skipTime', { ms: skip.ms });
       deps.work.skip(skip.ms);
-      say(`Skipped ahead ${skip.label.slice(1)}: the workers bank it at the camp`);
+      say(`Skipped ahead ${skip.label.slice(1)}: collect what the workers made at the camp`);
     });
     return button;
   });

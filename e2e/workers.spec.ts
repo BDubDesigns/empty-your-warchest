@@ -1,7 +1,28 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 import { skills } from '../src/data/skills';
+import { stations } from '../src/data/stations';
 
-test('the workers bank what they made while you were away, at the camp', async ({ page }) => {
+const treeLine = stations.find((station) => station.id === 'tree_line');
+
+/** The saved game, as the page has it. */
+function saved(page: Page) {
+  return page.evaluate(
+    () =>
+      (
+        JSON.parse(localStorage.getItem('warchest.save') ?? '{}') as {
+          state: {
+            inventory: { item: string; count: number }[];
+            work: { piles: Record<string, { item: string; count: number }[]> };
+          };
+        }
+      ).state,
+  );
+}
+
+test('workers make things while you are away, and Collect pours them into the chest', async ({
+  page,
+}) => {
+  if (!treeLine) throw new Error('No tree line in data');
   const errors: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));
   const xp = Object.fromEntries(skills.map((skill) => [skill.id, 0]));
@@ -20,25 +41,24 @@ test('the workers bank what they made while you were away, at the camp', async (
   }, xp);
   await page.goto('/');
   await expect(page.locator('body')).toHaveAttribute('data-view', 'camp');
-  const card = page.getByRole('dialog', { name: 'While you were away' });
-  await expect(card).toBeVisible();
-  await expect(card).toContainText('10 min away');
-  await expect(card).toContainText('Tree line · 👷 1: +10 logs');
-  await card.getByRole('button', { name: 'Nice' }).tap();
-  await expect(card).toBeHidden();
-  // It's banked, and saved: a reload doesn't pay it again.
-  const saved = await page.evaluate(
-    () =>
-      (
-        JSON.parse(localStorage.getItem('warchest.save') ?? '{}') as {
-          state: { inventory: { item: string; count: number }[] };
-        }
-      ).state.inventory,
+  // 10 logs chopped, one passed to the Workbench and split at the 10-minute mark.
+  await expect
+    .poll(async () => (await saved(page)).work.piles.tree_line)
+    .toEqual([{ item: 'log', count: 9 }]);
+  expect((await saved(page)).inventory).toEqual([]);
+
+  // Collect sits on the station's tile, under its level.
+  const camp = await page.locator('#screen-phaser canvas').boundingBox();
+  if (!camp) throw new Error('No camp canvas');
+  await page.touchscreen.tap(
+    camp.x + camp.width * treeLine.camp.x,
+    camp.y + camp.height * treeLine.camp.y + 12,
   );
-  expect(saved.find((stack) => stack.item === 'log')?.count).toBe(9);
+  await expect.poll(async () => (await saved(page)).inventory).toEqual([{ item: 'log', count: 9 }]);
+  expect((await saved(page)).work.piles.tree_line).toEqual([]);
+  // A reload doesn't pay it again.
   await page.reload();
   await expect(page.locator('body')).toHaveAttribute('data-view', 'camp');
-  await page.waitForTimeout(500);
-  await expect(card).toBeHidden();
+  expect((await saved(page)).inventory).toEqual([{ item: 'log', count: 9 }]);
   expect(errors).toEqual([]);
 });
