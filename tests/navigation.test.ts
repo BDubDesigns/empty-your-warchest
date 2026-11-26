@@ -37,7 +37,7 @@ describe('Navigation', () => {
       'camp',
       'screen:firemaking3d:fire_pit',
       'camp',
-      'screen:runner:war_tent',
+      'screen:siege3d:war_tent',
       'camp',
       'screen:splitting3d:workbench',
       'camp',

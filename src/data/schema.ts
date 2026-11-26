@@ -804,6 +804,230 @@ const firemakingSchema = z.object({
   feel: firemakingFeelSchema,
 });
 
+/** A point in the siege's 3D world (metres): x across, y up, z toward the thrower. */
+const vec3Schema = z.tuple([z.number(), z.number(), z.number()]);
+
+/** What a fort's blocks are made of. `kind` is how a block looks and sounds. */
+const siegeMaterialSchema = z.object({
+  id,
+  kind: z.enum(['stone', 'wood']),
+  /** kg per cubic metre. */
+  density: positive,
+  friction: nonNegative,
+  /** Bounce, from 0 (none) to 1. */
+  restitution: fraction,
+  /** Hit points: a block breaks once hits and crashes have dealt this much damage. */
+  hp: positive,
+});
+
+/** One block of a fort: a box `size` (width, height, depth) with its middle `at`, upright. */
+const siegeBlockSchema = z.object({
+  material: id,
+  size: z.tuple([positive, positive, positive]),
+  at: vec3Schema,
+  /** The banner: the fort falls when this block does. Exactly one per fort. */
+  banner: z.boolean().default(false),
+  /** A weak point (a thin post holding up something heavy): drawn so it stands out. */
+  weak: z.boolean().default(false),
+  /** Its own hit points, in place of its material's. */
+  hp: positive.optional(),
+});
+
+/**
+ * A hand-built fort: its blocks, each resting on the ground or on blocks below it (checked at
+ * startup), the throws a good player takes to win (`par`), and the Command XP it pays.
+ */
+/**
+ * What a fort's siege is won by. Only one kind for now: bring the banner down (its middle below
+ * `height` metres, or the siege's `banner.winHeight`). Later missions add kinds here, each checked
+ * by one small function in the siege's rules.
+ */
+const siegeObjectiveSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('banner_down'), height: positive.optional() }),
+]);
+
+const siegeFortSchema = z.object({
+  id,
+  name,
+  objective: siegeObjectiveSchema,
+  par: positiveInt,
+  /** XP for each block knocked down, and for winning (before the star bonus). */
+  rewards: z.object({ xpPerBlock: nonNegative, winXp: nonNegative }),
+  blocks: z.array(siegeBlockSchema).min(1),
+});
+
+/** Feel numbers for the siege. The debug menu can override them live. */
+export const siegeFeelSchema = z.object({
+  /**
+   * The throw: a drag of `pullPx` pixels is a full pull, which throws at `maxSpeed` (m/s); the
+   * lightest counted pull (`deadPx`; shorter drags cancel) at `minSpeed`. Every throw leaves at
+   * `elevation` degrees up. Dragging sideways turns it, up to `maxAim` degrees either way: by
+   * `aimScale` of the drag's own angle (1 = straight back along the drag, like a slingshot; less
+   * is finer).
+   */
+  minSpeed: positive,
+  maxSpeed: positive,
+  elevation: z.number().min(0).max(80),
+  maxAim: z.number().min(0).max(90),
+  aimScale: positive,
+  pullPx: positive,
+  deadPx: nonNegative,
+  /**
+   * The two ways the line throws. Aimed: one spear each, tight (each spear strays up to
+   * `aimedSpread` degrees off the aim and `aimedPowerJitter` of a full pull off the power, at
+   * random). Barrage: several each, `barrageStagger` seconds apart, strewn far wider. While you
+   * drag, the dotted arc shows the first `…PreviewSeconds` of the flight, so it's still a skill:
+   * longer for an aimed throw than a barrage. Neighbours in the line throw `lineStagger` seconds
+   * apart, so the line ripples.
+   */
+  aimedSpread: nonNegative,
+  aimedPowerJitter: fraction,
+  aimedPreviewSeconds: nonNegative,
+  barrageSpread: nonNegative,
+  barragePowerJitter: fraction,
+  barragePreviewSeconds: nonNegative,
+  barrageStagger: nonNegative,
+  lineStagger: nonNegative,
+  /** The spear's mass (kg): how hard it hits. */
+  spearMass: positive,
+  /** Seconds after a throw before the next, unless all its spears have already hit something. */
+  reloadSeconds: nonNegative,
+  /** The camera: how high it sits and how far behind the thrower, and where it looks (metres). */
+  cameraHeight: positive,
+  cameraBack: positive,
+  cameraLookAhead: positive,
+  cameraLookHeight: nonNegative,
+  /**
+   * After a throw the camera follows the lead spear for `followSeconds`, `follow` of the way
+   * toward it (0 = not at all), then eases back over `followReturnSeconds`.
+   */
+  followSeconds: nonNegative,
+  follow: fraction,
+  followReturnSeconds: positive,
+  /** A spear hitting a block: the freeze (ms), and from `heavyHitSpeed` m/s a longer one. */
+  hitStopMs: nonNegative,
+  heavyHitStopMs: nonNegative,
+  heavyHitSpeed: positive,
+  /** Multiplier for every screen shake. 0 turns shake off. */
+  shakeStrength: nonNegative,
+  /**
+   * A block slamming into something: dust and a thud from this sudden a change of speed (m/s), at
+   * most one a block every `thudGapSeconds`, so a block rattling to a stop isn't a drum roll.
+   */
+  thudSpeed: positive,
+  thudGapSeconds: nonNegative,
+  /** Dust puffs for a thud at `thudSpeed`; harder thuds puff more. */
+  dust: nonNegative,
+  /** As the banner falls, time runs at `slowMo` for `slowMoSeconds` (real seconds). */
+  slowMo: z.number().min(0.05).max(1),
+  slowMoSeconds: nonNegative,
+  /**
+   * Vibration (ms): an aimed throw, a barrage, a spear hitting, a block thud, a block breaking, the
+   * banner falling.
+   */
+  buzzThrowMs: nonNegative,
+  buzzBarrageMs: nonNegative,
+  buzzHitMs: nonNegative,
+  buzzThudMs: nonNegative,
+  buzzBreakMs: nonNegative,
+  buzzBannerMs: nonNegative,
+});
+
+/**
+ * The siege at the War tent: throw the warchest's spears at a fort, a stone wall in front of a
+ * wooden keep with a banner on top, until the banner comes down. The physics world (Rapier) is
+ * the rules, stepped at a fixed rate so the same throws always give the same result.
+ */
+const siegeSchema = z.object({
+  /** The warchest item thrown. */
+  item: id,
+  /**
+   * The line of throwers behind your aim: `start` of them, `add` more every `everyLevels` levels of
+   * `skill`, standing `spacing` metres apart. They all aim at the point `converge` metres out along
+   * the aim, so an aimed throw groups. Every throw is the whole line throwing together; with fewer
+   * spears than the throw needs, the middle throwers throw what there is.
+   */
+  throwers: z.object({
+    skill: id,
+    start: positiveInt,
+    everyLevels: positiveInt,
+    add: z.number().int().nonnegative(),
+    spacing: positive,
+    converge: positive,
+  }),
+  /** Spears each thrower throws in a barrage (one in an aimed throw). */
+  barrage: z.number().int().min(2),
+  physics: z.object({
+    /** Seconds per physics step, whatever the frame rate. */
+    timestep: positive,
+    gravity: positive,
+    solverIterations: positiveInt,
+    /** Steps at most per frame, so a slow frame can't snowball (the game slows instead). */
+    maxStepsPerFrame: positiveInt,
+    /** The field: its friction, and how far it reaches each way from the thrower (metres). */
+    groundFriction: nonNegative,
+    groundReach: positive,
+  }),
+  /**
+   * The spear as a body: a capsule `length` long (tip to tip) and `radius` thick, leaving a
+   * thrower's hand at `launch` (from where the thrower stands). It flies nose first until it
+   * first touches something; from then on it tumbles as it will.
+   */
+  projectile: z.object({
+    length: positive,
+    radius: positive,
+    friction: nonNegative,
+    restitution: fraction,
+    launch: vec3Schema,
+    /**
+     * Damping once it's down (linear, and turning): a round spear would otherwise roll across
+     * the field for ever, and the round never settle.
+     */
+    landedDamping: nonNegative,
+    landedSpinDamping: nonNegative,
+  }),
+  /**
+   * Everything has settled once no body moves faster than `speed` (m/s) or turns faster than
+   * `spin` (radians a second) for `seconds`. After a win the card waits for that, or `winSeconds`
+   * at most, so the fort is seen to fall.
+   */
+  settle: z.object({ speed: positive, spin: positive, seconds: positive, winSeconds: positive }),
+  /** A block counts as knocked down once it has dropped `drop` metres or tipped `tilt` degrees. */
+  down: z.object({ drop: positive, tilt: z.number().positive().max(90) }),
+  /**
+   * Damage. A spear hitting a block deals `spearPerSpeed` for every m/s it hits at over
+   * `spearMinSpeed` (so a glancing tap does nothing). A block whose speed changes suddenly (it
+   * slams into the ground or another block, or one slams into it) takes `crashPerSpeed` for every
+   * m/s of that change over `crashMinSpeed`, so collapses chain. At 0 hit points a block breaks:
+   * it's gone, and whatever it held up falls.
+   */
+  damage: z.object({
+    spearMinSpeed: nonNegative,
+    spearPerSpeed: nonNegative,
+    crashMinSpeed: positive,
+    crashPerSpeed: nonNegative,
+  }),
+  /**
+   * The banner: a `banner_down` fort falls (you win) once its middle is below `winHeight` metres
+   * (unless the fort's objective says otherwise). It counts as falling, for the slow motion, once
+   * it has tipped `fallTilt` degrees.
+   */
+  banner: z.object({ winHeight: positive, fallTilt: z.number().positive().max(90) }),
+  /**
+   * Stars for a win, measured `by` throws (a throw is one release of the line, aimed or barrage
+   * alike) against the fort's par: 3 up to `three` × par, 2 up to `two` × par, else 1. Not by
+   * spears, or thrift would be the best play when the game wants spears spent; not by time, as
+   * stopping to aim on a phone shouldn't cost stars. Only `throws` so far.
+   */
+  stars: z.object({ by: z.enum(['throws']), three: positive, two: positive }),
+  /** Bonus XP and recovered spears for 2 and 3 stars, as a share of each, as at every station. */
+  starBonus: z.object({ two: nonNegative, three: nonNegative }),
+  materials: z.array(siegeMaterialSchema).min(1),
+  /** In order: each one opens once the one before it has been won. */
+  forts: z.array(siegeFortSchema).min(1),
+  feel: siegeFeelSchema,
+});
+
 /**
  * Workers: how many you have (`start` at level 1 of `skill`, one more every `everyLevels`), and
  * the job each does at a station: its recipe run `perMinute` times a minute (with `batches` and
@@ -851,6 +1075,7 @@ export const gameDataShape = z.object({
   woodcutting: woodcuttingSchema,
   splitting: splittingSchema,
   firemaking: firemakingSchema,
+  siege: siegeSchema,
   runner: runnerSchema,
   warchest: warchestSchema,
   workers: workersSchema,
@@ -887,4 +1112,10 @@ export type Roll = z.output<typeof rollSchema>;
 export type GateOp = Gate['op'];
 export type LevelEvent = Level['events'][number];
 export type RunnerData = GameData['runner'];
+export type Siege = GameData['siege'];
+export type SiegeFeel = Siege['feel'];
+export type SiegeFort = Siege['forts'][number];
+export type SiegeBlock = SiegeFort['blocks'][number];
+export type SiegeObjective = SiegeFort['objective'];
+export type SiegeMaterial = Siege['materials'][number];
 export type RunnerFeel = RunnerData['feel'];

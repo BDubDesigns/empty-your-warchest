@@ -30,6 +30,11 @@ Placeholder sounds, converted to mono mp3. All CC0 (public domain): https://crea
 | warchest/panel-open.mp3               | Kenney, RPG Audio: `handleSmallLeather.ogg`                             |
 | warchest/panel-close.mp3              | Kenney, RPG Audio: `handleSmallLeather2.ogg`                            |
 
+The siege reuses clips from above: stone hits are `woodcutting/rock-*`, wood hits `woodcutting/chop-*`,
+blocks landing `woodcutting/land-*`, breaks `woodcutting/crash-wood` and `splitting/press-slam`
+(pitched down), the fort falling `woodcutting/crash-rumble` and `woodcutting/creak-2`. The spear's
+whoosh is made in code (filtered noise), so there's no file for it.
+
 Kenney: https://kenney.nl (RPG Audio, Impact Sounds)
 
 OpenGameArt: https://opengameart.org/content/rumble-fx, https://opengameart.org/content/fireplace-sound-loop,

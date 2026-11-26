@@ -27,7 +27,7 @@ export const stations = [
     id: 'war_tent',
     name: 'War tent',
     skill: 'command',
-    mechanic: 'runner',
+    mechanic: 'siege',
     camp: { x: 0.5, y: 0.82 },
   },
 ] satisfies GameDataInput['stations'];

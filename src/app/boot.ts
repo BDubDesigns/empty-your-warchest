@@ -12,7 +12,13 @@ import {
   type LiveChoice,
   type LiveTuning,
 } from '../core';
-import type { FiremakingFeel, RunnerFeel, SplittingFeel, WoodcuttingFeel } from '../data';
+import type {
+  FiremakingFeel,
+  RunnerFeel,
+  SiegeFeel,
+  SplittingFeel,
+  WoodcuttingFeel,
+} from '../data';
 import { loadGameData } from '../data';
 import {
   liftModeChoice,
@@ -23,6 +29,7 @@ import {
 } from '../runner/feel';
 import { checkMechanics } from '../stations';
 import { firemakingFeel } from '../stations/firemaking/feel';
+import { siegeFeel, warTentChoice, type WarTent } from '../stations/siege/feel';
 import { splittingFeel } from '../stations/splitting/feel';
 import {
   ClearingPicker,
@@ -45,6 +52,7 @@ export interface Booted {
     woodcutting: LiveTuning<WoodcuttingFeel>;
     splitting: LiveTuning<SplittingFeel>;
     firemaking: LiveTuning<FiremakingFeel>;
+    siege: LiveTuning<SiegeFeel>;
     runner: LiveTuning<RunnerFeel>;
   };
   /** Picks kept on this phone, shown in the debug menu. */
@@ -54,6 +62,7 @@ export interface Booted {
     vibration: LiveChoice<Vibration>;
     runnerSpears: LiveChoice<SpearSource>;
     runnerLift: LiveChoice<LiftMode>;
+    warTent: LiveChoice<WarTent>;
   };
   haptics: Haptics;
   /** Which clearing each woodcutting round plays. */
@@ -124,6 +133,7 @@ export async function bootGame(buildLabel: string): Promise<Booted> {
     woodcutting: woodcuttingFeel(data.woodcutting.feel, localStorageStore()),
     splitting: splittingFeel(data.splitting.feel, localStorageStore()),
     firemaking: firemakingFeel(data.firemaking.feel, localStorageStore()),
+    siege: siegeFeel(data.siege.feel, localStorageStore()),
     runner: runnerFeel(data.runner.feel, localStorageStore()),
   };
   const choices = {
@@ -132,6 +142,7 @@ export async function bootGame(buildLabel: string): Promise<Booted> {
     vibration: vibrationChoice(localStorageStore()),
     runnerSpears: spearSourceChoice(localStorageStore()),
     runnerLift: liftModeChoice(localStorageStore()),
+    warTent: warTentChoice(localStorageStore()),
   };
   const haptics = new Haptics(choices.vibration);
   const clearings = new ClearingPicker(game);

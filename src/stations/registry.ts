@@ -4,7 +4,7 @@ import { GameDataError, type GameData } from '../data';
 export const PLACEHOLDER_SCENE = 'station-placeholder';
 
 /** Full-screen views outside Phaser (three.js), by id. */
-export type ScreenId = 'runner' | 'woodcutting3d' | 'splitting3d' | 'firemaking3d';
+export type ScreenId = 'runner' | 'woodcutting3d' | 'splitting3d' | 'firemaking3d' | 'siege3d';
 
 /** Where a station's mini game runs: a Phaser scene, or its own (three.js) screen. */
 export type StationScreen =
@@ -24,6 +24,9 @@ export const mechanics: Readonly<Record<string, MechanicModule>> = {
   woodcutting3d: { screen: { kind: 'screen', screen: 'woodcutting3d' } },
   splitting: { screen: { kind: 'screen', screen: 'splitting3d' } },
   firemaking: { screen: { kind: 'screen', screen: 'firemaking3d' } },
+  siege: { screen: { kind: 'screen', screen: 'siege3d' } },
+  // The gate runner (M7a): the War tent's siege replaced it, but it stays playable from the debug
+  // menu (Options → War tent opens).
   runner: {
     screen: { kind: 'screen', screen: 'runner' },
   },

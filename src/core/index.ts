@@ -11,6 +11,7 @@ export * from './logger';
 export * from './recipes';
 export * from './rng';
 export * from './save';
+export * from './stars';
 export * from './state';
 export * from './storage';
 export * from './workClock';

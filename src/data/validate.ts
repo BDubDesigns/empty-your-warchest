@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { gameDataShape, type GameData } from './schema';
+import { gameDataShape, type GameData, type SiegeObjective } from './schema';
 
 type Path = (string | number)[];
 
@@ -203,6 +203,8 @@ function checkReferences(data: GameData, ctx: z.RefinementCtx): void {
     issue(['splitting', 'generator', 'bad'], 'Bad grains need a kind with a multiplier under 1');
   }
 
+  checkSiege(data, issue);
+
   const runner = data.runner;
   if (!data.levels.some((level) => level.id === runner.level)) {
     issue(['runner', 'level'], `Unknown level "${runner.level}"`);
@@ -323,6 +325,109 @@ function checkReferences(data: GameData, ctx: z.RefinementCtx): void {
     if (track.x - track.width / 2 < 0 || track.x + track.width / 2 > size.width) {
       issue(['woodcutting', 'scenery', 'track'], 'The track must meet the fence');
     }
+  }
+}
+
+/** Blocks closer than this (metres) count as touching: data is typed by hand. */
+const TOUCH = 1e-6;
+
+/**
+ * The siege's forts must stand on their own: every block rests on the ground or on blocks
+ * directly under it, with its middle over what holds it up (or it would tip), and no two blocks
+ * overlap (the physics would push them apart the moment the round starts).
+ */
+function checkSiege(data: GameData, issue: (path: Path, message: string) => void): void {
+  const siege = data.siege;
+  if (!data.items.some((item) => item.id === siege.item)) {
+    issue(['siege', 'item'], `Unknown item "${siege.item}"`);
+  }
+  if (!data.skills.some((skill) => skill.id === siege.throwers.skill)) {
+    issue(['siege', 'throwers', 'skill'], `Unknown skill "${siege.throwers.skill}"`);
+  }
+  const materials = new Set<string>();
+  siege.materials.forEach((material, index) => {
+    if (materials.has(material.id)) {
+      issue(['siege', 'materials', index, 'id'], `Duplicate id "${material.id}"`);
+    }
+    materials.add(material.id);
+  });
+  const forts = new Set<string>();
+  siege.forts.forEach((fort, fortIndex) => {
+    const path = ['siege', 'forts', fortIndex];
+    if (forts.has(fort.id)) issue([...path, 'id'], `Duplicate id "${fort.id}"`);
+    forts.add(fort.id);
+    const banners = fort.blocks.filter((block) => block.banner);
+    if (banners.length > 1) issue([...path, 'blocks'], 'A fort has one banner at most');
+    const banner = banners[0];
+    // Each kind of objective checks what it needs (one kind so far).
+    const objectives: {
+      [K in SiegeObjective['kind']]: (objective: Extract<SiegeObjective, { kind: K }>) => void;
+    } = {
+      banner_down: (objective) => {
+        const height = objective.height ?? siege.banner.winHeight;
+        if (!banner) issue([...path, 'blocks'], 'Bringing the banner down needs a banner');
+        else if (banner.at[1] <= height) {
+          issue([...path, 'blocks'], 'The banner must start above the win height');
+        }
+      },
+    };
+    objectives[fort.objective.kind](fort.objective);
+    const box = (block: (typeof fort.blocks)[number]) => ({
+      min: block.at.map((value, axis) => value - (block.size[axis] ?? 0) / 2),
+      max: block.at.map((value, axis) => value + (block.size[axis] ?? 0) / 2),
+    });
+    const boxes = fort.blocks.map(box);
+    const overlap = (a: (typeof boxes)[number], b: (typeof boxes)[number], axis: number) =>
+      Math.min(a.max[axis] ?? 0, b.max[axis] ?? 0) - Math.max(a.min[axis] ?? 0, b.min[axis] ?? 0);
+    fort.blocks.forEach((block, index) => {
+      const blockPath = [...path, 'blocks', index];
+      if (!materials.has(block.material)) {
+        issue([...blockPath, 'material'], `Unknown material "${block.material}"`);
+      }
+      const own = boxes[index];
+      if (!own) return;
+      boxes.forEach((other, otherIndex) => {
+        if (otherIndex <= index) return;
+        if ([0, 1, 2].every((axis) => overlap(own, other, axis) > TOUCH)) {
+          issue(blockPath, `Overlaps block ${String(otherIndex)}`);
+        }
+      });
+      const bottom = own.min[1] ?? 0;
+      if (Math.abs(bottom) <= TOUCH) return;
+      // What it stands on: blocks whose tops meet its bottom, under part of it.
+      const under = boxes.filter(
+        (other) =>
+          Math.abs((other.max[1] ?? 0) - bottom) <= TOUCH &&
+          overlap(own, other, 0) > TOUCH &&
+          overlap(own, other, 2) > TOUCH,
+      );
+      if (under.length === 0) {
+        issue(blockPath, 'Floats: it must rest on the ground or on a block');
+        return;
+      }
+      const reach = (axis: number) => ({
+        min: Math.min(...under.map((other) => Math.max(other.min[axis] ?? 0, own.min[axis] ?? 0))),
+        max: Math.max(...under.map((other) => Math.min(other.max[axis] ?? 0, own.max[axis] ?? 0))),
+      });
+      const x = reach(0);
+      const z = reach(2);
+      if (
+        block.at[0] < x.min ||
+        block.at[0] > x.max ||
+        block.at[2] < z.min ||
+        block.at[2] > z.max
+      ) {
+        issue(blockPath, 'Overhangs: its middle must be over what holds it up');
+      }
+    });
+  });
+  const feel = siege.feel;
+  if (feel.minSpeed >= feel.maxSpeed) {
+    issue(['siege', 'feel', 'minSpeed'], 'Must be under maxSpeed');
+  }
+  if (feel.deadPx >= feel.pullPx) issue(['siege', 'feel', 'deadPx'], 'Must be under pullPx');
+  if (siege.stars.three > siege.stars.two) {
+    issue(['siege', 'stars'], 'Three stars must not allow more spears than two');
   }
 }
 
