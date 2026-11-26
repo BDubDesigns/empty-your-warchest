@@ -5,7 +5,7 @@ import type { ScreenView } from '../../../app/screen';
 import { Sfx, type SoundLoop } from '../../../app/sfx';
 import { SkillBar, type XpDeposit } from '../../../app/skillBar';
 import { WarchestHud, type ScreenPoint } from '../../../app/warchestHud';
-import { barkTextures, barkUvs, drawSplitGrain } from '../../../app/woodGrain';
+import { STAVE_LENGTH, barkTextures, barkUvs, drawSplitGrain } from '../../../app/woodGrain';
 import type { EventLogger, Game, LiveTuning } from '../../../core';
 import type { FiremakingFeel } from '../../../data';
 import {
@@ -28,11 +28,11 @@ export interface Firemaking3DDeps {
 }
 
 const DEG = Math.PI / 180;
-/** Gap between staves along the rack, and a stave's length (it lies front to back) and size. */
+/** Gap between staves along the rack (each lies front to back), and a stave's radius. */
 const STAVE_GAP = 0.28;
-const STAVE_LENGTH = 1.05;
-const STAVE_WIDTH = 0.07;
-const STAVE_DEPTH = 0.06;
+const STAVE_RADIUS = 0.034;
+/** Sides round a stave: enough to read as round on a phone, cheap for a rack of 54. */
+const STAVE_SIDES = 8;
 /** The point at a stave's back end. */
 const TIP_LENGTH = 0.16;
 /** How high the rack's staves sit over the coals, and the next layer up when stacked. */
@@ -406,18 +406,20 @@ export class Firemaking3DView implements ScreenView {
       emissive: 0xff4a10,
       emissiveIntensity: 0,
     });
-    // A stave: a split, squared length with a point at the back, the grain running along it.
-    this.#staveGeometry = new THREE.BoxGeometry(
-      STAVE_WIDTH,
-      STAVE_DEPTH,
+    // A stave: a round shaft with a point at the back, the grain running along it.
+    this.#staveGeometry = new THREE.CylinderGeometry(
+      STAVE_RADIUS,
+      STAVE_RADIUS,
       STAVE_LENGTH - TIP_LENGTH,
+      STAVE_SIDES,
     );
-    const uv = this.#staveGeometry.getAttribute('uv');
-    for (let index = 0; index < 8; index++) uv.setXY(index, uv.getY(index), uv.getX(index));
+    this.#tipGeometry = new THREE.ConeGeometry(STAVE_RADIUS, TIP_LENGTH, STAVE_SIDES, 1, true);
+    for (const geometry of [this.#staveGeometry, this.#tipGeometry]) {
+      roundGrainUvs(geometry);
+      // Lying front to back, the point (the cone's top) at the back.
+      geometry.rotateX(-Math.PI / 2);
+    }
     this.#staveGeometry.translate(0, 0, TIP_LENGTH / 2);
-    this.#tipGeometry = new THREE.ConeGeometry(STAVE_WIDTH * 0.62, TIP_LENGTH, 4);
-    this.#tipGeometry.rotateX(-Math.PI / 2);
-    this.#tipGeometry.rotateZ(Math.PI / 4);
     this.#tipGeometry.translate(0, 0, -STAVE_LENGTH / 2 + TIP_LENGTH / 2);
     const grain = new THREE.CanvasTexture(drawSplitGrain(64, 256, 5, 3));
     grain.colorSpace = THREE.SRGBColorSpace;
@@ -1647,4 +1649,17 @@ function heatAt(heats: readonly number[], x: number, columnX: (column: number) =
   const high = Math.min(low + 1, heats.length - 1);
   const t = at - low;
   return (heats[low] ?? 0) * (1 - t) + (heats[high] ?? 0) * t;
+}
+
+/**
+ * Turns a round stave's UVs (u round it, v along it) so the split grain runs along the shaft
+ * without a seam: round the shaft u goes there and back over the middle of the grain, so it
+ * never jumps from the pith's colour to the bark's.
+ */
+function roundGrainUvs(geometry: THREE.BufferGeometry): void {
+  const uv = geometry.getAttribute('uv');
+  for (let index = 0; index < uv.count; index++) {
+    uv.setX(index, 0.3 + 0.4 * (1 - Math.abs(2 * uv.getX(index) - 1)));
+  }
+  uv.needsUpdate = true;
 }

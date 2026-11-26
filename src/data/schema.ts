@@ -455,6 +455,12 @@ export const splittingFeelSchema = z.object({
   burstSeconds: positive,
   heapSeconds: nonNegative,
   /**
+   * While the heap's out, the camera eases back this much further (world units) over
+   * `heapCameraSeconds`, so the whole heap shows, and back in over the same for the next log.
+   */
+  heapCameraBack: nonNegative,
+  heapCameraSeconds: positive,
+  /**
    * Vibration (ms): the head landing, each stroke of the pump (plus up to `buzzPumpBuildMs` more
    * by the last), and the burst.
    */
