@@ -75,12 +75,15 @@ const GUIDE_WIDTH = 0.025;
 /** Staves drawn in the burst (past this many, the count says the rest). */
 const MAX_STAVES_SHOWN = 64;
 /**
- * A split stave: a wedge out of the log, its bark side `STAVE_WIDTH` across and its pith side
- * `STAVE_PITH` of that, `STAVE_THICKNESS` from one to the other.
+ * A split stave: a wedge out of the log, its pith side `STAVE_PITH` of its bark side across, and
+ * `STAVE_DEPTH` as thick as it's wide. The burst's staves are sized from the log they came from
+ * (see `staveSize`), never thinner than `STAVE_MIN_WIDTH` across.
  */
-const STAVE_WIDTH = 0.25;
 const STAVE_PITH = 0.45;
-const STAVE_THICKNESS = 0.18;
+const STAVE_DEPTH = 0.72;
+const STAVE_MIN_WIDTH = 0.25;
+/** The most of the log's wood one stave is drawn with, so a small split doesn't make boulders. */
+const STAVE_MOST = 1 / 10;
 /**
  * The heap: staves lie across in front of the block, stacked in a woodpile (each layer in the
  * gaps of the one under it, a row fewer each layer up), in one bay or, past `HEAP_ONE_BAY`
@@ -409,26 +412,13 @@ export class Splitting3DView implements ScreenView {
     this.#logRoot.position.y = BLOCK_HEIGHT;
     this.#press = this.#buildPress();
     this.#scene.add(this.#logRoot);
-    // The burst's staves: one mesh drawn many times, so a big log stays smooth on a phone. Each
-    // is a wedge split out of the log: a box narrowed to its pith side (−y), bark on its +y side.
-    const stave = new THREE.BoxGeometry(STAVE_WIDTH, STAVE_THICKNESS, STAVE_LENGTH);
-    const position = stave.getAttribute('position');
-    for (let index = 0; index < position.count; index++) {
-      if (position.getY(index) < 0) position.setX(index, position.getX(index) * STAVE_PITH);
-    }
-    stave.computeVertexNormals();
-    // A box's sides map their long edge across u (the ±x sides) or up v (the ±y sides): turn the
-    // ±x sides' UVs so the grain runs the stave's length on all four, and size the bark (+y, the
-    // 8th to 11th vertices) in world units as it is on the log.
-    const uv = stave.getAttribute('uv');
-    for (let index = 0; index < 8; index++) uv.setXY(index, uv.getY(index), uv.getX(index));
-    for (let index = 8; index < 12; index++) {
-      uv.setXY(
-        index,
-        (uv.getX(index) * STAVE_WIDTH) / BARK_TILE,
-        (uv.getY(index) * STAVE_LENGTH) / BARK_TILE,
-      );
-    }
+    // The burst's staves: one mesh drawn many times, so a big log stays smooth on a phone. It's
+    // rebuilt to each log's size when it bursts.
+    const stave = staveGeometry({
+      width: STAVE_MIN_WIDTH,
+      thickness: STAVE_MIN_WIDTH * STAVE_DEPTH,
+      length: STAVE_LENGTH,
+    });
     const grain = new THREE.CanvasTexture(drawSplitGrain(64, 256, 5, 3));
     grain.colorSpace = THREE.SRGBColorSpace;
     this.#staveWood = new THREE.MeshLambertMaterial({ map: grain });
@@ -996,8 +986,11 @@ export class Splitting3DView implements ScreenView {
     // show the log's own split grain.
     this.#staveWood.map = this.#grainFor(log).split;
     const shown = Math.min(event.banked, MAX_STAVES_SHOWN);
+    const size = staveSize(log, shown);
+    this.#staves.geometry.dispose();
+    this.#staves.geometry = staveGeometry(size);
     const start = new THREE.Vector3(0, BLOCK_HEIGHT + log.height * 0.8, 0);
-    const places = heapPlaces(shown);
+    const places = heapPlaces(shown, size);
     this.#flights = places.map((place, index) => {
       const seconds = feel.burstSeconds * (0.45 + Math.random() * 0.1);
       const landAt = round.now + feel.burstSeconds * (0.5 + (0.45 * index) / shown);
@@ -1743,21 +1736,62 @@ function times(value: number): string {
   return whole > 0 ? `${String(whole)}${fraction}` : fraction;
 }
 
+interface StaveSize {
+  width: number;
+  thickness: number;
+  length: number;
+}
+
+/**
+ * The size of each of `shown` staves split from `log`: as long as the log is tall, and between
+ * them as much wood across as the log's end, so the heap is the log it came from (a log worth 60
+ * makes 60 slim staves, one worth 10 makes 10 big wedges); never more than `STAVE_MOST` of the
+ * log each, nor thinner than `STAVE_MIN_WIDTH`.
+ */
+function staveSize(log: SplittingLog, shown: number): StaveSize {
+  const area = Math.PI * log.radius * log.radius * Math.min(1 / Math.max(shown, 1), STAVE_MOST);
+  // A wedge's end is its width × thickness, narrowed to the pith on one side.
+  const width = Math.max(Math.sqrt(area / (((1 + STAVE_PITH) / 2) * STAVE_DEPTH)), STAVE_MIN_WIDTH);
+  return { width, thickness: width * STAVE_DEPTH, length: log.height };
+}
+
+/**
+ * A stave's shape: a box narrowed to its pith side (−y), bark on its +y side, the grain running
+ * its length.
+ */
+function staveGeometry({ width, thickness, length }: StaveSize): THREE.BufferGeometry {
+  const stave = new THREE.BoxGeometry(width, thickness, length);
+  const position = stave.getAttribute('position');
+  for (let index = 0; index < position.count; index++) {
+    if (position.getY(index) < 0) position.setX(index, position.getX(index) * STAVE_PITH);
+  }
+  stave.computeVertexNormals();
+  // A box's sides map their long edge across u (the ±x sides) or up v (the ±y sides): turn the
+  // ±x sides' UVs so the grain runs the stave's length on all four, and size the bark (+y, the
+  // 8th to 11th vertices) in world units as it is on the log.
+  const uv = stave.getAttribute('uv');
+  for (let index = 0; index < 8; index++) uv.setXY(index, uv.getY(index), uv.getX(index));
+  for (let index = 8; index < 12; index++) {
+    uv.setXY(index, (uv.getX(index) * width) / BARK_TILE, (uv.getY(index) * length) / BARK_TILE);
+  }
+  return stave;
+}
+
 /**
  * Where `count` staves lie in the heap, bottom layer first: a woodpile in front of the block,
  * staves lying across, a row fewer each layer up and each layer in the gaps of the one under it;
  * past `HEAP_ONE_BAY` staves, two bays side by side. Each strays a little from its place.
  */
-function heapPlaces(count: number): { at: THREE.Vector3; turn: THREE.Euler }[] {
+function heapPlaces(count: number, size: StaveSize): { at: THREE.Vector3; turn: THREE.Euler }[] {
   const bays = count > HEAP_ONE_BAY ? 2 : 1;
   let rows = 1;
   while ((bays * rows * (rows + 1)) / 2 < count) rows++;
-  const pitch = STAVE_WIDTH + HEAP_GAP;
+  const pitch = size.width + HEAP_GAP;
   const middle = BLOCK_SPREAD * 1.12 + HEAP_CLEARANCE + (rows * pitch) / 2;
   const places: { at: THREE.Vector3; turn: THREE.Euler }[] = [];
   const stray = (size: number) => (Math.random() - 0.5) * 2 * size;
   // How far a stave rolls to lie on one of its split faces (they slope in to the pith side).
-  const onSide = Math.PI / 2 - Math.atan((STAVE_WIDTH * (1 - STAVE_PITH)) / 2 / STAVE_THICKNESS);
+  const onSide = Math.PI / 2 - Math.atan((size.width * (1 - STAVE_PITH)) / 2 / size.thickness);
   for (let layer = 0; layer < rows; layer++) {
     const across = rows - layer;
     for (let row = 0; row < across; row++) {
@@ -1765,8 +1799,8 @@ function heapPlaces(count: number): { at: THREE.Vector3; turn: THREE.Euler }[] {
         if (places.length >= count) return places;
         places.push({
           at: new THREE.Vector3(
-            (bay - (bays - 1) / 2) * (STAVE_LENGTH + 0.1) + stray(HEAP_STRAY.across),
-            STAVE_THICKNESS / 2 + layer * STAVE_THICKNESS * 0.85,
+            (bay - (bays - 1) / 2) * (size.length + 0.1) + stray(HEAP_STRAY.across),
+            size.thickness / 2 + layer * size.thickness * 0.85,
             middle + (row - (across - 1) / 2) * pitch + stray(HEAP_STRAY.along),
           ),
           // Lying across (its length along x), on a split face or bark up, a little askew.
