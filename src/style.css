@@ -2381,9 +2381,9 @@ body:not([data-view='camp']) #build-label {
 .sg-mode {
   display: grid;
   justify-items: center;
-  min-width: 128px;
+  min-width: 86px;
   min-height: 58px;
-  padding: 4px 12px;
+  padding: 4px 8px;
   border: 0;
   border-radius: 12px;
   background: transparent;
@@ -2398,7 +2398,7 @@ body:not([data-view='camp']) #build-label {
 
 .sg-mode-name {
   font:
-    800 19px system-ui,
+    800 16px system-ui,
     sans-serif;
 }
 
@@ -2414,44 +2414,93 @@ body:not([data-view='camp']) #build-label {
   content: '⚠ ';
 }
 
-/* The pull back: from where the finger went down to where it is, and how hard. */
-.sg-pull {
+/* The crosshair: where the weapon's aimed, as wide as the shot's spread there. */
+.sg-crosshair {
   position: absolute;
-  inset: 0;
+  top: 0;
+  left: 0;
+  box-sizing: border-box;
+  border: 3px solid rgb(255 243 160 / 0.95);
+  border-radius: 50%;
+  box-shadow:
+    0 0 0 2px rgb(0 0 0 / 0.45),
+    inset 0 0 0 2px rgb(0 0 0 / 0.35);
+  pointer-events: none;
 }
 
-.sg-pull svg {
-  width: 100%;
-  height: 100%;
-  overflow: visible;
+.sg-crosshair::before,
+.sg-crosshair::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  background: rgb(255 243 160 / 0.95);
+  box-shadow: 0 0 0 1px rgb(0 0 0 / 0.45);
+  transform: translate(-50%, -50%);
 }
 
-.sg-pull line {
-  stroke: rgb(255 255 255 / 0.75);
-  stroke-width: 4;
-  stroke-dasharray: 2 9;
-  stroke-linecap: round;
+.sg-crosshair::before {
+  width: 14px;
+  height: 3px;
 }
 
-.sg-pull circle {
-  fill: rgb(255 255 255 / 0.15);
-  stroke: rgb(255 255 255 / 0.8);
-  stroke-width: 3;
+.sg-crosshair::after {
+  width: 3px;
+  height: 14px;
 }
 
-.sg-pull text {
-  fill: var(--fg);
+/* A barrage strews its spears: a wide, dashed ring. */
+.sg-crosshair[data-mode='barrage'] {
+  border-style: dashed;
+  border-color: rgb(255 170 80 / 0.95);
+}
+
+/* Scout, the shot buttons and Fire, in a row along the bottom. */
+.sg-shoot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.sg-fire {
+  min-width: 92px;
+  min-height: 72px;
+  border: 0;
+  border-radius: 50%;
+  background: radial-gradient(circle at 40% 35%, #f0703c, #b8321a);
+  box-shadow: 0 4px 10px rgb(0 0 0 / 0.45);
+  color: #fff;
   font:
-    800 18px system-ui,
+    900 20px system-ui,
     sans-serif;
-  paint-order: stroke;
-  stroke: rgb(0 0 0 / 0.7);
-  stroke-width: 4px;
+  text-shadow: 0 1px 2px rgb(0 0 0 / 0.6);
+  touch-action: manipulation;
 }
 
-.sg-pull[data-ready='false'] line,
-.sg-pull[data-ready='false'] text {
-  opacity: 0.4;
+.sg-fire:active {
+  transform: scale(0.94);
+}
+
+.sg-fire:disabled {
+  opacity: 0.45;
+}
+
+.sg-scout {
+  min-width: 58px;
+  min-height: 46px;
+  border: 2px solid rgb(255 255 255 / 0.55);
+  border-radius: 12px;
+  background: rgb(20 16 12 / 0.62);
+  color: var(--fg);
+  font:
+    700 14px system-ui,
+    sans-serif;
+  touch-action: manipulation;
+}
+
+.sg-scout[aria-pressed='true'] {
+  border-color: #f0cd5c;
+  color: #f0cd5c;
 }
 
 .sg-card {

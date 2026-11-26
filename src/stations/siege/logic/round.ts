@@ -8,15 +8,14 @@ import type {
   SiegeGuard,
   SiegeMaterial,
   SiegePosition,
+  SiegeWeapon,
 } from '../../../data';
 import { objectiveMet } from './objective';
 import type { Physics } from './physics';
 import { siegeRewards, type SiegeRewards } from './score';
 import {
-  flightPath,
-  previewLaunches,
   shotSpears,
-  timeToGround,
+  siegeWeapon,
   type Aim,
   type Launch,
   type Spot,
@@ -184,8 +183,8 @@ interface Pending {
 
 /** The ballista moving from one spot to another, over round time `at` to `at + seconds`. */
 interface Move {
-  from: Spot;
-  to: Spot;
+  /** Where it rolls through, from where it was to where it's going. */
+  points: Spot[];
   at: number;
   seconds: number;
 }
@@ -230,6 +229,8 @@ export class SiegeRound {
   readonly bannerIndex: number;
   /** Spears in an aimed volley. */
   readonly aimed: number;
+  /** What shoots the spears. */
+  readonly weapon: SiegeWeapon;
   phase: SiegePhase = 'aim';
   result: SiegeResult | undefined;
   /** How far between the last step and the next the view should draw (0 to 1). */
@@ -277,6 +278,7 @@ export class SiegeRound {
     this.fort = fort;
     this.rules = data.siege;
     this.aimed = options.aimed;
+    this.weapon = siegeWeapon(data.siege);
     this.#physics = physics;
     this.#hooks = hooks;
     this.#recovery = data.tuning.weaponRecoveryOnWin;
@@ -432,12 +434,9 @@ export class SiegeRound {
     const move = this.#move;
     if (!move) return this.#spotAt(this.#position, this.#spot);
     const share = Math.min(Math.max((this.seconds - move.at) / move.seconds, 0), 1);
-    // Eased: it sets off and pulls up gently.
+    // Eased: it sets off and pulls up gently, at an even pace along the way between.
     const eased = share * share * (3 - 2 * share);
-    return {
-      x: move.from.x + (move.to.x - move.from.x) * eased,
-      z: move.from.z + (move.to.z - move.from.z) * eased,
-    };
+    return alongPath(move.points, eased);
   }
 
   /** The ballista is moving (between spots, or on to the next position). */
@@ -459,25 +458,12 @@ export class SiegeRound {
     return this.phase === 'aim' && !this.moving && !this.reloading && this.#hooks.spears() >= 1;
   }
 
-  /**
-   * The dotted arcs while aiming: the first `previewShare` of each arc's flight to the ground,
-   * from the same launch the shot would have (one arc aimed, a fan of three for a barrage).
-   */
-  preview(mode: ThrowMode, aim: Aim, points: number): Vec3[][] {
-    const feel = this.#hooks.feel();
-    const { gravity } = this.rules.physics;
-    return previewLaunches(mode, aim, this.ballista(), this.rules, feel).map((launch) =>
-      flightPath(launch, gravity, timeToGround(launch, gravity) * feel.previewShare, points),
-    );
-  }
-
   /** Sends the ballista to another spot of its position. Returns false if it can't go now. */
   moveTo(spot: number): boolean {
     const spots = this.currentPosition.spots;
     if (this.phase !== 'aim' || this.moving || spot === this.#spot || !spots[spot]) return false;
     this.#move = {
-      from: this.ballista(),
-      to: this.#spotAt(this.#position, spot),
+      points: [this.ballista(), this.#spotAt(this.#position, spot)],
       at: this.seconds,
       seconds: this.#hooks.feel().spotSeconds,
     };
@@ -505,7 +491,7 @@ export class SiegeRound {
       this.ballista(),
       this.aimed,
       this.#hooks.spears(),
-      this.rules,
+      this.weapon,
       feel,
       this.#rng,
     );
@@ -669,9 +655,13 @@ export class SiegeRound {
     const advance = this.#advance;
     if (advance && !advance.rolling && now >= advance.at + feel.advanceDelaySeconds) {
       advance.rolling = true;
+      const next = this.fort.positions[advance.next];
       this.#move = {
-        from: this.ballista(),
-        to: this.#spotAt(advance.next, middleSpot(this.fort.positions[advance.next])),
+        points: [
+          this.ballista(),
+          ...(next?.approach ?? []).map(([x, z]) => ({ x, z })),
+          this.#spotAt(advance.next, middleSpot(next)),
+        ],
         at: now,
         seconds: feel.advanceSeconds,
       };
@@ -967,6 +957,15 @@ export class SiegeRound {
     );
   }
 
+  /** Blocks broken, by the kind of piece they were part of (wall, gate, keep …). */
+  #piecesBroken(): Record<string, number> {
+    const counts: Record<string, number> = {};
+    for (const state of this.blocks) {
+      if (state.broken) counts[state.block.pieceKind] = (counts[state.block.pieceKind] ?? 0) + 1;
+    }
+    return counts;
+  }
+
   #finish(won: boolean): void {
     const blocksDown = this.blocksDown;
     const guardsDown = this.guardsDown;
@@ -1005,6 +1004,7 @@ export class SiegeRound {
       recovered: result.recovered,
       blocksDown,
       blocksBroken: result.blocksBroken,
+      piecesBroken: this.#piecesBroken(),
       guardsDown,
       damage: result.damage,
       position: this.#position,
@@ -1014,6 +1014,27 @@ export class SiegeRound {
     this.#hooks.finish(result);
     this.#hooks.onEvent({ type: 'end', result });
   }
+}
+
+/** The point `share` (0 to 1) of the way along a path of points, by distance. */
+function alongPath(points: Spot[], share: number): Spot {
+  const legs = points.slice(1).map((to, index) => {
+    const from = points[index] ?? to;
+    return { from, to, length: Math.hypot(to.x - from.x, to.z - from.z) };
+  });
+  const total = legs.reduce((sum, leg) => sum + leg.length, 0);
+  let left = share * total;
+  for (const leg of legs) {
+    if (left <= leg.length || leg === legs.at(-1)) {
+      const part = leg.length > 0 ? Math.min(left / leg.length, 1) : 1;
+      return {
+        x: leg.from.x + (leg.to.x - leg.from.x) * part,
+        z: leg.from.z + (leg.to.z - leg.from.z) * part,
+      };
+    }
+    left -= leg.length;
+  }
+  return points.at(-1) ?? { x: 0, z: 0 };
 }
 
 /** The spot a position starts at: the one nearest the middle of the field. */

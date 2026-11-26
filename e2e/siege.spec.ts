@@ -11,7 +11,8 @@ test.use({ deviceScaleFactor: 1 });
 const tent = stations.find((station) => station.mechanic === 'siege');
 const feel = siege.feel;
 /** An aimed volley at Command 1. */
-const volley = siege.ballista.aimed.start;
+const ballista = siege.weapons.find((weapon) => weapon.id === siege.weapon);
+const volley = ballista?.aimed.start ?? 0;
 
 /** Opens the War tent with `spears` spears in the warchest. */
 async function openTent(page: Page, spears: number) {
@@ -45,7 +46,7 @@ async function openTent(page: Page, spears: number) {
   await expect(page.locator('body')).toHaveAttribute('data-screen', 'siege3d');
 }
 
-test('Siege: tap the War tent, drag to aim, let go, and the ballista shoots the warchest’s spears', async ({
+test('Siege: tap the War tent, tap to aim, Fire, and the ballista shoots the warchest’s spears', async ({
   page,
 }) => {
   test.setTimeout(90_000);
@@ -59,7 +60,7 @@ test('Siege: tap the War tent, drag to aim, let go, and the ballista shoots the 
     `${String(volley)} spears`,
   );
   await expect(page.getByRole('radio', { name: /Barrage/ })).toContainText(
-    `${String(volley * siege.ballista.barrageTimes)} spears`,
+    `${String(volley * (ballista?.barrageTimes ?? 0))} spears`,
   );
 
   // Move to another spot first: a tap on its number.
@@ -67,23 +68,34 @@ test('Siege: tap the War tent, drag to aim, let go, and the ballista shoots the 
   await expect(page.locator('#screen-siege3d')).toHaveAttribute('data-spot', '2');
   await page.waitForTimeout(feel.spotSeconds * 1000 + 300);
 
-  // A touch drag down the screen tilts the ballista up; let go and it shoots.
+  // Tap the scene: the crosshair jumps there. A drag fine-tunes it. Then Fire.
   const box = await page.locator('#screen-siege3d .sg-canvas').boundingBox();
   if (!box) throw new Error('No siege canvas');
   const session = await page.context().newCDPSession(page);
   const x = box.x + box.width / 2;
   const y = box.y + box.height * 0.45;
-  const pull = feel.deadPx + 40;
-  await session.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y }] });
-  for (let step = 1; step <= 6; step++) {
-    await session.send('Input.dispatchTouchEvent', {
-      type: 'touchMove',
-      touchPoints: [{ x, y: y + (pull * step) / 6 }],
-    });
+  const touch = (
+    type: 'touchStart' | 'touchMove' | 'touchEnd',
+    points: { x: number; y: number }[],
+  ) => session.send('Input.dispatchTouchEvent', { type, touchPoints: points });
+  await touch('touchStart', [{ x, y }]);
+  await touch('touchEnd', []);
+  await expect(page.locator('#screen-siege3d .sg-crosshair')).toBeVisible();
+  await touch('touchStart', [{ x: x + 60, y: y + 80 }]);
+  for (let step = 1; step <= 5; step++) {
+    await touch('touchMove', [{ x: x + 60 - step * 6, y: y + 80 - step * 4 }]);
   }
-  await expect(page.locator('#screen-siege3d .sg-pull')).toBeVisible();
-  await session.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
-  await expect(page.locator('#screen-siege3d .sg-pull')).toBeHidden();
+  await touch('touchEnd', []);
+  const fire = page.getByRole('button', { name: 'Fire' });
+  await expect(fire).toBeEnabled();
+  await fire.tap();
+
+  // Scout rises over the fort and back; no shooting while up there.
+  const scout = page.getByRole('button', { name: 'Scout' });
+  await scout.tap();
+  await expect(page.getByRole('button', { name: 'Back', exact: true })).toBeVisible();
+  await expect(fire).toBeDisabled();
+  await page.getByRole('button', { name: 'Back', exact: true }).tap();
 
   // An aimed volley, out of the warchest.
   await expect(count).toHaveText(String(60 - volley));
@@ -99,7 +111,7 @@ test('Siege: tap the War tent, drag to aim, let go, and the ballista shoots the 
     events: { type: string; data?: Record<string, unknown> }[];
   };
   const types = exported.events.map((event) => event.type);
-  for (const type of ['siege.start', 'siege.spot', 'siege.throw', 'siege.quit']) {
+  for (const type of ['siege.start', 'siege.spot', 'siege.throw', 'siege.scout', 'siege.quit']) {
     expect(types).toContain(type);
   }
   const thrown = exported.events.find((event) => event.type === 'siege.throw');

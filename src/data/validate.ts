@@ -341,14 +341,20 @@ function checkSiege(data: GameData, issue: (path: Path, message: string) => void
   if (!data.items.some((item) => item.id === siege.item)) {
     issue(['siege', 'item'], `Unknown item "${siege.item}"`);
   }
-  const { ballista } = siege;
-  if (!data.skills.some((skill) => skill.id === ballista.skill)) {
-    issue(['siege', 'ballista', 'skill'], `Unknown skill "${ballista.skill}"`);
-  }
-  const { tilt } = ballista;
-  if (tilt.min >= tilt.max || tilt.start < tilt.min || tilt.start > tilt.max) {
-    issue(['siege', 'ballista', 'tilt'], 'Needs min under max, and start between them');
-  }
+  const weapons = new Set<string>();
+  siege.weapons.forEach((weapon, index) => {
+    const path = ['siege', 'weapons', index];
+    if (weapons.has(weapon.id)) issue([...path, 'id'], `Duplicate id "${weapon.id}"`);
+    weapons.add(weapon.id);
+    if (!data.skills.some((skill) => skill.id === weapon.skill)) {
+      issue([...path, 'skill'], `Unknown skill "${weapon.skill}"`);
+    }
+    const { tilt } = weapon;
+    if (tilt.min >= tilt.max || tilt.start < tilt.min || tilt.start > tilt.max) {
+      issue([...path, 'tilt'], 'Needs min under max, and start between them');
+    }
+  });
+  if (!weapons.has(siege.weapon)) issue(['siege', 'weapon'], `Unknown weapon "${siege.weapon}"`);
   const materials = new Set<string>();
   siege.materials.forEach((material, index) => {
     if (materials.has(material.id)) {
@@ -356,20 +362,20 @@ function checkSiege(data: GameData, issue: (path: Path, message: string) => void
     }
     materials.add(material.id);
   });
-  // The farthest any spear reaches on the flat: the fastest a barrage's stray allows, at the best
-  // tilt the ballista has, from its muzzle at its lowest.
-  const reach = farthestShot(
-    ballista.speed * (1 + siege.feel.barrageSpeedStray),
-    ballista.pivotHeight,
-    ballista.muzzle,
-    tilt,
-    siege.physics.gravity,
-  );
   const forts = new Set<string>();
   siege.forts.forEach((fort, fortIndex) => {
     const path = ['siege', 'forts', fortIndex];
     if (forts.has(fort.id)) issue([...path, 'id'], `Duplicate id "${fort.id}"`);
     forts.add(fort.id);
+    fort.pieces.forEach((piece, pieceIndex) => {
+      const at = [...path, 'pieces', pieceIndex];
+      if ('material' in piece && !materials.has(piece.material)) {
+        issue([...at, 'material'], `Unknown material "${piece.material}"`);
+      }
+      if ('guard' in piece && piece.guard !== undefined && piece.guard >= fort.positions.length) {
+        issue([...at, 'guard'], `No position ${String(piece.guard)} to guard`);
+      }
+    });
     const banners = fort.blocks.filter((block) => block.banner);
     if (banners.length > 1) issue([...path, 'blocks'], 'A fort has one banner at most');
     const banner = banners[0];
@@ -400,17 +406,6 @@ function checkSiege(data: GameData, issue: (path: Path, message: string) => void
         ...at,
         'objective',
       ]);
-      // Only the last position can bring the banner down: it's out of reach from the others.
-      if (banner && positionIndex < last) {
-        position.spots.forEach(([x, z], spotIndex) => {
-          if (Math.hypot(banner.at[0] - x, banner.at[2] - z) <= reach) {
-            issue(
-              [...at, 'spots', spotIndex],
-              `The banner is in reach (${reach.toFixed(1)} m) before the last position`,
-            );
-          }
-        });
-      }
     });
 
     type Box = { min: number[]; max: number[] };
@@ -483,28 +478,6 @@ function checkSiege(data: GameData, issue: (path: Path, message: string) => void
   if (siege.stars.three > siege.stars.two) {
     issue(['siege', 'stars'], 'Three stars must not allow more throws than two');
   }
-}
-
-/**
- * The farthest a spear at `speed` lands on the flat, tilted anywhere in `tilt` (degrees), leaving
- * a muzzle `muzzle` along the bolt from a pivot `pivot` up.
- */
-export function farthestShot(
-  speed: number,
-  pivot: number,
-  muzzle: number,
-  tilt: { min: number; max: number },
-  gravity: number,
-): number {
-  let best = 0;
-  for (let degrees = tilt.min; degrees <= tilt.max; degrees += 0.25) {
-    const angle = (degrees * Math.PI) / 180;
-    const up = speed * Math.sin(angle);
-    const height = pivot + muzzle * Math.sin(angle);
-    const time = (up + Math.sqrt(up * up + 2 * gravity * Math.max(height, 0))) / gravity;
-    best = Math.max(best, muzzle * Math.cos(angle) + speed * Math.cos(angle) * time);
-  }
-  return best;
 }
 
 export const gameDataSchema = gameDataShape.superRefine(checkReferences);

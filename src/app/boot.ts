@@ -28,6 +28,7 @@ import {
   type SpearSource,
 } from '../runner/feel';
 import { checkMechanics } from '../stations';
+import { checkForts } from '../stations/siege/logic/fairness';
 import { firemakingFeel } from '../stations/firemaking/feel';
 import { siegeFeel, warTentChoice, type WarTent } from '../stations/siege/feel';
 import { splittingFeel } from '../stations/splitting/feel';
@@ -86,6 +87,8 @@ async function openSink(): Promise<{ sink: EventSink; fallback?: string }> {
 export async function bootGame(buildLabel: string): Promise<Booted> {
   const data = loadGameData();
   checkMechanics(data);
+  // Every siege fort must be fair (walls block, the banner's out of reach until the end).
+  checkForts(data);
   const clock = systemClock;
   const { sink, fallback } = await openSink();
   const logger = new EventLogger(sink, clock, crypto.randomUUID());

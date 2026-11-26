@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import type { Siege } from '../../../data';
+import type { SiegeWeapon } from '../../../data';
 
 // The siege's placeholder figures, built from boxes: the ballista and a guard. Both are sized from
 // the rules' numbers, so what you see is where the rules have them.
@@ -44,7 +44,7 @@ export interface BallistaLook {
  * to the pivot at `pivotHeight`, and on it the stock, `muzzle` long in front of the pivot, with a
  * bow across its front. `boltMesh` makes the bolt lying in the groove.
  */
-export function buildBallista(rules: Siege['ballista'], boltMesh: () => THREE.Group): BallistaLook {
+export function buildBallista(rules: SiegeWeapon, boltMesh: () => THREE.Group): BallistaLook {
   const [width, height, length] = rules.size;
   const root = new THREE.Group();
   const wheelRadius = Math.min(height * 0.32, 0.4);

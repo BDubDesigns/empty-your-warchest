@@ -19,8 +19,10 @@ import {
 } from '../logic/round';
 import {
   aimDirection,
-  aimFromDrag,
+  aimToward,
   aimedVolley,
+  muzzleAt,
+  siegeWeapon,
   spearsShot,
   startAim,
   volleySize,
@@ -59,9 +61,13 @@ const SOUNDS: Record<string, string> = {
   creak: 'audio/woodcutting/creak-2.mp3',
   star: 'audio/woodcutting/star.mp3',
 };
-/** Dots along each dotted arc, and along the last shot's trail. */
-const ARC_DOTS = 10;
-const TRAIL_DOTS = 90;
+/** Segments, at most, in the solid line along the last shot's path. */
+const GHOST_SEGMENTS = 120;
+/** A touch that moves less than this (px) is a tap: the crosshair jumps there. */
+const TAP_PX = 10;
+/** The crosshair's ring: its least size on screen (px), and how far out it's drawn when it hits nothing (m). */
+const CROSSHAIR_PX = 30;
+const SKY_REACH = 60;
 /** Most particles (dust, debris) alive at once, so a collapsing fort stays smooth. */
 const MAX_PUFFS = 160;
 const MAX_DEBRIS = 60;
@@ -79,8 +85,10 @@ const TITLE_SECONDS = 2.4;
 const SIGHT_RISE = 0.7;
 const SIGHT_BACK = 1.8;
 const SIGHT_TILT = 0.35;
-/** Dots nearer the camera than this (metres) aren't drawn: down the sights they'd fill the view. */
-const NEAREST_DOT = 3;
+/** Weak posts get a red band; anything this wide or wider (a gate) shows by its wood instead (m). */
+const WEAK_BAND_UNDER = 0.5;
+/** How often the targets on screen are noted for the e2e tests and screenshots (s). */
+const TARGETS_SECONDS = 0.25;
 /** Least gap between two hit-stops (s), so a volley doesn't stutter. */
 const STOP_GAP = 0.25;
 /** The ground the fort stands on, and the trodden earth up the middle of it. */
@@ -95,8 +103,8 @@ const COLORS = {
   stone: 0x9b978d,
   wood: 0xc39a66,
   dust: 0xcdbb9c,
-  dot: 0xffffff,
-  trail: 0xffe7a8,
+  aimLine: 0xfff3a0,
+  ghost: 0x7fe8ff,
   spot: 0xffffff,
   spotOn: 0xf0cd5c,
 };
@@ -125,22 +133,22 @@ interface Debris {
   age: number;
 }
 
-/** A finger dragging to aim: where it went down, the aim then, the aim now, how far it's moved. */
-interface Drag {
+/** A finger on the scene: where it went down, where it was last, and whether it's dragging. */
+interface Touch {
   id: number;
   x: number;
   y: number;
   last: { x: number; y: number };
-  from: Aim;
-  travel: number;
+  dragging: boolean;
 }
 
 /**
  * The siege in 3D: the ballista at the bottom of the screen, the fort up the field, seen from
- * behind and above it (or, with the sight blend up, down the bolt itself). Drag anywhere to turn
- * and tilt it (the dotted arc shows the start of the flight, and the last shot's path stays as a
- * faint trail); let go and it shoots, Aimed or Barrage. Tap a spot to move it. Win a position and
- * it rolls on to the next. The rules (SiegeRound, a Rapier physics world) decide everything; this
+ * behind and above it (or, with the sight blend up, down the bolt itself). Tap anywhere and the
+ * crosshair jumps there; drag to fine-tune it. The ballista points straight at it (a bright line
+ * runs out along the bolt) and Fire shoots, Aimed or Barrage; the last shot's real path stays as a
+ * solid line, so you learn the drop. Scout looks down on the whole fort. Tap a spot to move. Win a
+ * position and it rolls on to the next. The rules (SiegeRound, a Rapier physics world) decide everything; this
  * draws its bodies where it says and adds the juice: hit-stop, shake, dust, debris, sounds,
  * buzzes, the camera riding a spear, and slow motion as the banner falls.
  */
@@ -168,8 +176,9 @@ export class Siege3DView implements ScreenView {
   readonly #spearParts: { shaft: THREE.BufferGeometry; tip: THREE.BufferGeometry };
   readonly #spearMaterials: { shaft: THREE.Material; tip: THREE.Material };
   readonly #ballista: BallistaLook;
-  readonly #dots: THREE.InstancedMesh;
-  readonly #trail: THREE.InstancedMesh;
+  readonly #ghost: THREE.InstancedMesh;
+  readonly #aimLine: THREE.Mesh;
+  readonly #raycaster = new THREE.Raycaster();
   readonly #puffTexture: THREE.Texture;
   readonly #pose: Pose = { position: { x: 0, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0, w: 1 } };
   #round: SiegeRound | undefined;
@@ -182,7 +191,12 @@ export class Siege3DView implements ScreenView {
   #flag: THREE.Mesh | undefined;
   #puffs: Puff[] = [];
   #debris: Debris[] = [];
-  #drag: Drag | undefined;
+  #touch: Touch | undefined;
+  /** Where the crosshair is: on screen (px in the view), and the point in the scene it's on. */
+  #crosshair = { x: 0, y: 0 };
+  #aimPoint = new THREE.Vector3(0, 1.5, -10);
+  /** Scouting: looking down on the whole fort (`on`), and how far the camera's got there. */
+  #scout = { on: false, blend: 0 };
   /** The last shot's middle spear, and the path it's flown so far. */
   #trailSpear: number | undefined;
   #trailPoints: THREE.Vector3[] = [];
@@ -204,6 +218,7 @@ export class Siege3DView implements ScreenView {
   #finished: { result: SiegeResult; at: number } | undefined;
   #unlocked: string | undefined;
   #lastPhase = '';
+  #targetsAt = -Infinity;
 
   private constructor(
     element: HTMLElement,
@@ -217,9 +232,9 @@ export class Siege3DView implements ScreenView {
     this.#physics = physics;
     this.#hud = hud;
     const rules = deps.game.data.siege;
-    this.#aim = startAim(rules);
+    this.#aim = startAim(siegeWeapon(rules));
     const station = deps.game.data.stations.find((entry) => entry.mechanic === 'siege');
-    this.#skill = station?.skill ?? rules.ballista.skill;
+    this.#skill = station?.skill ?? siegeWeapon(rules).skill;
     this.#skillBar = new SkillBar(element, { game: deps.game, skill: this.#skill });
     this.#renderer = new THREE.WebGLRenderer({ antialias: true });
     this.#renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -250,19 +265,26 @@ export class Siege3DView implements ScreenView {
       shaft: new THREE.MeshLambertMaterial({ color: COLORS.shaft }),
       tip: new THREE.MeshLambertMaterial({ color: COLORS.iron }),
     };
-    this.#ballista = buildBallista(rules.ballista, () => this.#spearMesh());
-    const dot = (color: number, opacity: number, size: number, count: number) => {
-      const made = new THREE.InstancedMesh(
-        new THREE.SphereGeometry(size, 8, 6),
-        new THREE.MeshBasicMaterial({ color, transparent: true, opacity, depthWrite: false }),
-        count,
-      );
-      made.count = 0;
-      made.frustumCulled = false;
-      return made;
-    };
-    this.#dots = dot(COLORS.dot, 0.9, 0.07, ARC_DOTS * 3);
-    this.#trail = dot(COLORS.trail, 0.35, 0.05, TRAIL_DOTS);
+    const weapon = siegeWeapon(rules);
+    this.#ballista = buildBallista(weapon, () => this.#spearMesh());
+    // A bright line straight out along the bolt from its tip: where it's pointing, not where it
+    // lands.
+    this.#aimLine = new THREE.Mesh(
+      new THREE.BoxGeometry(0.05, 0.05, 1),
+      new THREE.MeshBasicMaterial({ color: COLORS.aimLine, transparent: true, opacity: 0.95 }),
+    );
+    this.#aimLine.position.y = 0.12;
+    this.#ballista.tilt.add(this.#aimLine);
+    // The last shot's path: a solid tube of short segments, bright enough for daylight.
+    const segment = new THREE.CylinderGeometry(0.5, 0.5, 1, 8, 1, true);
+    segment.rotateX(Math.PI / 2);
+    this.#ghost = new THREE.InstancedMesh(
+      segment,
+      new THREE.MeshBasicMaterial({ color: COLORS.ghost, transparent: true, opacity: 0.9 }),
+      GHOST_SEGMENTS,
+    );
+    this.#ghost.count = 0;
+    this.#ghost.frustumCulled = false;
     this.#puffTexture = puffTexture();
     this.#buildWorld(tree);
     this.#ui = this.buildUi();
@@ -336,7 +358,8 @@ export class Siege3DView implements ScreenView {
       open.find((entry) => entry.id === this.#fortId) ?? open[open.length - 1] ?? rules.forts[0];
     if (!fort) return;
     this.#fortId = fort.id;
-    const aimed = aimedVolley(rules, game.level(rules.ballista.skill));
+    const weapon = siegeWeapon(rules);
+    const aimed = aimedVolley(weapon, game.level(weapon.skill));
     const round = new SiegeRound(
       this.#physics,
       game.data,
@@ -358,7 +381,9 @@ export class Siege3DView implements ScreenView {
       { aimed, seed: Date.now() >>> 0 },
     );
     this.#round = round;
-    this.#aim = startAim(rules);
+    this.#aim = startAim(weapon);
+    this.#aimAhead();
+    this.#scout = { on: false, blend: 0 };
     this.#buildFort(round);
     this.#showForts(open);
     this.#showSpots();
@@ -395,11 +420,10 @@ export class Siege3DView implements ScreenView {
     }
     this.#puffs = [];
     this.#debris = [];
-    this.#drag = undefined;
+    this.#touch = undefined;
     this.#trailSpear = undefined;
     this.#trailPoints = [];
-    this.#dots.count = this.#trail.count = 0;
-    this.#ui.pull.hidden = true;
+    this.#ghost.count = 0;
   }
 
   /** The round is over: pay its Command XP and the spears it got back. */
@@ -452,8 +476,7 @@ export class Siege3DView implements ScreenView {
       this.#effects,
       this.#spotGroup,
       this.#ballista.root,
-      this.#dots,
-      this.#trail,
+      this.#ghost,
     );
   }
 
@@ -484,7 +507,7 @@ export class Siege3DView implements ScreenView {
         this.#materials[state.kind][0],
       );
       mesh.castShadow = mesh.receiveShadow = true;
-      if (state.block.weak) {
+      if (state.block.weak && Math.max(width, depth) < WEAK_BAND_UNDER) {
         // A red band round a weak post, so it reads as the place to hit.
         const across = Math.max(width, depth) * 0.62;
         const band = new THREE.Mesh(
@@ -591,7 +614,7 @@ export class Siege3DView implements ScreenView {
         const first = this.#spears.length;
         this.#trailSpear = first + Math.floor((Math.min(event.spears, round.aimed) - 1) / 2);
         this.#trailPoints = [];
-        this.#trail.count = 0;
+        this.#ghost.count = 0;
         break;
       }
       case 'launch': {
@@ -678,6 +701,7 @@ export class Siege3DView implements ScreenView {
       }
       case 'arrived':
         this.#showSpots();
+        this.#aimAhead();
         this.#play('thud-3', 0.4, -700);
         break;
       case 'bannerFalling':
@@ -811,7 +835,7 @@ export class Siege3DView implements ScreenView {
     }
     this.#drawBodies();
     this.#drawBallista(realDt);
-    this.#drawArcs();
+    this.#drawAim();
     this.#updateEffects(dt);
     this.#updateFlag(time / 1000);
     this.#updateUi();
@@ -854,23 +878,39 @@ export class Siege3DView implements ScreenView {
       round.spearPose(index, pose);
       place(spear);
     });
-    // The last shot's middle spear leaves its trail while it flies.
+    // The last shot's middle spear leaves its line while it flies.
     const trailed = this.#trailSpear;
     if (trailed !== undefined && round.spears[trailed]?.flying) {
       round.spearPose(trailed, pose);
       const point = new THREE.Vector3(pose.position.x, pose.position.y, pose.position.z);
       const last = this.#trailPoints.at(-1);
-      if (!last || last.distanceTo(point) > 0.35) {
+      if (!last || last.distanceTo(point) > 0.3) {
         this.#trailPoints.push(point);
-        if (this.#trailPoints.length > TRAIL_DOTS) this.#trailPoints.shift();
-        const matrix = new THREE.Matrix4();
-        this.#trailPoints.forEach((at, dot) => {
-          this.#trail.setMatrixAt(dot, matrix.makeTranslation(at.x, at.y, at.z));
-        });
-        this.#trail.count = this.#trailPoints.length;
-        this.#trail.instanceMatrix.needsUpdate = true;
+        if (this.#trailPoints.length > GHOST_SEGMENTS + 1) this.#trailPoints.shift();
+        this.#drawGhost();
       }
     }
+  }
+
+  /** The solid line along the last shot's path, `ghostWidth` thick. */
+  #drawGhost(): void {
+    const width = this.#deps.feel.values.ghostWidth;
+    const matrix = new THREE.Matrix4();
+    const turn = new THREE.Quaternion();
+    const forward = new THREE.Vector3(0, 0, 1);
+    let count = 0;
+    for (let index = 1; index < this.#trailPoints.length; index++) {
+      const from = this.#trailPoints[index - 1];
+      const to = this.#trailPoints[index];
+      if (!from || !to) continue;
+      const way = to.clone().sub(from);
+      const length = way.length();
+      turn.setFromUnitVectors(forward, way.normalize());
+      matrix.compose(from.clone().lerp(to, 0.5), turn, new THREE.Vector3(width, width, length));
+      this.#ghost.setMatrixAt(count++, matrix);
+    }
+    this.#ghost.count = count;
+    this.#ghost.instanceMatrix.needsUpdate = true;
   }
 
   /** The ballista where the rules have it, turned and tilted to the aim, its bow drawn or loosed. */
@@ -898,29 +938,76 @@ export class Siege3DView implements ScreenView {
     });
   }
 
-  /** The dotted arc for the aim now (when it can shoot): the first part of the flight only. */
-  #drawArcs(): void {
+  /**
+   * The aim: the weapon points straight at the crosshair's point; the aim line runs out along the
+   * bolt; the crosshair sits on the point, as wide as the shot's spread (a barrage's far wider).
+   */
+  #drawAim(): void {
     const round = this.#round;
-    if (!round || !round.canThrow || !this.#ui.card.hidden) {
-      this.#dots.count = 0;
-      return;
-    }
-    const arcs = round.preview(this.#mode, this.#aim, ARC_DOTS);
-    const matrix = new THREE.Matrix4();
-    let count = 0;
-    for (const arc of arcs) {
-      arc.forEach((dot, index) => {
-        if (count >= this.#dots.instanceMatrix.count) return;
-        const near = this.#camera.position;
-        if (Math.hypot(dot.x - near.x, dot.y - near.y, dot.z - near.z) < NEAREST_DOT) return;
-        // Dots shrink toward the end of what's shown: the rest is up to you.
-        const size = 1 - (index / ARC_DOTS) * 0.6;
-        matrix.makeScale(size, size, size).setPosition(dot.x, dot.y, dot.z);
-        this.#dots.setMatrixAt(count++, matrix);
-      });
-    }
-    this.#dots.count = count;
-    this.#dots.instanceMatrix.needsUpdate = true;
+    const ui = this.#ui;
+    const feel = this.#deps.feel.values;
+    const showing =
+      round !== undefined && round.phase === 'aim' && ui.card.hidden && !this.#scout.on;
+    this.#aimLine.visible = showing && feel.aimLineLength > 0;
+    const weapon = siegeWeapon(this.#deps.game.data.siege);
+    this.#aimLine.scale.z = Math.max(feel.aimLineLength, 0.01);
+    this.#aimLine.position.z = -weapon.muzzle - feel.aimLineLength / 2;
+    if (!round) return;
+    this.#aim = aimToward(round.ballista(), this.#aimPoint, weapon, feel);
+    // Where the aimed point is on screen, and how wide the spread is there.
+    const { clientWidth: width, clientHeight: height } = this.#element;
+    const point = this.#aimPoint.clone().project(this.#camera);
+    const visible = showing && point.z < 1 && Math.abs(point.x) <= 1.2 && Math.abs(point.y) <= 1.2;
+    ui.crosshair.hidden = !visible;
+    if (!visible) return;
+    const x = ((point.x + 1) / 2) * width;
+    const y = ((1 - point.y) / 2) * height;
+    this.#crosshair = { x, y };
+    const muzzle = muzzleAt(round.ballista(), this.#aim, weapon);
+    const reach = this.#aimPoint.distanceTo(new THREE.Vector3(muzzle.x, muzzle.y, muzzle.z));
+    const spread = (this.#mode === 'barrage' ? feel.barrageSpread : feel.aimedSpread) * DEG;
+    const side = new THREE.Vector3(Math.cos(this.#aim.yaw), 0, Math.sin(this.#aim.yaw))
+      .multiplyScalar(Math.tan(spread) * reach)
+      .add(this.#aimPoint)
+      .project(this.#camera);
+    const radius = Math.max(Math.abs(((side.x + 1) / 2) * width - x), CROSSHAIR_PX / 2);
+    ui.crosshair.style.transform = `translate(${String(x - radius)}px, ${String(y - radius)}px)`;
+    ui.crosshair.style.width = ui.crosshair.style.height = `${String(radius * 2)}px`;
+    ui.crosshair.dataset.mode = this.#mode;
+  }
+
+  /** Puts the crosshair straight ahead of the weapon, on the fort (a new round or position). */
+  #aimAhead(): void {
+    const at = this.#round?.ballista() ?? { x: 0, z: 0 };
+    this.#aimPoint.set(at.x, 1.5, at.z - 11);
+  }
+
+  /** The raycaster's nearest hit on the fort that's still standing (broken blocks only hide). */
+  #standingHit(far = Infinity): THREE.Intersection | undefined {
+    this.#raycaster.far = far;
+    const hits = this.#raycaster.intersectObjects(this.#fortGroup.children, true);
+    this.#raycaster.far = Infinity;
+    return hits.find((hit) => {
+      for (let node: THREE.Object3D | null = hit.object; node; node = node.parent) {
+        if (!node.visible) return false;
+      }
+      return true;
+    });
+  }
+
+  /** The point in the scene under a screen point (px in the view): a block, a guard, the ground. */
+  #pick(x: number, y: number): THREE.Vector3 {
+    const { clientWidth: width, clientHeight: height } = this.#element;
+    const ndc = new THREE.Vector2((x / width) * 2 - 1, -(y / height) * 2 + 1);
+    this.#raycaster.setFromCamera(ndc, this.#camera);
+    const hit = this.#standingHit();
+    if (hit) return hit.point.clone();
+    const ground = this.#raycaster.ray.intersectPlane(
+      new THREE.Plane(new THREE.Vector3(0, 1, 0), 0),
+      new THREE.Vector3(),
+    );
+    if (ground && ground.distanceTo(this.#camera.position) < SKY_REACH) return ground;
+    return this.#raycaster.ray.at(SKY_REACH, new THREE.Vector3());
   }
 
   #updateEffects(dt: number): void {
@@ -999,13 +1086,24 @@ export class Siege3DView implements ScreenView {
       feel.cameraHeight * lift,
       at.z + Math.cos(turn) * back,
     );
+    // A wall between the ballista and the camera (inside the fort, just through a gate) would
+    // fill the screen: pull the camera in, along the same line, to just short of it.
+    const pivotAt = new THREE.Vector3(at.x, siegeWeapon(rules).pivotHeight, at.z);
+    const toCamera = behind.clone().sub(pivotAt);
+    const reach = toCamera.length();
+    this.#raycaster.set(pivotAt, toCamera.normalize());
+    const wall = this.#standingHit(reach);
+    if (wall)
+      behind
+        .copy(pivotAt)
+        .addScaledVector(toCamera, Math.max(wall.distance - feel.cameraClearance, 0));
     const behindLook = new THREE.Vector3(
       at.x + Math.sin(turn) * feel.cameraLookAhead,
       feel.cameraLookHeight,
       at.z - Math.cos(turn) * feel.cameraLookAhead,
     );
     const way = aimDirection(this.#aim);
-    const pivot = new THREE.Vector3(at.x, rules.ballista.pivotHeight, at.z);
+    const pivot = new THREE.Vector3(at.x, siegeWeapon(rules).pivotHeight, at.z);
     const forward = new THREE.Vector3(way.x, way.y, way.z);
     // Over the back of the stock, sighting along the bolt; it looks a little under the bolt's
     // tilt, so a lob still shows what it's aimed at rather than the sky.
@@ -1020,6 +1118,19 @@ export class Siege3DView implements ScreenView {
     const blend = feel.sightBlend;
     const home = behind.lerp(sight, blend);
     const look = behindLook.lerp(sightLook, blend);
+    // Scouting: up over the whole fort, looking down on it.
+    const scoutWant = this.#scout.on ? 1 : 0;
+    const scoutRate = dt / Math.max(feel.scoutSeconds, 0.05);
+    this.#scout.blend +=
+      Math.sign(scoutWant - this.#scout.blend) *
+      Math.min(Math.abs(scoutWant - this.#scout.blend), scoutRate);
+    if (this.#scout.blend > 0) {
+      const middle = this.#fortMiddle();
+      const above = new THREE.Vector3(middle.x, feel.scoutHeight, middle.z + feel.scoutBack);
+      const eased = this.#scout.blend * this.#scout.blend * (3 - 2 * this.#scout.blend);
+      home.lerp(above, eased);
+      look.lerp(middle, eased);
+    }
     // Riding a spear (or the falling banner): toward it for a while, then easing back.
     const follow = this.#follow;
     const round = this.#round;
@@ -1050,6 +1161,14 @@ export class Siege3DView implements ScreenView {
     this.#camera.lookAt(look);
   }
 
+  /** The middle of the fort on the ground: what scouting looks down on. */
+  #fortMiddle(): THREE.Vector3 {
+    const blocks = this.#round?.fort.blocks ?? [];
+    if (blocks.length === 0) return new THREE.Vector3();
+    const zs = blocks.map((block) => block.at[2]);
+    return new THREE.Vector3(0, 0, (Math.min(...zs) + Math.max(...zs)) / 2);
+  }
+
   #resize(): void {
     const { clientWidth: width, clientHeight: height } = this.#element;
     if (width === 0 || height === 0) return;
@@ -1068,66 +1187,73 @@ export class Siege3DView implements ScreenView {
     const canvas = this.#renderer.domElement;
     canvas.addEventListener('pointerdown', (event) => {
       this.#sfx.unlock();
-      if (this.#drag || !this.#round || this.#round.phase !== 'aim') return;
+      if (this.#touch || !this.#round || this.#scout.on) return;
       canvas.setPointerCapture(event.pointerId);
-      this.#drag = {
+      this.#touch = {
         id: event.pointerId,
         x: event.clientX,
         y: event.clientY,
         last: { x: event.clientX, y: event.clientY },
-        from: this.#aim,
-        travel: 0,
+        dragging: false,
       };
     });
     canvas.addEventListener('pointermove', (event) => {
-      const drag = this.#drag;
-      if (!drag || drag.id !== event.pointerId) return;
-      drag.travel += Math.hypot(event.clientX - drag.last.x, event.clientY - drag.last.y);
-      drag.last = { x: event.clientX, y: event.clientY };
-      const rules = this.#deps.game.data.siege;
-      this.#aim = aimFromDrag(
-        drag.from,
-        event.clientX - drag.x,
-        event.clientY - drag.y,
-        this.#deps.feel.values,
-        rules,
-      );
-      this.#showPull(drag, event.clientX, event.clientY);
-    });
-    const end = (event: PointerEvent, cancelled: boolean) => {
-      const drag = this.#drag;
-      if (!drag || drag.id !== event.pointerId) return;
-      this.#drag = undefined;
-      this.#ui.pull.hidden = true;
-      const moved = drag.travel >= this.#deps.feel.values.deadPx;
-      if (!cancelled && moved && this.#round?.throw(this.#mode, this.#aim)) {
-        this.#ui.picker.hidden = true;
+      const touch = this.#touch;
+      if (!touch || touch.id !== event.pointerId) return;
+      if (
+        !touch.dragging &&
+        Math.hypot(event.clientX - touch.x, event.clientY - touch.y) > TAP_PX
+      ) {
+        touch.dragging = true;
       }
-    };
-    canvas.addEventListener('pointerup', (event) => {
-      end(event, false);
+      if (!touch.dragging) return;
+      // A drag moves the crosshair (slower than the finger, so the thumb's not on the target).
+      const speed = this.#deps.feel.values.crosshairSpeed;
+      const { clientWidth: width, clientHeight: height } = this.#element;
+      const x = Math.min(
+        Math.max(this.#crosshair.x + (event.clientX - touch.last.x) * speed, 0),
+        width,
+      );
+      const y = Math.min(
+        Math.max(this.#crosshair.y + (event.clientY - touch.last.y) * speed, 0),
+        height,
+      );
+      touch.last = { x: event.clientX, y: event.clientY };
+      this.#crosshair = { x, y };
+      this.#aimPoint = this.#pick(x, y);
     });
+    const end = (event: PointerEvent) => {
+      const touch = this.#touch;
+      if (!touch || touch.id !== event.pointerId) return;
+      this.#touch = undefined;
+      if (touch.dragging) return;
+      // A tap: the crosshair jumps to it.
+      const rect = this.#element.getBoundingClientRect();
+      this.#aimPoint = this.#pick(event.clientX - rect.left, event.clientY - rect.top);
+    };
+    canvas.addEventListener('pointerup', end);
     canvas.addEventListener('pointercancel', (event) => {
-      end(event, true);
+      if (this.#touch?.id === event.pointerId) this.#touch = undefined;
     });
   }
 
-  /** The drag: a line from where the finger went down, and the aim it makes. */
-  #showPull(drag: Drag, x: number, y: number): void {
-    const ui = this.#ui;
-    const rect = this.#element.getBoundingClientRect();
-    ui.pull.hidden = false;
-    ui.pullLine.setAttribute('x1', String(drag.x - rect.left));
-    ui.pullLine.setAttribute('y1', String(drag.y - rect.top));
-    ui.pullLine.setAttribute('x2', String(x - rect.left));
-    ui.pullLine.setAttribute('y2', String(y - rect.top));
-    ui.pullStart.setAttribute('cx', String(drag.x - rect.left));
-    ui.pullStart.setAttribute('cy', String(drag.y - rect.top));
-    ui.pull.dataset.ready = String(this.#round?.canThrow === true);
-    const turn = Math.round(this.#aim.yaw / DEG);
-    ui.pullPower.textContent = `↑${String(Math.round(this.#aim.tilt / DEG))}° ${turn === 0 ? '' : `${turn > 0 ? '→' : '←'}${String(Math.abs(turn))}°`}`;
-    ui.pullPower.setAttribute('x', String(x - rect.left));
-    ui.pullPower.setAttribute('y', String(y - rect.top + 44));
+  /** Fire: the weapon shoots at the crosshair, if it can. */
+  #fire(): void {
+    if (this.#scout.on) return;
+    if (this.#round?.throw(this.#mode, this.#aim)) this.#ui.picker.hidden = true;
+  }
+
+  /** Scout: up over the fort to look down on it, or back down to the weapon. */
+  #toggleScout(): void {
+    const round = this.#round;
+    if (!round) return;
+    this.#scout.on = !this.#scout.on;
+    this.#deps.logger.log('siege.scout', {
+      fort: round.fort.id,
+      on: this.#scout.on,
+      position: round.position,
+      throws: round.throws,
+    });
   }
 
   // Overlay
@@ -1182,19 +1308,21 @@ export class Siege3DView implements ScreenView {
       return { mode, element, cost };
     });
     controls.append(spots, modes);
-    // The drag, drawn over the scene (in a div: only HTML elements can be hidden).
-    const svg = 'http://www.w3.org/2000/svg';
-    const pull = el('div', 'sg-pull');
-    pull.setAttribute('aria-hidden', 'true');
-    const drawing = document.createElementNS(svg, 'svg');
-    const pullLine = document.createElementNS(svg, 'line');
-    const pullStart = document.createElementNS(svg, 'circle');
-    pullStart.setAttribute('r', '14');
-    const pullPower = document.createElementNS(svg, 'text');
-    pullPower.setAttribute('text-anchor', 'middle');
-    drawing.append(pullLine, pullStart, pullPower);
-    pull.append(drawing);
-    pull.hidden = true;
+    // Fire, big, and Scout, beside the shot buttons.
+    const fire = button('Fire', 'sg-fire', () => {
+      this.#fire();
+    });
+    const scout = button('Scout', 'sg-scout', () => {
+      this.#toggleScout();
+    });
+    scout.setAttribute('aria-pressed', 'false');
+    const shoot = el('div', 'sg-shoot');
+    shoot.append(scout, modes, fire);
+    controls.replaceChildren(spots, shoot);
+    // The crosshair, over the scene where the weapon's aimed.
+    const crosshair = el('div', 'sg-crosshair');
+    crosshair.setAttribute('aria-hidden', 'true');
+    crosshair.hidden = true;
     const card = el('div', 'sg-card');
     const cardStars = el('div', 'w3d-stars sg-card-stars');
     const cardTitle = el('div', 'sg-card-title');
@@ -1211,7 +1339,7 @@ export class Siege3DView implements ScreenView {
     cardButtons.append(leave, again);
     card.append(cardStars, cardTitle, cardText, cardButtons);
     card.hidden = true;
-    root.append(picker, status, goal, title, pull, hint, controls, card);
+    root.append(crosshair, picker, status, goal, title, hint, controls, card);
     this.#element.append(root);
     return {
       root,
@@ -1223,10 +1351,9 @@ export class Siege3DView implements ScreenView {
       controls,
       spotButtons,
       modeButtons,
-      pull,
-      pullLine,
-      pullStart,
-      pullPower,
+      fire,
+      scout,
+      crosshair,
       card,
       cardStars,
       cardTitle,
@@ -1275,6 +1402,10 @@ export class Siege3DView implements ScreenView {
     this.#element.dataset.position = String(round?.position ?? 0);
     this.#element.dataset.spot = String(round?.spot ?? 0);
     this.#element.dataset.guardsLeft = String(round?.guardsLeft ?? 0);
+    if (round && this.#now - this.#targetsAt > TARGETS_SECONDS) {
+      this.#targetsAt = this.#now;
+      this.#element.dataset.targets = JSON.stringify(this.#targetsOnScreen(round));
+    }
     if (!round) return;
     const title = this.#title;
     const showing =
@@ -1283,12 +1414,15 @@ export class Siege3DView implements ScreenView {
     if (title) ui.title.textContent = title.text;
     const aiming = phase === 'aim' && ui.card.hidden;
     ui.controls.hidden = !aiming;
+    ui.fire.disabled = !round.canThrow || this.#scout.on;
+    ui.scout.setAttribute('aria-pressed', String(this.#scout.on));
+    ui.scout.textContent = this.#scout.on ? 'Back' : 'Scout';
     for (const { mode, element, cost } of ui.modeButtons) {
       element.setAttribute('aria-checked', String(mode === this.#mode));
-      const spears = spearsShot(mode, round.aimed, left, rules);
+      const spears = spearsShot(mode, round.aimed, left, round.weapon);
       cost.textContent = `${String(spears)} spear${spears === 1 ? '' : 's'}`;
       // A short volley: fewer spears left than the shot takes.
-      element.dataset.short = String(spears < volleySize(mode, round.aimed, rules));
+      element.dataset.short = String(spears < volleySize(mode, round.aimed, round.weapon));
     }
     ui.status.hidden = !ui.card.hidden;
     ui.status.textContent = `Throws ${String(round.throws)} / par ${String(round.fort.par)} · ${String(round.used)} spears`;
@@ -1308,9 +1442,44 @@ export class Siege3DView implements ScreenView {
       phase === 'aim' && left < 1 && !round.reloading
         ? 'Out of spears…'
         : phase === 'aim' && round.throws === 0
-          ? 'Drag to aim, let go to shoot · tap a number to move'
+          ? this.#scout.on
+            ? 'Scouting: tap Back to aim again'
+            : 'Tap to aim, drag to fine-tune, then Fire'
           : '';
     ui.hint.hidden = !ui.card.hidden;
+  }
+
+  /**
+   * Where the position's targets are on screen (px in the view): its guards' heads, gates and the
+   * keep's thin posts. For the e2e tests and screenshots to aim at, as a player would by eye.
+   */
+  #targetsOnScreen(round: SiegeRound): { kind: string; x: number; y: number }[] {
+    const { clientWidth: width, clientHeight: height } = this.#element;
+    const [, tall] = this.#deps.game.data.siege.guard.size;
+    const onScreen = (kind: string, at: THREE.Vector3) => {
+      const point = at.project(this.#camera);
+      return point.z < 1 && Math.abs(point.x) < 1 && Math.abs(point.y) < 1
+        ? [
+            {
+              kind,
+              x: Math.round(((point.x + 1) / 2) * width),
+              y: Math.round(((1 - point.y) / 2) * height),
+            },
+          ]
+        : [];
+    };
+    const guards = round.guards.flatMap((guard, index) => {
+      if (guard.down || guard.position !== round.position) return [];
+      round.guardPose(index, this.#pose);
+      const { x, y, z } = this.#pose.position;
+      return onScreen('guard', new THREE.Vector3(x, y + tall * 0.42, z));
+    });
+    const weak = round.blocks.flatMap((block) => {
+      if (!block.block.weak || block.broken) return [];
+      const [x, y, z] = block.block.at;
+      return onScreen(block.block.pieceKind, new THREE.Vector3(x, y, z));
+    });
+    return [...guards, ...weak];
   }
 
   /** The end card: won or lost, throws against par, stars, XP and the spears back. */
