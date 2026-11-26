@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { releaseContext, restoreContext } from '../../../app/trouble';
 import { Birds } from './birds';
 import { CabinModel } from './cabin';
 import { TrunkCarver } from './carve';
@@ -471,7 +472,7 @@ export class Woodcutting3DView implements ScreenView {
     if (!item) throw new Error('The woodcutting recipe makes nothing');
     const [models, hud] = await Promise.all([
       loadModels(),
-      WarchestHud.create(element, { game, item, haptics: deps.haptics }),
+      WarchestHud.create(element, { game, item, haptics: deps.haptics, logger: deps.logger }),
     ]);
     return new Woodcutting3DView(element, deps, models, hud);
   }
@@ -484,6 +485,8 @@ export class Woodcutting3DView implements ScreenView {
   // ScreenView
 
   start(): void {
+    restoreContext(this.#renderer);
+    this.#hud.wake();
     const { game } = this.#deps;
     const plan = this.#deps.clearings.next();
     this.#plan = plan;
@@ -553,7 +556,7 @@ export class Woodcutting3DView implements ScreenView {
     this.#summaryPending = undefined;
     this.#clearSummaryTimers();
     this.#deps.backButton.set(undefined);
-    this.#hud.settle();
+    this.#hud.sleep();
     this.#skillBar.settle();
     this.#bankedXp = undefined;
     this.#round.exit();
@@ -561,6 +564,7 @@ export class Woodcutting3DView implements ScreenView {
     this.#logPerformance();
     delete document.body.dataset.woodcutting;
     this.#lastPhase = '';
+    releaseContext(this.#renderer, this.#deps.logger, 'wood3d');
   }
 
   // World

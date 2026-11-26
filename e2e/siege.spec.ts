@@ -46,7 +46,7 @@ async function openTent(page: Page, spears: number) {
   await expect(page.locator('body')).toHaveAttribute('data-screen', 'siege3d');
 }
 
-test('Siege: tap the War tent, tap to aim, Fire, and the ballista shoots the warchest’s spears', async ({
+test('Siege: tap the War tent, drag to look, Fire, and the ballista shoots the warchest’s spears', async ({
   page,
 }) => {
   test.setTimeout(90_000);
@@ -68,24 +68,31 @@ test('Siege: tap the War tent, tap to aim, Fire, and the ballista shoots the war
   await expect(page.locator('#screen-siege3d')).toHaveAttribute('data-spot', '2');
   await page.waitForTimeout(feel.spotSeconds * 1000 + 300);
 
-  // Tap the scene: the crosshair jumps there. A drag fine-tunes it. Then Fire.
+  // Down the sights: the crosshair sits in the middle. A drag turns the view (right and up
+  // here), then Fire.
+  const view = page.locator('#screen-siege3d');
+  await expect(page.locator('#screen-siege3d .sg-crosshair')).toBeVisible();
+  const aim = async () =>
+    ((await view.getAttribute('data-aim')) ?? '0 0').split(' ').map(Number) as [number, number];
+  const [yaw, tilt] = await aim();
   const box = await page.locator('#screen-siege3d .sg-canvas').boundingBox();
   if (!box) throw new Error('No siege canvas');
   const session = await page.context().newCDPSession(page);
   const x = box.x + box.width / 2;
-  const y = box.y + box.height * 0.45;
+  const y = box.y + box.height * 0.6;
   const touch = (
     type: 'touchStart' | 'touchMove' | 'touchEnd',
     points: { x: number; y: number }[],
   ) => session.send('Input.dispatchTouchEvent', { type, touchPoints: points });
   await touch('touchStart', [{ x, y }]);
-  await touch('touchEnd', []);
-  await expect(page.locator('#screen-siege3d .sg-crosshair')).toBeVisible();
-  await touch('touchStart', [{ x: x + 60, y: y + 80 }]);
   for (let step = 1; step <= 5; step++) {
-    await touch('touchMove', [{ x: x + 60 - step * 6, y: y + 80 - step * 4 }]);
+    await touch('touchMove', [{ x: x + step * 8, y: y - step * 4 }]);
   }
   await touch('touchEnd', []);
+  const [turned, tilted] = await aim();
+  expect(turned).toBeCloseTo(yaw + 40 * feel.lookYawPerPx, 1);
+  expect(tilted).toBeCloseTo(Math.min(tilt + 20 * feel.lookTiltPerPx, ballista?.tilt.max ?? 0), 1);
+  await expect(page.locator('#screen-siege3d .sg-crosshair')).toBeVisible();
   const fire = page.getByRole('button', { name: 'Fire' });
   await expect(fire).toBeEnabled();
   await fire.tap();
@@ -96,6 +103,13 @@ test('Siege: tap the War tent, tap to aim, Fire, and the ballista shoots the war
   await expect(page.getByRole('button', { name: 'Back', exact: true })).toBeVisible();
   await expect(fire).toBeDisabled();
   await page.getByRole('button', { name: 'Back', exact: true }).tap();
+
+  // The ghost line of the last shot can be turned off, and stays off.
+  const ghost = page.getByRole('button', { name: 'Ghost line' });
+  await expect(ghost).toHaveAttribute('aria-pressed', 'true');
+  await ghost.tap();
+  await expect(ghost).toHaveAttribute('aria-pressed', 'false');
+  expect(await page.evaluate(() => localStorage.getItem('warchest.siege.ghost'))).toContain('off');
 
   // An aimed volley, out of the warchest.
   await expect(count).toHaveText(String(60 - volley));
@@ -111,7 +125,14 @@ test('Siege: tap the War tent, tap to aim, Fire, and the ballista shoots the war
     events: { type: string; data?: Record<string, unknown> }[];
   };
   const types = exported.events.map((event) => event.type);
-  for (const type of ['siege.start', 'siege.spot', 'siege.throw', 'siege.scout', 'siege.quit']) {
+  for (const type of [
+    'siege.start',
+    'siege.spot',
+    'siege.throw',
+    'siege.scout',
+    'siege.ghost',
+    'siege.quit',
+  ]) {
     expect(types).toContain(type);
   }
   const thrown = exported.events.find((event) => event.type === 'siege.throw');

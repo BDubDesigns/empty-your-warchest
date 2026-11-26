@@ -43,6 +43,12 @@ export class PhaserView implements ScreenView {
     });
   }
 
+  /** The camp's WebGL context, if Phaser draws with WebGL. */
+  glContext(): WebGLRenderingContext | WebGL2RenderingContext | undefined {
+    const renderer = this.#game.renderer as { gl?: WebGLRenderingContext | WebGL2RenderingContext };
+    return renderer.gl;
+  }
+
   showCamp(): void {
     const scenes = this.#game.scene;
     for (const key of [...STATION_SCENES, 'warchest']) {

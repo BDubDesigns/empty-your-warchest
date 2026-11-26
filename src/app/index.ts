@@ -8,6 +8,7 @@ import type { PhaserView } from './phaserView';
 import { Preloader, whenIdle } from './preloader';
 import { lazyScreen, type LazyScreen } from './screen';
 import { ScreenSwitcher } from './screenSwitcher';
+import { noteContext } from './trouble';
 import { mechanicFor, type ScreenId as StationScreenId } from '../stations/registry';
 
 type ScreenId = 'phaser' | 'three' | 'wood3d' | 'splitting3d' | 'firemaking3d' | 'siege3d';
@@ -75,6 +76,7 @@ export async function startApp(): Promise<void> {
         booted.choices.scenery,
         booted.choices.vibration,
         booted.choices.warTent,
+        booted.choices.siegeGhost,
         booted.choices.runnerSpears,
         booted.choices.runnerLift,
       ],
@@ -117,7 +119,14 @@ export async function startApp(): Promise<void> {
   });
   let phaser: PhaserView | undefined;
   const run = (action: () => Promise<void>) => () => {
-    action().catch(showFatal);
+    action().catch((error: unknown) => {
+      logger.log('app.error', {
+        message: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? (error.stack ?? '') : '',
+        screen: document.body.dataset.screen ?? 'none',
+      });
+      showFatal(error);
+    });
   };
 
   const screens: Record<ScreenId, LazyScreen> = {
@@ -132,6 +141,8 @@ export async function startApp(): Promise<void> {
         onChestTap: run(() => navigation.openWarchest()),
         onWarchestClose: run(() => navigation.back()),
       });
+      const gl = phaser.glContext();
+      if (gl) noteContext(gl);
       return phaser;
     }),
     wood3d: lazyScreen(
@@ -195,6 +206,7 @@ export async function startApp(): Promise<void> {
           game,
           logger,
           feel: feel.siege,
+          ghost: choices.siegeGhost,
           haptics,
           onLeave: run((): Promise<void> => navigation.back()),
         });

@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { releaseContext, restoreContext } from '../../app/trouble';
 import './runner.css';
 import type { Haptics } from '../../app/haptics';
 import type { ScreenView } from '../../app/screen';
@@ -226,6 +227,7 @@ export class RunnerView implements ScreenView {
   // ScreenView
 
   start(): void {
+    restoreContext(this.#renderer);
     this.#resize();
     this.#newRun(false);
     this.#timer.reset();
@@ -246,6 +248,7 @@ export class RunnerView implements ScreenView {
       this.#settleSpears(false);
     }
     this.#renderer.setAnimationLoop(null);
+    releaseContext(this.#renderer, this.#deps.logger, 'three');
   }
 
   // Runs

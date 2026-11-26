@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { releaseContext, restoreContext } from '../../../app/trouble';
 import { groundMesh, wornGround } from '../../../app/ground';
 import type { Haptics } from '../../../app/haptics';
 import { loadModel } from '../../../app/models';
@@ -7,8 +8,9 @@ import type { ScreenView } from '../../../app/screen';
 import { Sfx } from '../../../app/sfx';
 import { SkillBar, type XpDeposit } from '../../../app/skillBar';
 import { WarchestHud, type ScreenPoint } from '../../../app/warchestHud';
-import { Rng, type EventLogger, type Game, type LiveTuning } from '../../../core';
+import { Rng, type EventLogger, type Game, type LiveChoice, type LiveTuning } from '../../../core';
 import type { SiegeFeel, SiegeFort } from '../../../data';
+import type { GhostLine } from '../feel';
 import { loadPhysics, type Physics } from '../logic/physics';
 import {
   SiegeRound,
@@ -19,9 +21,8 @@ import {
 } from '../logic/round';
 import {
   aimDirection,
-  aimToward,
   aimedVolley,
-  muzzleAt,
+  clampAim,
   siegeWeapon,
   spearsShot,
   startAim,
@@ -37,6 +38,8 @@ export interface Siege3DDeps {
   game: Game;
   logger: EventLogger;
   feel: LiveTuning<SiegeFeel>;
+  /** Whether the last shot's path stays drawn, kept on this phone. */
+  ghost: LiveChoice<GhostLine>;
   haptics: Haptics;
   /** Leaves the station (the card's Back to camp). */
   onLeave: () => void;
@@ -63,11 +66,15 @@ const SOUNDS: Record<string, string> = {
 };
 /** Segments, at most, in the solid line along the last shot's path. */
 const GHOST_SEGMENTS = 120;
-/** A touch that moves less than this (px) is a tap: the crosshair jumps there. */
+/** A touch that moves less than this (px) is a tap (it skips the camera work), not a look. */
 const TAP_PX = 10;
-/** The crosshair's ring: its least size on screen (px), and how far out it's drawn when it hits nothing (m). */
+/** The crosshair's ring: its least size on screen (px). */
 const CROSSHAIR_PX = 30;
-const SKY_REACH = 60;
+/** How far ahead the sights look, and the bolt cam looks past its spear (m). */
+const LOOK_REACH = 50;
+const BOLT_LOOK = 8;
+/** The longest a bolt cam rides one spear (s), in case it never comes down. */
+const BOLT_MOST_SECONDS = 3;
 /** Most particles (dust, debris) alive at once, so a collapsing fort stays smooth. */
 const MAX_PUFFS = 160;
 const MAX_DEBRIS = 60;
@@ -79,18 +86,19 @@ const SNAP_SECONDS = 0.18;
 /** Real seconds the position's name shows when the ballista rolls on. */
 const TITLE_SECONDS = 2.4;
 /**
- * The sight: how far over the pivot and behind it the camera sits at a sight blend of 1 (metres),
- * and the share of the bolt's tilt it looks along.
+ * The camera's blends (0 to 1) at which the mantlet and crosshair hide (looking elsewhere), and the
+ * ballista shows (seen from outside, not from its own sights).
  */
-const SIGHT_RISE = 0.7;
-const SIGHT_BACK = 1.8;
-const SIGHT_TILT = 0.35;
+const SIGHT_SHOWS_UNDER = 0.15;
+const BALLISTA_SHOWS_OVER = 0.3;
 /** Weak posts get a red band; anything this wide or wider (a gate) shows by its wood instead (m). */
 const WEAK_BAND_UNDER = 0.5;
 /** How often the targets on screen are noted for the e2e tests and screenshots (s). */
 const TARGETS_SECONDS = 0.25;
 /** Least gap between two hit-stops (s), so a volley doesn't stutter. */
 const STOP_GAP = 0.25;
+/** The haze far off (m), pushed back as the camera rises to scout (so the fort stays clear). */
+const FOG = { near: 60, far: 150, scouting: 90 };
 /** The ground the fort stands on, and the trodden earth up the middle of it. */
 const FIELD = 180;
 const COLORS = {
@@ -103,7 +111,7 @@ const COLORS = {
   stone: 0x9b978d,
   wood: 0xc39a66,
   dust: 0xcdbb9c,
-  aimLine: 0xfff3a0,
+  mantlet: 0x7a5232,
   ghost: 0x7fe8ff,
   spot: 0xffffff,
   spotOn: 0xf0cd5c,
@@ -133,6 +141,18 @@ interface Debris {
   age: number;
 }
 
+/**
+ * The camera work after a shot: riding its middle spear (`bolt`, until `hitAt` and a moment
+ * after), or looking at what it brought down (`kill`: a guard, a collapse, the banner) for
+ * `seconds`.
+ */
+type Cine =
+  | { kind: 'bolt'; spear: number; at: number; hitAt: number | undefined; last?: THREE.Vector3 }
+  | { kind: 'kill'; target: KillTarget; at: number; seconds: number; away?: THREE.Vector3 };
+
+/** What a kill cam looks at: a guard, a block (the banner), or a point (a collapse). */
+type KillTarget = { guard: number } | { block: number } | { point: Vec3 };
+
 /** A finger on the scene: where it went down, where it was last, and whether it's dragging. */
 interface Touch {
   id: number;
@@ -143,12 +163,12 @@ interface Touch {
 }
 
 /**
- * The siege in 3D: the ballista at the bottom of the screen, the fort up the field, seen from
- * behind and above it (or, with the sight blend up, down the bolt itself). Tap anywhere and the
- * crosshair jumps there; drag to fine-tune it. The ballista points straight at it (a bright line
- * runs out along the bolt) and Fire shoots, Aimed or Barrage; the last shot's real path stays as a
- * solid line, so you learn the drop. Scout looks down on the whole fort. Tap a spot to move. Win a
- * position and it rolls on to the next. The rules (SiegeRound, a Rapier physics world) decide everything; this
+ * The siege in 3D, seen down the ballista's sights through the slit in a wooden mantlet: the
+ * crosshair in the middle of the screen is where the bolt points, and a drag turns the view and
+ * the weapon together. Fire shoots, Aimed or Barrage; the camera rides the middle spear, and a kill
+ * (or a collapse) gets a slow-motion look. The last shot's real path can stay as a solid line, so
+ * you learn the drop. Scout looks down on the whole fort. Tap a spot to move. Win a position and it
+ * rolls on to the next. The rules (SiegeRound, a Rapier physics world) decide everything; this
  * draws its bodies where it says and adds the juice: hit-stop, shake, dust, debris, sounds,
  * buzzes, the camera riding a spear, and slow motion as the banner falls.
  */
@@ -177,9 +197,12 @@ export class Siege3DView implements ScreenView {
   readonly #spearMaterials: { shaft: THREE.Material; tip: THREE.Material };
   readonly #ballista: BallistaLook;
   readonly #ghost: THREE.InstancedMesh;
-  readonly #aimLine: THREE.Mesh;
+  /** The wooden shield framing the view down the sights; it rides with the camera. */
+  readonly #mantlet: THREE.Group;
   readonly #raycaster = new THREE.Raycaster();
   readonly #puffTexture: THREE.Texture;
+  /** Geometry and materials every round uses, which freeing a round's meshes must leave alone. */
+  readonly #shared = new Set<object>();
   readonly #pose: Pose = { position: { x: 0, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0, w: 1 } };
   #round: SiegeRound | undefined;
   #fortId: string | undefined;
@@ -192,9 +215,6 @@ export class Siege3DView implements ScreenView {
   #puffs: Puff[] = [];
   #debris: Debris[] = [];
   #touch: Touch | undefined;
-  /** Where the crosshair is: on screen (px in the view), and the point in the scene it's on. */
-  #crosshair = { x: 0, y: 0 };
-  #aimPoint = new THREE.Vector3(0, 1.5, -10);
   /** Scouting: looking down on the whole fort (`on`), and how far the camera's got there. */
   #scout = { on: false, blend: 0 };
   /** The last shot's middle spear, and the path it's flown so far. */
@@ -204,12 +224,19 @@ export class Siege3DView implements ScreenView {
   #now = 0;
   #frozenUntil = 0;
   #lastStop = -Infinity;
-  #slowUntil = 0;
+  /** Slow motion: time runs at `factor` until `until`, easing back over its last third. */
+  #slow = { until: 0, seconds: 1, factor: 1 };
   #shake = 0;
   #shotAt = -Infinity;
-  /** What the camera rides for a moment: a spear in flight, or the falling banner. */
-  #follow: { kind: 'spear' | 'banner'; index: number; at: number; seconds: number } | undefined;
-  #followBlend = 0;
+  /** The camera work going on, how far the camera's gone over to it, and where it looks from. */
+  #cine: Cine | undefined;
+  #cineBlend = 0;
+  #cineOut = false;
+  #cinePose = { position: new THREE.Vector3(), look: new THREE.Vector3() };
+  /** Whether this shot has had its kill cam (only the first kill of a shot gets one). */
+  #killShown = false;
+  /** Blocks broken lately (real seconds, and where), to tell a big collapse. */
+  #breaks: { at: number; point: Vec3 }[] = [];
   /** The roll on to the next position: its name shows, and the camera lifts as it goes. */
   #title: { text: string; at: number } | undefined;
   #rolling = 0;
@@ -265,16 +292,19 @@ export class Siege3DView implements ScreenView {
       shaft: new THREE.MeshLambertMaterial({ color: COLORS.shaft }),
       tip: new THREE.MeshLambertMaterial({ color: COLORS.iron }),
     };
+    for (const shared of [
+      ...Object.values(this.#materials).flat(),
+      shaft,
+      tip,
+      this.#spearMaterials.shaft,
+      this.#spearMaterials.tip,
+    ]) {
+      this.#shared.add(shared);
+    }
     const weapon = siegeWeapon(rules);
     this.#ballista = buildBallista(weapon, () => this.#spearMesh());
-    // A bright line straight out along the bolt from its tip: where it's pointing, not where it
-    // lands.
-    this.#aimLine = new THREE.Mesh(
-      new THREE.BoxGeometry(0.05, 0.05, 1),
-      new THREE.MeshBasicMaterial({ color: COLORS.aimLine, transparent: true, opacity: 0.95 }),
-    );
-    this.#aimLine.position.y = 0.12;
-    this.#ballista.tilt.add(this.#aimLine);
+    this.#mantlet = this.#buildMantlet();
+    this.#camera.add(this.#mantlet);
     // The last shot's path: a solid tube of short segments, bright enough for daylight.
     const segment = new THREE.CylinderGeometry(0.5, 0.5, 1, 8, 1, true);
     segment.rotateX(Math.PI / 2);
@@ -302,6 +332,7 @@ export class Siege3DView implements ScreenView {
         game: deps.game,
         item: deps.game.data.siege.item,
         haptics: deps.haptics,
+        logger: deps.logger,
       }),
       loadModel(TREE_MODEL),
     ]);
@@ -316,6 +347,8 @@ export class Siege3DView implements ScreenView {
   // ScreenView
 
   start(): void {
+    restoreContext(this.#renderer);
+    this.#hud.wake();
     this.#resize();
     this.#startRound();
     this.#timer.reset();
@@ -327,11 +360,12 @@ export class Siege3DView implements ScreenView {
   stop(): void {
     this.#renderer.setAnimationLoop(null);
     this.#endRound();
-    this.#hud.settle();
+    this.#hud.sleep();
     this.#skillBar.settle();
     this.#bankedXp = undefined;
     delete document.body.dataset.siege;
     this.#lastPhase = '';
+    releaseContext(this.#renderer, this.#deps.logger, 'siege3d');
   }
 
   // Rounds
@@ -382,14 +416,15 @@ export class Siege3DView implements ScreenView {
     );
     this.#round = round;
     this.#aim = startAim(weapon);
-    this.#aimAhead();
     this.#scout = { on: false, blend: 0 };
     this.#buildFort(round);
     this.#showForts(open);
     this.#showSpots();
-    this.#slowUntil = this.#frozenUntil = 0;
-    this.#follow = undefined;
-    this.#followBlend = 0;
+    this.#slow.until = this.#frozenUntil = 0;
+    this.#cine = undefined;
+    this.#cineBlend = 0;
+    this.#cineOut = false;
+    this.#breaks = [];
     this.#title = undefined;
     this.#rolling = 0;
     this.#lastBallista = round.ballista();
@@ -403,9 +438,11 @@ export class Siege3DView implements ScreenView {
     round.quit();
     round.dispose();
     this.#round = undefined;
-    for (const look of this.#blocks) look.mesh.removeFromParent();
-    for (const look of this.#guards) look.root.removeFromParent();
-    for (const spear of this.#spears) spear.removeFromParent();
+    // Each round builds its fort, guards and spears afresh: free what they put on the graphics
+    // card, or every round leaves the last one's there.
+    for (const look of this.#blocks) this.#free(look.mesh);
+    for (const look of this.#guards) this.#free(look.root);
+    for (const spear of this.#spears) this.#free(spear);
     this.#blocks = [];
     this.#guards = [];
     this.#spears = [];
@@ -415,8 +452,7 @@ export class Siege3DView implements ScreenView {
       puff.material.dispose();
     }
     for (const piece of this.#debris) {
-      piece.mesh.removeFromParent();
-      piece.material.dispose();
+      this.#free(piece.mesh);
     }
     this.#puffs = [];
     this.#debris = [];
@@ -424,6 +460,22 @@ export class Siege3DView implements ScreenView {
     this.#trailSpear = undefined;
     this.#trailPoints = [];
     this.#ghost.count = 0;
+  }
+
+  /**
+   * Takes a mesh (and what's on it) out of the scene and frees its geometry and materials from the
+   * graphics card, all but the looks every round shares.
+   */
+  #free(root: THREE.Object3D): void {
+    root.removeFromParent();
+    root.traverse((child) => {
+      if (!(child instanceof THREE.Mesh)) return;
+      const mesh = child as THREE.Mesh;
+      if (!this.#shared.has(mesh.geometry)) mesh.geometry.dispose();
+      for (const material of [mesh.material].flat()) {
+        if (!this.#shared.has(material)) material.dispose();
+      }
+    });
   }
 
   /** The round is over: pay its Command XP and the spears it got back. */
@@ -448,16 +500,16 @@ export class Siege3DView implements ScreenView {
 
   #buildWorld(tree: THREE.Object3D): void {
     this.#scene.background = new THREE.Color(COLORS.sky);
-    this.#scene.fog = new THREE.Fog(COLORS.sky, 60, 150);
+    this.#scene.fog = new THREE.Fog(COLORS.sky, FOG.near, FOG.far);
     this.#scene.add(new THREE.HemisphereLight(0xeef4ff, 0x4a5a32, 1.35));
     const sun = this.#sun;
     sun.castShadow = true;
     sun.shadow.mapSize.set(1024, 1024);
     const shadow = sun.shadow.camera;
-    shadow.left = -14;
-    shadow.right = 14;
-    shadow.top = 20;
-    shadow.bottom = -20;
+    shadow.left = -20;
+    shadow.right = 20;
+    shadow.top = 30;
+    shadow.bottom = -30;
     shadow.near = 1;
     shadow.far = 70;
     sun.shadow.bias = -0.0005;
@@ -466,8 +518,8 @@ export class Siege3DView implements ScreenView {
     ground.position.z = -FIELD / 4;
     this.#scene.add(ground);
     // Trodden earth up the middle, where the ballista rolls and the fighting is.
-    const trodden = wornGround('troddenDirt', 16, 64, { cover: 0.55, round: true, seed: 8 });
-    trodden.position.z = -26;
+    const trodden = wornGround('troddenDirt', 32, 96, { cover: 0.55, round: true, seed: 8 });
+    trodden.position.z = -40;
     this.#scene.add(trodden);
     this.#scene.add(this.#trees(tree));
     this.#scene.add(
@@ -477,6 +529,8 @@ export class Siege3DView implements ScreenView {
       this.#spotGroup,
       this.#ballista.root,
       this.#ghost,
+      // The camera carries the mantlet, so it's in the scene.
+      this.#camera,
     );
   }
 
@@ -485,10 +539,10 @@ export class Siege3DView implements ScreenView {
     const rng = new Rng(11);
     const placements: Placement[] = [];
     while (placements.length < 44) {
-      const x = rng.range(-42, 42);
-      const z = rng.range(-95, 4);
+      const x = rng.range(-50, 50);
+      const z = rng.range(-115, 6);
       // Clear of the field the ballista rolls up, and of the fort either side of it.
-      if (Math.abs(x) < 10 && z > -62) continue;
+      if (Math.abs(x) < 19 && z > -90) continue;
       placements.push({ x, z, height: rng.range(5, 9), turn: rng.range(0, Math.PI * 2) });
     }
     const trees = scatter(tree, placements);
@@ -551,7 +605,7 @@ export class Siege3DView implements ScreenView {
   /** Rings on the ground at the position's spots, the ballista's own lit. */
   #showSpots(): void {
     const round = this.#round;
-    for (const child of [...this.#spotGroup.children]) child.removeFromParent();
+    for (const child of [...this.#spotGroup.children]) this.#free(child);
     if (!round) return;
     const spots = round.currentPosition.spots;
     spots.forEach(([x, z], index) => {
@@ -608,13 +662,17 @@ export class Siege3DView implements ScreenView {
       case 'throw': {
         this.#deps.haptics.pulse(event.mode === 'barrage' ? feel.buzzBarrageMs : feel.buzzThrowMs);
         this.#play('release', 0.5, event.mode === 'barrage' ? -300 : 0);
-        this.#follow = undefined;
         this.#shotAt = this.#now;
-        // The trail follows this shot's middle spear (of its first volley) as it flies.
+        // The trail follows this shot's middle spear (of its first volley) as it flies, and so
+        // does the camera.
         const first = this.#spears.length;
         this.#trailSpear = first + Math.floor((Math.min(event.spears, round.aimed) - 1) / 2);
         this.#trailPoints = [];
         this.#ghost.count = 0;
+        this.#endSlow();
+        this.#cine = { kind: 'bolt', spear: this.#trailSpear, at: this.#now, hitAt: undefined };
+        this.#cineOut = false;
+        this.#killShown = false;
         break;
       }
       case 'launch': {
@@ -622,12 +680,6 @@ export class Siege3DView implements ScreenView {
         this.#spearGroup.add(spear);
         this.#spears[event.spear] = spear;
         this.#play('whoosh', 0.16, (Math.random() - 0.5) * 300);
-        this.#follow ??= {
-          kind: 'spear',
-          index: this.#trailSpear ?? event.spear,
-          at: this.#now,
-          seconds: feel.followSeconds,
-        };
         break;
       }
       case 'hit': {
@@ -668,18 +720,45 @@ export class Siege3DView implements ScreenView {
         }
         break;
       }
-      case 'break':
+      case 'break': {
         this.#breakBlock(event.block, event.kind, event.at);
+        // Many blocks at once is a collapse worth watching.
+        this.#breaks = this.#breaks.filter(
+          (entry) => this.#now - entry.at <= feel.collapseWindowSeconds,
+        );
+        this.#breaks.push({ at: this.#now, point: event.at });
+        if (!this.#killShown && this.#breaks.length >= feel.collapseBlocks) {
+          const count = this.#breaks.length;
+          const middle = this.#breaks.reduce(
+            (sum, entry) => ({
+              x: sum.x + entry.point.x / count,
+              y: sum.y + entry.point.y / count,
+              z: sum.z + entry.point.z / count,
+            }),
+            { x: 0, y: 0, z: 0 },
+          );
+          this.#killCam({ point: middle }, feel.killCamSeconds, feel.killCamSlowMo);
+        }
         break;
+      }
       case 'guardDown': {
         const look = this.#guards[event.guard];
         if (look && !look.down) {
           look.down = true;
           greyGuard(look);
         }
-        this.#play('thud-2', 0.45, -200);
-        this.#deps.haptics.pulse(feel.buzzGuardMs);
         this.#dust(event.at, Math.ceil(feel.dust * 0.6), 0.6);
+        if (!this.#killShown) {
+          // The shot's first kill: watched, slowed down, felt. Any more in the same shot are
+          // quick, so rapid play isn't held up.
+          this.#play('thud-2', 0.8, -500);
+          this.#play('break-wood', 0.35, 300);
+          this.#deps.haptics.pulse(feel.buzzKillMs);
+          this.#killCam({ guard: event.guard }, feel.killCamSeconds, feel.killCamSlowMo);
+        } else {
+          this.#play('thud-2', 0.45, -200);
+          this.#deps.haptics.pulse(feel.buzzGuardMs);
+        }
         break;
       }
       case 'spot':
@@ -701,18 +780,16 @@ export class Siege3DView implements ScreenView {
       }
       case 'arrived':
         this.#showSpots();
-        this.#aimAhead();
+        this.#aim = startAim(round.weapon);
         this.#play('thud-3', 0.4, -700);
         break;
       case 'bannerFalling':
-        this.#slowUntil = this.#now + feel.slowMoSeconds;
-        // The camera leans in on the banner as it goes.
-        this.#follow = {
-          kind: 'banner',
-          index: round.bannerIndex,
-          at: this.#now,
-          seconds: feel.slowMoSeconds,
-        };
+        // The camera watches the keep come down, slowly: the keep as it stood, so it's framed.
+        this.#killCam(
+          { point: this.#pieceMiddle(round.bannerIndex) },
+          feel.slowMoSeconds,
+          feel.slowMo,
+        );
         this.#deps.haptics.rumble(feel.buzzBannerMs, 3);
         this.#play('creak', 0.6, -200);
         break;
@@ -779,6 +856,33 @@ export class Siege3DView implements ScreenView {
     this.#frozenUntil = Math.max(this.#frozenUntil, this.#now + ms / 1000);
   }
 
+  /**
+   * A kill cam: a freeze, then slow motion for `seconds` while the camera looks at `target`.
+   * Once a shot, unless it's the banner.
+   */
+  #killCam(target: KillTarget, seconds: number, slowMo: number): void {
+    const feel = this.#deps.feel.values;
+    this.#killShown = true;
+    this.#cine = { kind: 'kill', target, at: this.#now, seconds };
+    this.#cineOut = false;
+    this.#frozenUntil = Math.max(this.#frozenUntil, this.#now + feel.killCamStopMs / 1000);
+    this.#lastStop = this.#now;
+    this.#slow = { until: this.#now + seconds, seconds, factor: slowMo };
+  }
+
+  /** Back to full speed at once (a skip, or the next shot). */
+  #endSlow(): void {
+    this.#slow.until = this.#now;
+    this.#frozenUntil = Math.min(this.#frozenUntil, this.#now);
+  }
+
+  /** A tap (or the next shot) during camera work: back to the sights, and to full speed. */
+  #skipCine(): void {
+    if (!this.#cine || this.#cineOut) return;
+    this.#cineOut = true;
+    this.#endSlow();
+  }
+
   #dust(at: Vec3, count: number, size: number): void {
     for (let index = 0; index < count && this.#puffs.length < MAX_PUFFS; index++) {
       const material = new THREE.SpriteMaterial({
@@ -818,13 +922,13 @@ export class Siege3DView implements ScreenView {
     this.#timer.update(time);
     const realDt = Math.min(this.#timer.getDelta(), 0.05);
     this.#now += realDt;
-    const feel = this.#deps.feel.values;
     const frozen = this.#now < this.#frozenUntil;
-    // Slow motion as the banner falls, easing back to full speed over its last third.
-    const slowLeft = this.#slowUntil - this.#now;
-    const slowShare = feel.slowMoSeconds > 0 ? slowLeft / feel.slowMoSeconds : 0;
+    // Slow motion (a kill, a collapse, the banner), easing back to full speed over its last third.
+    const slow = this.#slow;
+    const slowLeft = slow.until - this.#now;
+    const slowShare = slow.seconds > 0 ? slowLeft / slow.seconds : 0;
     const scale =
-      slowLeft > 0 ? feel.slowMo + (1 - feel.slowMo) * Math.max(0, 1 - slowShare * 3) : 1;
+      slowLeft > 0 ? slow.factor + (1 - slow.factor) * Math.max(0, 1 - slowShare * 3) : 1;
     const dt = frozen ? 0 : realDt * scale;
     const round = this.#round;
     round?.advance(dt);
@@ -840,8 +944,14 @@ export class Siege3DView implements ScreenView {
     this.#updateFlag(time / 1000);
     this.#updateUi();
     this.#updateCamera(realDt);
-    this.#sun.position.set(this.#lastBallista.x - 8, 16, this.#lastBallista.z + 4);
-    this.#sun.target.position.set(this.#lastBallista.x, 0, this.#lastBallista.z - 12);
+    // The sun's shadows cover the field ahead of the weapon, where it's looking.
+    const ahead = aimDirection(this.#aim);
+    const middle = {
+      x: this.#lastBallista.x + ahead.x * 18,
+      z: this.#lastBallista.z + ahead.z * 18,
+    };
+    this.#sun.position.set(middle.x - 8, 16, middle.z + 16);
+    this.#sun.target.position.set(middle.x, 0, middle.z);
     this.#renderer.render(this.#scene, this.#camera);
   }
 
@@ -927,8 +1037,10 @@ export class Siege3DView implements ScreenView {
     const rolling = round.phase === 'advance' ? 1 : 0;
     this.#rolling += (rolling - this.#rolling) * Math.min(1, dt * 2);
     const aim = this.#aim;
-    look.turn.rotation.y += (-aim.yaw - look.turn.rotation.y) * Math.min(1, dt * 18);
-    look.tilt.rotation.x += (aim.tilt - look.tilt.rotation.x) * Math.min(1, dt * 18);
+    look.turn.rotation.y = -aim.yaw;
+    look.tilt.rotation.x = aim.tilt;
+    // From its own sights it's all around the eye: it shows only from outside.
+    look.root.visible = Math.max(this.#cineBlend, this.#scout.blend) > BALLISTA_SHOWS_OVER;
     // Loaded: the bolt in the groove, the arms swept back. Just shot: they snap forward.
     const since = this.#now - this.#shotAt;
     look.bolt.visible = round.canThrow || (!round.reloading && since > SNAP_SECONDS);
@@ -939,75 +1051,74 @@ export class Siege3DView implements ScreenView {
   }
 
   /**
-   * The aim: the weapon points straight at the crosshair's point; the aim line runs out along the
-   * bolt; the crosshair sits on the point, as wide as the shot's spread (a barrage's far wider).
+   * The aim, down the sights: the crosshair sits in the middle of the screen, where the bolt
+   * points, as wide as the shot's spread (a barrage's far wider). The mantlet frames it. The last
+   * shot's path shows if it's turned on.
    */
   #drawAim(): void {
     const round = this.#round;
     const ui = this.#ui;
     const feel = this.#deps.feel.values;
+    // Not while riding the spear that's drawing it: from just behind, it'd fill the screen.
+    this.#ghost.visible = this.#deps.ghost.value === 'on' && this.#cine?.kind !== 'bolt';
+    const sighting = Math.max(this.#cineBlend, this.#scout.blend) < SIGHT_SHOWS_UNDER;
+    this.#mantlet.visible = sighting;
     const showing =
-      round !== undefined && round.phase === 'aim' && ui.card.hidden && !this.#scout.on;
-    this.#aimLine.visible = showing && feel.aimLineLength > 0;
-    const weapon = siegeWeapon(this.#deps.game.data.siege);
-    this.#aimLine.scale.z = Math.max(feel.aimLineLength, 0.01);
-    this.#aimLine.position.z = -weapon.muzzle - feel.aimLineLength / 2;
-    if (!round) return;
-    this.#aim = aimToward(round.ballista(), this.#aimPoint, weapon, feel);
-    // Where the aimed point is on screen, and how wide the spread is there.
-    const { clientWidth: width, clientHeight: height } = this.#element;
-    const point = this.#aimPoint.clone().project(this.#camera);
-    const visible = showing && point.z < 1 && Math.abs(point.x) <= 1.2 && Math.abs(point.y) <= 1.2;
-    ui.crosshair.hidden = !visible;
-    if (!visible) return;
-    const x = ((point.x + 1) / 2) * width;
-    const y = ((1 - point.y) / 2) * height;
-    this.#crosshair = { x, y };
-    const muzzle = muzzleAt(round.ballista(), this.#aim, weapon);
-    const reach = this.#aimPoint.distanceTo(new THREE.Vector3(muzzle.x, muzzle.y, muzzle.z));
+      round !== undefined && round.phase === 'aim' && ui.card.hidden && !this.#scout.on && sighting;
+    ui.crosshair.hidden = !showing;
+    if (!showing) return;
     const spread = (this.#mode === 'barrage' ? feel.barrageSpread : feel.aimedSpread) * DEG;
-    const side = new THREE.Vector3(Math.cos(this.#aim.yaw), 0, Math.sin(this.#aim.yaw))
-      .multiplyScalar(Math.tan(spread) * reach)
-      .add(this.#aimPoint)
-      .project(this.#camera);
-    const radius = Math.max(Math.abs(((side.x + 1) / 2) * width - x), CROSSHAIR_PX / 2);
-    ui.crosshair.style.transform = `translate(${String(x - radius)}px, ${String(y - radius)}px)`;
+    const half = Math.tan((this.#camera.fov * DEG) / 2);
+    const radius = Math.max(
+      (Math.tan(spread) / half) * (this.#element.clientHeight / 2),
+      CROSSHAIR_PX / 2,
+    );
     ui.crosshair.style.width = ui.crosshair.style.height = `${String(radius * 2)}px`;
     ui.crosshair.dataset.mode = this.#mode;
   }
 
-  /** Puts the crosshair straight ahead of the weapon, on the fort (a new round or position). */
-  #aimAhead(): void {
-    const at = this.#round?.ballista() ?? { x: 0, z: 0 };
-    this.#aimPoint.set(at.x, 1.5, at.z - 11);
-  }
-
-  /** The raycaster's nearest hit on the fort that's still standing (broken blocks only hide). */
-  #standingHit(far = Infinity): THREE.Intersection | undefined {
-    this.#raycaster.far = far;
-    const hits = this.#raycaster.intersectObjects(this.#fortGroup.children, true);
-    this.#raycaster.far = Infinity;
-    return hits.find((hit) => {
-      for (let node: THREE.Object3D | null = hit.object; node; node = node.parent) {
-        if (!node.visible) return false;
-      }
-      return true;
+  /**
+   * The mantlet: a wooden shield of planks with a sight slit through the middle, just in front of
+   * the eye, sized from the data. It frames the view; the slit leaves the crosshair clear.
+   */
+  #buildMantlet(): THREE.Group {
+    const { distance, width, height, thickness, slitWidth, slitHeight } =
+      this.#deps.game.data.siege.mantlet;
+    const group = new THREE.Group();
+    const material = new THREE.MeshBasicMaterial({
+      map: this.#textures.wood[0] ?? null,
+      color: COLORS.mantlet,
     });
+    const board = (w: number, h: number, x: number, y: number) => {
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, thickness), material);
+      mesh.position.set(x, y, -distance);
+      group.add(mesh);
+    };
+    const above = (height - slitHeight) / 2;
+    const beside = (width - slitWidth) / 2;
+    // Above and below the slit, full width; either side of it, the slit's height.
+    board(width, above, 0, slitHeight / 2 + above / 2);
+    board(width, above, 0, -slitHeight / 2 - above / 2);
+    board(beside, slitHeight, -slitWidth / 2 - beside / 2, 0);
+    board(beside, slitHeight, slitWidth / 2 + beside / 2, 0);
+    // Drawn over everything, as it's nearer than anything else.
+    group.traverse((child) => {
+      child.renderOrder = 10;
+    });
+    material.depthTest = false;
+    return group;
   }
 
-  /** The point in the scene under a screen point (px in the view): a block, a guard, the ground. */
-  #pick(x: number, y: number): THREE.Vector3 {
-    const { clientWidth: width, clientHeight: height } = this.#element;
-    const ndc = new THREE.Vector2((x / width) * 2 - 1, -(y / height) * 2 + 1);
-    this.#raycaster.setFromCamera(ndc, this.#camera);
-    const hit = this.#standingHit();
-    if (hit) return hit.point.clone();
-    const ground = this.#raycaster.ray.intersectPlane(
-      new THREE.Plane(new THREE.Vector3(0, 1, 0), 0),
-      new THREE.Vector3(),
-    );
-    if (ground && ground.distanceTo(this.#camera.position) < SKY_REACH) return ground;
-    return this.#raycaster.ray.at(SKY_REACH, new THREE.Vector3());
+  /**
+   * The raycaster's nearest hit on a block of the fort that's still standing (broken blocks only
+   * hide), within `far`: what a camera mustn't end up inside. Guards don't count.
+   */
+  #wallHit(far = Infinity): THREE.Intersection | undefined {
+    this.#raycaster.far = far;
+    const standing = this.#blocks.filter((look) => !look.gone).map((look) => look.mesh);
+    const [hit] = this.#raycaster.intersectObjects(standing, true);
+    this.#raycaster.far = Infinity;
+    return hit;
   }
 
   #updateEffects(dt: number): void {
@@ -1069,55 +1180,27 @@ export class Siege3DView implements ScreenView {
   // Camera
 
   /**
-   * Behind and above the ballista, looking up the field (sight blend 0), or at its sight looking
-   * down the bolt (1), anywhere between. It lifts a little as the ballista rolls on, and rides a
-   * spear (or the falling banner) for a moment.
+   * Down the sights: the eye on the bolt's line, `sightBack` behind the pivot, looking along it,
+   * so the crosshair in the middle of the screen is exactly where the bolt points. From there, the
+   * camera work after a shot (riding its middle spear, then looking at a kill or a collapse) and
+   * scouting (up over the whole fort) blend in, and ease back.
    */
   #updateCamera(dt: number): void {
     const feel = this.#deps.feel.values;
-    const rules = this.#deps.game.data.siege;
+    const weapon = siegeWeapon(this.#deps.game.data.siege);
     const at = this.#lastBallista;
-    const lift = 1 + this.#rolling * 0.25;
-    // Behind it, turned part of the way with its aim.
-    const turn = this.#aim.yaw * feel.cameraTurn;
-    const back = feel.cameraBack * lift;
-    const behind = new THREE.Vector3(
-      at.x - Math.sin(turn) * back,
-      feel.cameraHeight * lift,
-      at.z + Math.cos(turn) * back,
-    );
-    // A wall between the ballista and the camera (inside the fort, just through a gate) would
-    // fill the screen: pull the camera in, along the same line, to just short of it.
-    const pivotAt = new THREE.Vector3(at.x, siegeWeapon(rules).pivotHeight, at.z);
-    const toCamera = behind.clone().sub(pivotAt);
-    const reach = toCamera.length();
-    this.#raycaster.set(pivotAt, toCamera.normalize());
-    const wall = this.#standingHit(reach);
-    if (wall)
-      behind
-        .copy(pivotAt)
-        .addScaledVector(toCamera, Math.max(wall.distance - feel.cameraClearance, 0));
-    const behindLook = new THREE.Vector3(
-      at.x + Math.sin(turn) * feel.cameraLookAhead,
-      feel.cameraLookHeight,
-      at.z - Math.cos(turn) * feel.cameraLookAhead,
-    );
     const way = aimDirection(this.#aim);
-    const pivot = new THREE.Vector3(at.x, siegeWeapon(rules).pivotHeight, at.z);
     const forward = new THREE.Vector3(way.x, way.y, way.z);
-    // Over the back of the stock, sighting along the bolt; it looks a little under the bolt's
-    // tilt, so a lob still shows what it's aimed at rather than the sky.
-    const sight = pivot
-      .clone()
-      .add(new THREE.Vector3(0, SIGHT_RISE, 0))
-      .addScaledVector(forward, -SIGHT_BACK);
-    const level = aimDirection({ yaw: this.#aim.yaw, tilt: this.#aim.tilt * SIGHT_TILT });
-    const sightLook = pivot
-      .clone()
-      .addScaledVector(new THREE.Vector3(level.x, level.y, level.z), 30);
-    const blend = feel.sightBlend;
-    const home = behind.lerp(sight, blend);
-    const look = behindLook.lerp(sightLook, blend);
+    const pivot = new THREE.Vector3(at.x, weapon.pivotHeight, at.z);
+    const home = pivot.clone().addScaledVector(forward, -feel.sightBack);
+    const look = pivot.clone().addScaledVector(forward, LOOK_REACH);
+    this.#updateCine(dt, home, look);
+    const eased = (share: number) => share * share * (3 - 2 * share);
+    if (this.#cineBlend > 0) {
+      const share = eased(this.#cineBlend);
+      home.lerp(this.#cinePose.position, share);
+      look.lerp(this.#cinePose.look, share);
+    }
     // Scouting: up over the whole fort, looking down on it.
     const scoutWant = this.#scout.on ? 1 : 0;
     const scoutRate = dt / Math.max(feel.scoutSeconds, 0.05);
@@ -1127,27 +1210,13 @@ export class Siege3DView implements ScreenView {
     if (this.#scout.blend > 0) {
       const middle = this.#fortMiddle();
       const above = new THREE.Vector3(middle.x, feel.scoutHeight, middle.z + feel.scoutBack);
-      const eased = this.#scout.blend * this.#scout.blend * (3 - 2 * this.#scout.blend);
-      home.lerp(above, eased);
-      look.lerp(middle, eased);
+      const share = eased(this.#scout.blend);
+      home.lerp(above, share);
+      look.lerp(middle, share);
     }
-    // Riding a spear (or the falling banner): toward it for a while, then easing back.
-    const follow = this.#follow;
-    const round = this.#round;
-    let want = 0;
-    if (follow && round && this.#now - follow.at < follow.seconds) want = feel.follow;
-    const rate = want > this.#followBlend ? 4 : 1 / Math.max(feel.followReturnSeconds, 0.05);
-    this.#followBlend += (want - this.#followBlend) * Math.min(1, dt * rate * 2);
-    const tracked =
-      follow?.kind === 'spear' ? this.#spears[follow.index] : this.#blocks[follow?.index ?? -1];
-    if (follow && round && tracked) {
-      if (follow.kind === 'spear') round.spearPose(follow.index, this.#pose);
-      else round.blockPose(follow.index, this.#pose);
-      const { x, y, z } = this.#pose.position;
-      look.lerp(new THREE.Vector3(x, y, z), this.#followBlend);
-      // A push in along the field after it, at the same height, so the ballista stays in view.
-      home.x += (x - home.x) * this.#followBlend * 0.3;
-      home.z += (z - home.z) * this.#followBlend * 0.3;
+    if (this.#scene.fog instanceof THREE.Fog) {
+      this.#scene.fog.near = FOG.near + FOG.scouting * this.#scout.blend;
+      this.#scene.fog.far = FOG.far + FOG.scouting * this.#scout.blend;
     }
     this.#shake *= Math.exp(-9 * dt);
     this.#camera.position.copy(home);
@@ -1159,6 +1228,156 @@ export class Siege3DView implements ScreenView {
       );
     }
     this.#camera.lookAt(look);
+    if (this.#camera.fov !== feel.sightFov) {
+      this.#camera.fov = feel.sightFov;
+      this.#camera.updateProjectionMatrix();
+    }
+  }
+
+  /**
+   * The camera work: where it would put the camera now (`#cinePose`), and how far over to it the
+   * camera has gone. It goes over fast, and eases back once it's done (or skipped). `sight` and
+   * `sightLook` are the view down the sights, where a spear not yet out starts from.
+   */
+  #updateCine(dt: number, sight: THREE.Vector3, sightLook: THREE.Vector3): void {
+    const feel = this.#deps.feel.values;
+    const cine = this.#cine;
+    const round = this.#round;
+    if (!cine || !round) {
+      this.#cine = undefined;
+      this.#cineBlend = 0;
+      return;
+    }
+    const pose = this.#cinePose;
+    const age = this.#now - cine.at;
+    if (!this.#cineOut) {
+      if (cine.kind === 'bolt') {
+        const spear = round.spears[cine.spear];
+        const flying = spear?.flying === true;
+        if (spear && this.#spears[cine.spear]) {
+          round.spearPose(cine.spear, this.#pose);
+          const { x, y, z } = this.#pose.position;
+          const now = new THREE.Vector3(x, y, z);
+          if (flying) {
+            // Behind it and a little above, looking on past it along its flight.
+            const travel = cine.last ? now.clone().sub(cine.last) : new THREE.Vector3();
+            const heading =
+              travel.lengthSq() > 1e-8
+                ? travel.normalize()
+                : sightLook.clone().sub(sight).normalize();
+            pose.position
+              .copy(now)
+              .addScaledVector(heading, -feel.boltCamBack)
+              .add(new THREE.Vector3(0, feel.boltCamRise, 0));
+            pose.look.copy(now).addScaledVector(heading, BOLT_LOOK);
+            cine.last = now;
+          } else {
+            // It's hit: hold there a moment, looking at where it struck.
+            cine.hitAt ??= this.#now;
+            pose.look.lerp(now, Math.min(1, dt * 6));
+          }
+        } else {
+          pose.position.copy(sight);
+          pose.look.copy(sightLook);
+        }
+        const done =
+          (cine.hitAt !== undefined && this.#now - cine.hitAt >= feel.boltCamHoldSeconds) ||
+          age >= BOLT_MOST_SECONDS;
+        if (done) this.#cineOut = true;
+      } else {
+        const target = this.#killPoint(cine.target);
+        const share = cine.seconds > 0 ? Math.min(age / cine.seconds, 1) : 1;
+        // A guard close up; a collapse (a point) from further off, to see all of it.
+        const off = 'point' in cine.target ? feel.collapseCamDistance : feel.killCamDistance;
+        const distance = off * (1.25 - 0.25 * share);
+        // Which way it looks from, picked once: off to the side and up if that's clear, else back
+        // along the shot (clear, or the shot couldn't have got there), else from above.
+        cine.away ??= this.#killView(target, distance);
+        // Not inside a wall: short of whatever stands between it and a guard. (A collapse is
+        // looked at from where it was clear: what flies about in it would only jerk the camera.)
+        this.#raycaster.set(target, cine.away);
+        const wall = 'guard' in cine.target ? this.#wallHit(distance) : undefined;
+        pose.position
+          .copy(target)
+          .addScaledVector(
+            cine.away,
+            wall ? Math.max(wall.distance - feel.cameraClearance, 0.5) : distance,
+          );
+        pose.look.copy(target);
+        if (age >= cine.seconds) this.#cineOut = true;
+      }
+      // In fast: the shot's barely left, the kill's already falling.
+      this.#cineBlend = Math.min(1, this.#cineBlend + dt / Math.max(feel.boltCamInSeconds, 0.01));
+      return;
+    }
+    // Easing back to the sights from where it was.
+    this.#cineBlend -= dt / Math.max(feel.boltCamReturnSeconds, 0.05);
+    if (this.#cineBlend <= 0) {
+      this.#cineBlend = 0;
+      this.#cine = undefined;
+      this.#cineOut = false;
+    }
+  }
+
+  /** The way a kill cam looks at `target` from (a unit vector from it), `distance` off. */
+  #killView(target: THREE.Vector3, distance: number): THREE.Vector3 {
+    const feel = this.#deps.feel.values;
+    const at = this.#lastBallista;
+    const from = new THREE.Vector3(target.x - at.x, 0, target.z - at.z);
+    if (from.lengthSq() < 1e-6) from.set(0, 0, -1);
+    from.normalize();
+    const side = new THREE.Vector3(-from.z, 0, from.x);
+    const up = new THREE.Vector3(0, 1, 0);
+    // The view down the sights: the shot's line back from the target, clear or it'd not be hit.
+    const weapon = siegeWeapon(this.#deps.game.data.siege);
+    const way = aimDirection(this.#aim);
+    const eye = new THREE.Vector3(
+      at.x - way.x * feel.sightBack,
+      weapon.pivotHeight - way.y * feel.sightBack,
+      at.z - way.z * feel.sightBack,
+    );
+    const choices = [
+      from
+        .clone()
+        .negate()
+        .addScaledVector(side, 0.45)
+        .addScaledVector(up, feel.killCamRise / distance),
+      eye.clone().sub(target).normalize().addScaledVector(up, 0.15),
+      from.clone().multiplyScalar(-0.5).add(up),
+    ].map((way) => way.normalize());
+    const clear = choices.find((way) => {
+      this.#raycaster.set(target, way);
+      return !this.#wallHit(distance);
+    });
+    return clear ?? choices[1] ?? up;
+  }
+
+  /** The middle of the piece block `index` is part of, as the fort was built (the keep, say). */
+  #pieceMiddle(index: number): Vec3 {
+    const blocks = this.#round?.fort.blocks ?? [];
+    const piece = blocks[index]?.piece;
+    const parts = blocks.filter((block) => block.piece === piece);
+    const middle = { x: 0, y: 0, z: 0 };
+    for (const block of parts) {
+      middle.x += block.at[0] / parts.length;
+      middle.y += block.at[1] / parts.length;
+      middle.z += block.at[2] / parts.length;
+    }
+    return middle;
+  }
+
+  /** Where a kill cam's target is now: a guard's chest, a block, a point. */
+  #killPoint(target: KillTarget): THREE.Vector3 {
+    const round = this.#round;
+    if (round && 'guard' in target) {
+      round.guardPose(target.guard, this.#pose);
+    } else if (round && 'block' in target) {
+      round.blockPose(target.block, this.#pose);
+    } else if ('point' in target) {
+      return new THREE.Vector3(target.point.x, target.point.y, target.point.z);
+    }
+    const { x, y, z } = this.#pose.position;
+    return new THREE.Vector3(x, y, z);
   }
 
   /** The middle of the fort on the ground: what scouting looks down on. */
@@ -1205,31 +1424,30 @@ export class Siege3DView implements ScreenView {
         Math.hypot(event.clientX - touch.x, event.clientY - touch.y) > TAP_PX
       ) {
         touch.dragging = true;
+        // Looking around ends any camera work: you're aiming again.
+        this.#skipCine();
       }
       if (!touch.dragging) return;
-      // A drag moves the crosshair (slower than the finger, so the thumb's not on the target).
-      const speed = this.#deps.feel.values.crosshairSpeed;
-      const { clientWidth: width, clientHeight: height } = this.#element;
-      const x = Math.min(
-        Math.max(this.#crosshair.x + (event.clientX - touch.last.x) * speed, 0),
-        width,
-      );
-      const y = Math.min(
-        Math.max(this.#crosshair.y + (event.clientY - touch.last.y) * speed, 0),
-        height,
+      // A drag turns the view, and the weapon with it: right to turn right, up to look up. It
+      // stops at the weapon's limits, so the crosshair never points where the bolt can't go.
+      const feel = this.#deps.feel.values;
+      const weapon = siegeWeapon(this.#deps.game.data.siege);
+      this.#aim = clampAim(
+        {
+          yaw: this.#aim.yaw + (event.clientX - touch.last.x) * feel.lookYawPerPx * DEG,
+          tilt: this.#aim.tilt - (event.clientY - touch.last.y) * feel.lookTiltPerPx * DEG,
+        },
+        weapon,
+        feel,
       );
       touch.last = { x: event.clientX, y: event.clientY };
-      this.#crosshair = { x, y };
-      this.#aimPoint = this.#pick(x, y);
     });
     const end = (event: PointerEvent) => {
       const touch = this.#touch;
       if (!touch || touch.id !== event.pointerId) return;
       this.#touch = undefined;
-      if (touch.dragging) return;
-      // A tap: the crosshair jumps to it.
-      const rect = this.#element.getBoundingClientRect();
-      this.#aimPoint = this.#pick(event.clientX - rect.left, event.clientY - rect.top);
+      // A tap: back to the sights early.
+      if (!touch.dragging) this.#skipCine();
     };
     canvas.addEventListener('pointerup', end);
     canvas.addEventListener('pointercancel', (event) => {
@@ -1240,6 +1458,7 @@ export class Siege3DView implements ScreenView {
   /** Fire: the weapon shoots at the crosshair, if it can. */
   #fire(): void {
     if (this.#scout.on) return;
+    this.#skipCine();
     if (this.#round?.throw(this.#mode, this.#aim)) this.#ui.picker.hidden = true;
   }
 
@@ -1307,6 +1526,12 @@ export class Siege3DView implements ScreenView {
       modes.append(element);
       return { mode, element, cost };
     });
+    // The last shot's path, on or off (kept on this phone).
+    const ghost = button('Ghost line', 'sg-ghost', () => {
+      this.#deps.ghost.set(this.#deps.ghost.value === 'on' ? 'off' : 'on');
+      this.#deps.logger.log('siege.ghost', { on: this.#deps.ghost.value === 'on' });
+    });
+    spots.append(ghost);
     controls.append(spots, modes);
     // Fire, big, and Scout, beside the shot buttons.
     const fire = button('Fire', 'sg-fire', () => {
@@ -1353,6 +1578,7 @@ export class Siege3DView implements ScreenView {
       modeButtons,
       fire,
       scout,
+      ghost,
       crosshair,
       card,
       cardStars,
@@ -1402,6 +1628,19 @@ export class Siege3DView implements ScreenView {
     this.#element.dataset.position = String(round?.position ?? 0);
     this.#element.dataset.spot = String(round?.spot ?? 0);
     this.#element.dataset.guardsLeft = String(round?.guardsLeft ?? 0);
+    this.#element.dataset.aim = `${(this.#aim.yaw / DEG).toFixed(2)} ${(this.#aim.tilt / DEG).toFixed(2)}`;
+    const cine = this.#cine;
+    // What the camera's doing: the sights, scouting, the bolt cam, or a kill cam (on a guard, or
+    // a collapse).
+    this.#element.dataset.camera = !cine
+      ? this.#scout.on
+        ? 'scout'
+        : 'sights'
+      : cine.kind === 'bolt'
+        ? 'bolt'
+        : 'guard' in cine.target
+          ? 'kill'
+          : 'collapse';
     if (round && this.#now - this.#targetsAt > TARGETS_SECONDS) {
       this.#targetsAt = this.#now;
       this.#element.dataset.targets = JSON.stringify(this.#targetsOnScreen(round));
@@ -1417,6 +1656,7 @@ export class Siege3DView implements ScreenView {
     ui.fire.disabled = !round.canThrow || this.#scout.on;
     ui.scout.setAttribute('aria-pressed', String(this.#scout.on));
     ui.scout.textContent = this.#scout.on ? 'Back' : 'Scout';
+    ui.ghost.setAttribute('aria-pressed', String(this.#deps.ghost.value === 'on'));
     for (const { mode, element, cost } of ui.modeButtons) {
       element.setAttribute('aria-checked', String(mode === this.#mode));
       const spears = spearsShot(mode, round.aimed, left, round.weapon);
@@ -1444,26 +1684,28 @@ export class Siege3DView implements ScreenView {
         : phase === 'aim' && round.throws === 0
           ? this.#scout.on
             ? 'Scouting: tap Back to aim again'
-            : 'Tap to aim, drag to fine-tune, then Fire'
+            : 'Drag to aim, then Fire'
           : '';
     ui.hint.hidden = !ui.card.hidden;
   }
 
   /**
-   * Where the position's targets are on screen (px in the view): its guards' heads, gates and the
-   * keep's thin posts. For the e2e tests and screenshots to aim at, as a player would by eye.
+   * Where the position's targets are on screen (px in the view, off its edges too, `on` if they're
+   * in it): its guards' heads, gates and the keep's thin posts. For the e2e tests and screenshots
+   * to aim at, as a player would by eye, turning to what's off to one side.
    */
-  #targetsOnScreen(round: SiegeRound): { kind: string; x: number; y: number }[] {
+  #targetsOnScreen(round: SiegeRound): { kind: string; x: number; y: number; on: boolean }[] {
     const { clientWidth: width, clientHeight: height } = this.#element;
     const [, tall] = this.#deps.game.data.siege.guard.size;
     const onScreen = (kind: string, at: THREE.Vector3) => {
       const point = at.project(this.#camera);
-      return point.z < 1 && Math.abs(point.x) < 1 && Math.abs(point.y) < 1
+      return point.z < 1
         ? [
             {
               kind,
               x: Math.round(((point.x + 1) / 2) * width),
               y: Math.round(((1 - point.y) / 2) * height),
+              on: Math.abs(point.x) < 1 && Math.abs(point.y) < 1,
             },
           ]
         : [];

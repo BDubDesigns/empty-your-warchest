@@ -12,6 +12,7 @@ import {
   type LiveChoice,
   type LiveTuning,
 } from '../core';
+import { watchForTrouble } from './trouble';
 import type {
   FiremakingFeel,
   RunnerFeel,
@@ -30,7 +31,13 @@ import {
 import { checkMechanics } from '../stations';
 import { checkForts } from '../stations/siege/logic/fairness';
 import { firemakingFeel } from '../stations/firemaking/feel';
-import { siegeFeel, warTentChoice, type WarTent } from '../stations/siege/feel';
+import {
+  ghostChoice,
+  siegeFeel,
+  warTentChoice,
+  type GhostLine,
+  type WarTent,
+} from '../stations/siege/feel';
 import { splittingFeel } from '../stations/splitting/feel';
 import {
   ClearingPicker,
@@ -64,6 +71,7 @@ export interface Booted {
     runnerSpears: LiveChoice<SpearSource>;
     runnerLift: LiveChoice<LiftMode>;
     warTent: LiveChoice<WarTent>;
+    siegeGhost: LiveChoice<GhostLine>;
   };
   haptics: Haptics;
   /** Which clearing each woodcutting round plays. */
@@ -102,6 +110,7 @@ export async function bootGame(buildLabel: string): Promise<Booted> {
     },
   });
   if (fallback) logger.log('logger.memoryFallback', { error: fallback });
+  watchForTrouble(logger);
 
   const saves = new SaveStore(localStorageStore(), data, clock);
   const loaded = saves.load();
@@ -146,6 +155,7 @@ export async function bootGame(buildLabel: string): Promise<Booted> {
     runnerSpears: spearSourceChoice(localStorageStore()),
     runnerLift: liftModeChoice(localStorageStore()),
     warTent: warTentChoice(localStorageStore()),
+    siegeGhost: ghostChoice(localStorageStore()),
   };
   const haptics = new Haptics(choices.vibration);
   const clearings = new ClearingPicker(game);

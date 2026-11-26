@@ -20,9 +20,8 @@ import {
 } from '../src/stations/siege/logic/round';
 import { siegeRewards, siegeStars } from '../src/stations/siege/logic/score';
 import {
-  aimToward,
   aimedVolley,
-  aimDirection,
+  clampAim,
   muzzleAt,
   shotSpears,
   siegeWeapon,
@@ -168,8 +167,8 @@ const WATCH_STEPS = 120;
  * (each guard's chest, then its head; at the keep, the thin posts, then the keep itself),
  * allowing for the drop, and a barrage every fourth shot. Returns the round when it's over.
  */
-function play(fort: string, seed: number) {
-  const game = siege(fort, { seed, spears: 400 });
+function play(fort: string, seed: number, aimed = AIMED) {
+  const game = siege(fort, { seed, spears: 600, aimed });
   const { round } = game;
   const [, height] = data.siege.guard.size;
   let tries = 0;
@@ -191,7 +190,8 @@ function play(fort: string, seed: number) {
       const weak = round.blocks.find(
         (block) => block.block.weak && !block.broken && block.block.pieceKind === 'keep',
       );
-      const [x, y, z] = weak?.block.at ?? [0, 2.5, -41];
+      const keep = round.fort.blocks.find((block) => block.pieceKind === 'keep');
+      const [x, y, z] = weak?.block.at ?? keep?.at ?? [0, 2, 0];
       target = { x, y, z };
     }
     const mode: ThrowMode = tries % 4 === 3 ? 'barrage' : 'aimed';
@@ -236,12 +236,12 @@ describe('siege forts', () => {
     const kinds = new Set(fort.blocks.map((block) => block.pieceKind));
     for (const kind of ['wall', 'gate', 'cover', 'platform', 'keep']) expect(kinds).toContain(kind);
     expect(fort.blocks.filter((block) => block.banner)).toHaveLength(1);
-    expect(fort.positions.map((position) => position.guards.length)).toEqual([2, 3, 0]);
+    expect(fort.positions.map((position) => position.guards.length)).toEqual([2, 2, 0]);
   });
 
   it('an aimed volley at the outer wall hits it, dealing damage', () => {
     const { round, events } = siege('outpost');
-    expect(round.throw('aimed', aimAt(round.ballista(), { x: -3, y: 0.9, z: -11 }))).toBe(true);
+    expect(round.throw('aimed', aimAt(round.ballista(), { x: 3, y: 0.9, z: -20 }))).toBe(true);
     run(round, 180);
     const hits = events.flatMap((event) => (event.type === 'hit' ? [event] : []));
     expect(hits.length).toBeGreaterThan(0);
@@ -255,11 +255,11 @@ describe('siege forts', () => {
   it('replays exactly: the same seed and shots on the same steps give the same result', () => {
     const play = () => {
       const { round, events } = siege('outpost', { seed: 42 });
-      round.throw('barrage', aimAt(round.ballista(), { x: 0, y: 1.5, z: -11 }));
+      round.throw('barrage', aimAt(round.ballista(), { x: 3, y: 1.5, z: -20 }));
       run(round, 90);
       round.moveTo(2);
       run(round, 60);
-      round.throw('aimed', aimAt(round.ballista(), { x: 2.5, y: 1.2, z: -11 }));
+      round.throw('aimed', aimAt(round.ballista(), { x: 6, y: 1.2, z: -20 }));
       run(round, 400);
       const outcome = {
         poses: round.blocks.map((_, index) => round.blockPose(index, pose())),
@@ -284,7 +284,7 @@ describe('siege forts', () => {
       volleys < 6
     ) {
       reload(round);
-      round.throw('aimed', aimAt(round.ballista(), { x: -2, y: 0.9, z: -11 }));
+      round.throw('aimed', aimAt(round.ballista(), { x: -2, y: 0.9, z: -20 }));
       volleys++;
       run(round, 60);
     }
@@ -294,13 +294,33 @@ describe('siege forts', () => {
 
   it('a gate breaks in one aimed volley', () => {
     const { round, events } = siege('outpost');
-    round.throw('aimed', aimAt(round.ballista(), { x: 0, y: 1.5, z: -11 }));
+    round.throw('aimed', aimAt(round.ballista(), { x: -5, y: 1.5, z: -20 }));
     run(round, 120);
     const broken = events.flatMap((event) => (event.type === 'break' ? [event] : []));
     expect(broken.some((event) => round.blocks[event.block]?.block.pieceKind === 'gate')).toBe(
       true,
     );
     round.dispose();
+  });
+
+  it('the keep takes more than one aimed volley, even at Command 17', () => {
+    const aimed = aimedVolley(WEAPON, 17);
+    for (const fort of data.siege.forts) {
+      const { round } = siege(fort.id, { position: fort.positions.length - 1, aimed });
+      const weak = round.blocks.find(
+        (block) => block.block.weak && block.block.pieceKind === 'keep',
+      );
+      if (!weak) throw new Error(`No weak post on the ${fort.id} keep`);
+      const [x, y, z] = weak.block.at;
+      round.throw('aimed', aimAt(round.ballista(), { x, y, z }));
+      run(round, 300);
+      expect(round.blocks.some((block) => block.broken || block.hp < block.maxHp)).toBe(true);
+      // It may sag on what's left, but the banner's still up.
+      expect(round.phase, fort.id).toBe('aim');
+      const banner = round.blockPose(round.bannerIndex, pose());
+      expect(banner.position.y).toBeGreaterThan(data.siege.banner.winHeight + 1);
+      round.dispose();
+    }
   });
 
   it('a block at 0 hit points breaks and leaves the world, so what it held up falls', () => {
@@ -426,9 +446,9 @@ describe('siege guards and positions', () => {
   it('no shot clears the outer wall: whatever the aim, it hits the wall first', () => {
     // Aimed at the wall either side of the gate (the only way through), at every tilt it has.
     // Only touches before anything broke count: after that a spear may find a hole.
-    const wallBack = -11.35;
+    const wallBack = -20.35;
     for (const tilt of [WEAPON.tilt.min, 0, 4, WEAPON.tilt.max]) {
-      for (const yaw of [-18, -13, 13, 18]) {
+      for (const yaw of [-28, -23, 5, 15]) {
         const { round, events } = siege('outpost');
         round.throw('aimed', { yaw: yaw * DEG, tilt: tilt * DEG });
         const touched = new Map<number, number>();
@@ -458,8 +478,8 @@ describe('siege guards and positions', () => {
         const { round } = siege('outpost', { position, spears: 100000 });
         round.moveTo(spot);
         run(round, 60);
-        for (const tilt of [-2, 1, 4, 7]) {
-          for (const yaw of [-8, -3, 3, 8]) {
+        for (const tilt of [-2, 2, 5, 8]) {
+          for (const yaw of [-20, -8, 8, 20]) {
             if (round.position !== position) break;
             reload(round, 120);
             round.throw('barrage', { yaw: yaw * DEG, tilt: tilt * DEG });
@@ -477,14 +497,16 @@ describe('siege guards and positions', () => {
     }
   }, 120_000);
 
-  it('a scripted player takes the Outpost for 25 to 45 spears, and the Stronghold for 45 to 80', () => {
+  it('a scripted player at Command 17 takes the Outpost for about 30 to 50 spears, the Stronghold 50 to 90', () => {
+    // Brandon's level: aimed volleys of 8, so a shot is 8 spears and "about" is a shot either way.
+    const aimed = aimedVolley(WEAPON, 17);
     for (const [fort, low, high] of [
-      ['outpost', 25, 45],
-      ['stronghold', 45, 80],
+      ['outpost', 30, 50 + aimed / 2],
+      ['stronghold', 50, 90],
     ] as const) {
       const spent: number[] = [];
       for (const seed of [1, 2, 3]) {
-        const { round, finished } = play(fort, seed);
+        const { round, finished } = play(fort, seed, aimed);
         expect(finished[0]?.won, `${fort} seed ${String(seed)}`).toBe(true);
         expect(finished[0]?.throwsPerPosition.every((throws) => throws > 0)).toBe(true);
         spent.push(round.used);
@@ -494,7 +516,7 @@ describe('siege guards and positions', () => {
       expect(average, `${fort}: ${spent.join(', ')}`).toBeGreaterThanOrEqual(low);
       expect(average, `${fort}: ${spent.join(', ')}`).toBeLessThanOrEqual(high);
     }
-  }, 120_000);
+  }, 180_000);
 });
 
 describe('fort fairness', () => {
@@ -513,8 +535,8 @@ describe('fort fairness', () => {
   it('fails when a shot can clear the wall in front', () => {
     const problems = outpost((raw) => {
       for (const piece of raw.siege.forts[0]?.pieces ?? []) {
-        if (piece.kind === 'wall' && piece.at[1] === -11) piece.courses = 3;
-        if (piece.kind === 'gate' && piece.at[1] === -11) piece.height = 1.8;
+        if (piece.kind === 'wall' && piece.at[1] === -20) piece.courses = 3;
+        if (piece.kind === 'gate' && piece.at[1] === -20) piece.height = 1.8;
       }
     });
     expect(problems.some((message) => message.startsWith('A shot can clear the wall'))).toBe(true);
@@ -522,15 +544,26 @@ describe('fort fairness', () => {
 
   it('fails when the keep can be hit before the last position', () => {
     const problems = outpost((raw) => {
+      // The courtyard's spots moved through the inner wall, in front of the keep.
       const courtyard = raw.siege.forts[0]?.positions[1];
       if (courtyard)
         courtyard.spots = [
-          [-3, -33],
-          [0, -33],
-          [3, -33],
+          [-10, -58],
+          [0, -58],
+          [10, -58],
         ];
     });
     expect(problems).toContain('The keep can be hit before the last position');
+  });
+
+  it('fails when a later position’s guard can be seen or hit from an earlier one', () => {
+    // A courtyard guard moved over to stand in line with the outer gate.
+    const problems = outpost((raw) => {
+      const pieces = raw.siege.forts[0]?.pieces ?? [];
+      const post = pieces.find((piece) => piece.kind === 'post' && piece.guard === 1);
+      if (post) post.at = [1.2, -45.2];
+    });
+    expect(problems.some((message) => message.includes('can be seen or hit from here'))).toBe(true);
   });
 
   it('fails when a guard is out of reach of every spot', () => {
@@ -613,27 +646,29 @@ describe('the weapon', () => {
     expect(WEAPON.tilt.max).toBeLessThanOrEqual(10);
   });
 
-  it('points straight at the crosshair, not allowing for the drop, within its range', () => {
-    const spot = { x: 0, z: 0 };
+  it('keeps the aim (and so the view down the sights) within the weapon’s turn and tilt', () => {
     const feel = data.siege.feel;
-    const point = { x: 2, y: 2, z: -12 };
-    const aim = aimToward(spot, point, WEAPON, feel);
-    const way = aimDirection(aim);
-    const pivot = { x: 0, y: WEAPON.pivotHeight, z: 0 };
-    // The bolt's line runs through the point.
-    const along = (point.z - pivot.z) / way.z;
-    expect(pivot.x + way.x * along).toBeCloseTo(point.x);
-    expect(pivot.y + way.y * along).toBeCloseTo(point.y);
-    // Kept to the weapon's tilt and turn.
-    expect(aimToward(spot, { x: 0, y: 30, z: -10 }, WEAPON, feel).tilt).toBeCloseTo(
+    expect(clampAim({ yaw: 0, tilt: 30 * DEG }, WEAPON, feel).tilt).toBeCloseTo(
       WEAPON.tilt.max * DEG,
     );
-    expect(aimToward(spot, { x: 0, y: -30, z: -10 }, WEAPON, feel).tilt).toBeCloseTo(
+    expect(clampAim({ yaw: 0, tilt: -30 * DEG }, WEAPON, feel).tilt).toBeCloseTo(
       WEAPON.tilt.min * DEG,
     );
-    expect(aimToward(spot, { x: 50, y: 1, z: -1 }, WEAPON, feel).yaw).toBeCloseTo(
-      feel.maxAim * DEG,
-    );
+    expect(clampAim({ yaw: 2, tilt: 0 }, WEAPON, feel).yaw).toBeCloseTo(feel.maxAim * DEG);
+    expect(clampAim({ yaw: -2, tilt: 0 }, WEAPON, feel).yaw).toBeCloseTo(-feel.maxAim * DEG);
+    const inside = { yaw: 0.1, tilt: 2 * DEG };
+    expect(clampAim(inside, WEAPON, feel)).toEqual(inside);
+  });
+
+  it('drops about a metre (1 to 1.5 m) over the distance to the first wall', () => {
+    const fort = data.siege.forts[0];
+    const wall = fort?.pieces.find((piece) => piece.kind === 'wall');
+    const [, z] = fort?.positions[0]?.spots[1] ?? [0, 0];
+    const out = z - (wall?.at[1] ?? 0) - WEAPON.muzzle;
+    const time = out / WEAPON.speed;
+    const drop = 0.5 * data.siege.physics.gravity * time * time;
+    expect(drop).toBeGreaterThanOrEqual(1);
+    expect(drop).toBeLessThanOrEqual(1.5);
   });
 
   it('takes each shot’s spears from the warchest, as many as it shoots', () => {
@@ -729,13 +764,13 @@ describe('siege data', () => {
   it('fails on overlapping pieces', () => {
     fails((raw) => {
       const fort = outpost(raw);
-      fort.pieces.push({ kind: 'wall', at: [-3.2, -11], length: 2, courses: 2, material: 'stone' });
+      fort.pieces.push({ kind: 'wall', at: [3.2, -20], length: 2, courses: 2, material: 'stone' });
     }, 'Overlaps');
   });
 
   it('fails on a guard inside a block, and a guard for a position that isn’t there', () => {
     fails((raw) => {
-      outpost(raw).pieces.push({ kind: 'post', at: [-3, -11], guard: 0 });
+      outpost(raw).pieces.push({ kind: 'post', at: [3, -20], guard: 0 });
     }, 'Overlaps a block or another guard');
     fails((raw) => {
       outpost(raw).pieces.push({ kind: 'post', at: [10, -5], guard: 7 });
@@ -766,6 +801,9 @@ describe('siege data', () => {
       const weapon = raw.siege.weapons[0];
       if (weapon) weapon.tilt.min = 50;
     }, 'Needs min under max');
+    fails((raw) => {
+      raw.siege.mantlet.slitWidth = raw.siege.mantlet.width + 0.1;
+    }, 'The sight slit must be smaller than the shield');
     fails((raw) => {
       raw.siege.weapon = 'trebuchet';
     }, 'Unknown weapon "trebuchet"');

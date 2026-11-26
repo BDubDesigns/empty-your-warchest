@@ -517,7 +517,6 @@ export class SiegeRound {
       spears: spears.length,
       position: this.#position,
       spot: this.#spot,
-      sightBlend: feel.sightBlend,
       left: this.#hooks.spears(),
       step: this.#steps,
     });

@@ -83,26 +83,6 @@ export function clampAim(aim: Aim, weapon: SiegeWeapon, feel: Pick<SiegeFeel, 'm
   };
 }
 
-/**
- * The aim that points the weapon at `spot` straight at `point` (the crosshair), along the bolt's
- * line: it doesn't allow for the drop, as learning the drop is the skill. Kept to its range.
- */
-export function aimToward(
-  spot: Spot,
-  point: Vec3,
-  weapon: SiegeWeapon,
-  feel: Pick<SiegeFeel, 'maxAim'>,
-): Aim {
-  const dx = point.x - spot.x;
-  const dz = point.z - spot.z;
-  const dy = point.y - weapon.pivotHeight;
-  return clampAim(
-    { yaw: Math.atan2(dx, -dz), tilt: Math.atan2(dy, Math.hypot(dx, dz)) },
-    weapon,
-    feel,
-  );
-}
-
 /** The bolt's direction for an aim (a unit vector). */
 export function aimDirection(aim: Aim): Vec3 {
   return {

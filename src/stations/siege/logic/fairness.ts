@@ -35,8 +35,12 @@ const DEG = Math.PI / 180;
  */
 const FLIGHT_STEP = 0.02;
 const FLIGHT_SECONDS = 4;
-/** Degrees between the tilts tried when looking for the one that sends a spear through a point. */
-const TILT_STEP = 0.05;
+/**
+ * Degrees between the tilts tried when looking for the one that sends a spear through a point,
+ * and the halvings that narrow each find down (to a few thousandths of a degree).
+ */
+const TILT_STEP = 0.5;
+const TILT_HALVINGS = 8;
 /** Pieces that are quick to break through: the keep must stay out of reach even with them gone. */
 const GATES = new Set(['gate', 'cover']);
 /** Pieces that are cover to be broken through: a guard behind them counts as in reach. */
@@ -56,18 +60,35 @@ export function fortProblems(siege: Siege, fort: SiegeFort): FortProblem[] {
   const last = fort.positions.length - 1;
 
   /** The aims that send a spear at `speed` from `spot` through `point`, if any. */
+  const found = new Map<string, Aim[]>();
   const aimsThrough = (spot: Spot, point: Vec3, speed: number): Aim[] => {
+    const key = `${String(spot.x)} ${String(spot.z)} ${String(point.x)} ${String(point.y)} ${String(point.z)} ${String(speed)}`;
+    const known = found.get(key);
+    if (known) return known;
     const yaw = Math.atan2(point.x - spot.x, -(point.z - spot.z));
-    const found: Aim[] = [];
-    let before: number | undefined;
-    for (let degrees = weapon.tilt.min; degrees <= weapon.tilt.max; degrees += TILT_STEP) {
-      const aim = { yaw, tilt: degrees * DEG };
-      const launch = launchFrom(spot, aim, speed, 0, weapon);
-      const miss = heightAt(launch, point, gravity) - point.y;
-      if (before !== undefined && Math.sign(miss) !== Math.sign(before)) found.push(aim);
-      before = miss;
+    const miss = (degrees: number) =>
+      heightAt(launchFrom(spot, { yaw, tilt: degrees * DEG }, speed, 0, weapon), point, gravity) -
+      point.y;
+    // Coarse steps over the tilts, then each crossing narrowed down by halves.
+    const aims: Aim[] = [];
+    let low = weapon.tilt.min;
+    let before = miss(low);
+    for (let high = low + TILT_STEP; low < weapon.tilt.max; high += TILT_STEP) {
+      const top = Math.min(high, weapon.tilt.max);
+      const after = miss(top);
+      if (Math.sign(after) !== Math.sign(before)) {
+        let [from, to] = [low, top];
+        for (let half = 0; half < TILT_HALVINGS; half++) {
+          const middle = (from + to) / 2;
+          if (Math.sign(miss(middle)) === Math.sign(before)) from = middle;
+          else to = middle;
+        }
+        aims.push({ yaw, tilt: ((from + to) / 2) * DEG });
+      }
+      [low, before] = [top, after];
     }
-    return found;
+    found.set(key, aims);
+    return aims;
   };
   /** Whether a spear from `spot` can hit `target` at `point` first (passing nothing else). */
   const reaches = (spot: Spot, point: Vec3, target: Box, ignore: (box: Box) => boolean) =>
@@ -127,11 +148,7 @@ export function fortProblems(siege: Siege, fort: SiegeFort): FortProblem[] {
       (box) => box.kind === 'guard' && guardPosition(fort, box.index) === positionIndex,
     );
     guards.forEach((guard) => {
-      const points = [0.25, 0.5, 0.75].map((share) => ({
-        x: (guard.min.x + guard.max.x) / 2,
-        y: guard.min.y + (guard.max.y - guard.min.y) * share,
-        z: guard.max.z,
-      }));
+      const points = guardPoints(guard);
       const hittable = (ignore: (box: Box) => boolean) =>
         position.spots.some(([x, z]) =>
           points.some((point) => reaches({ x, z }, point, guard, ignore)),
@@ -145,6 +162,38 @@ export function fortProblems(siege: Siege, fort: SiegeFort): FortProblem[] {
           message: `A guard (${String(guard.index)}) can't be hit from any spot, even with the walls down`,
         });
       }
+    });
+  });
+
+  // A position's guards are out of reach and out of sight from every spot of the positions before
+  // it, even with every gate and low wall broken: or they're shot from afar, and the position is
+  // won before the weapon gets there.
+  const gatesDown = (box: Box) => box.kind === 'block' && GATES.has(box.piece);
+  fort.positions.forEach((_, positionIndex) => {
+    const guards = boxes.filter(
+      (box) => box.kind === 'guard' && guardPosition(fort, box.index) === positionIndex,
+    );
+    fort.positions.slice(0, positionIndex).forEach((earlier, earlierIndex) => {
+      earlier.spots.forEach(([x, z], spotIndex) => {
+        const spot = { x, z };
+        const exposed = guards.filter((guard) =>
+          [() => false, gatesDown].some((ignore) =>
+            guardPoints(guard).some((point) => {
+              const muzzle = muzzleAt(spot, straightAt(spot, point, weapon.pivotHeight), weapon);
+              return (
+                lineHit(muzzle, point, boxes, 0, ignore) === guard ||
+                reaches(spot, point, guard, ignore)
+              );
+            }),
+          ),
+        );
+        for (const guard of exposed) {
+          problems.push({
+            path: ['siege', 'forts', fort.id, 'positions', earlierIndex, 'spots', spotIndex],
+            message: `A guard of position ${String(positionIndex + 1)} (${String(guard.index)}) can be seen or hit from here`,
+          });
+        }
+      });
     });
   });
 
@@ -216,6 +265,15 @@ function fortBoxes(siege: Siege, fort: SiegeFort): Box[] {
   return [...blocks, ...guards];
 }
 
+/** Points up the front of a guard (legs, chest, head) that shots and sight lines are tried at. */
+function guardPoints(guard: Box): Vec3[] {
+  return [0.25, 0.5, 0.75].map((share) => ({
+    x: (guard.min.x + guard.max.x) / 2,
+    y: guard.min.y + (guard.max.y - guard.min.y) * share,
+    z: guard.max.z,
+  }));
+}
+
 /** The position guard `index` (counting through every position's guards in order) guards. */
 function guardPosition(fort: SiegeFort, index: number): number {
   let left = index;
@@ -255,7 +313,7 @@ function highestAt(
 ): number {
   let best = -Infinity;
   for (const speed of speeds) {
-    for (let degrees = weapon.tilt.min; degrees <= weapon.tilt.max; degrees += TILT_STEP * 5) {
+    for (let degrees = weapon.tilt.min; degrees <= weapon.tilt.max; degrees += TILT_STEP / 2) {
       const launch = launchFrom({ x: 0, z: 0 }, { yaw: 0, tilt: degrees * DEG }, speed, 0, weapon);
       best = Math.max(best, heightAt(launch, { x: 0, y: 0, z: -distance }, gravity));
     }
@@ -271,6 +329,19 @@ function flightHit(
   gravity: number,
   ignore: (box: Box) => boolean,
 ): Box | undefined {
+  // Over the ground a flight runs straight: only the boxes near that line can be hit, so the
+  // steps below look at those alone.
+  const { position: start, velocity } = launch;
+  const landing =
+    (velocity.y + Math.sqrt(velocity.y ** 2 + 2 * gravity * Math.max(start.y, 0))) / gravity;
+  const end = Math.min(landing + FLIGHT_STEP, FLIGHT_SECONDS);
+  const near = boxes.filter(
+    (box) =>
+      Math.max(start.x, start.x + velocity.x * end) >= box.min.x - radius &&
+      Math.min(start.x, start.x + velocity.x * end) <= box.max.x + radius &&
+      Math.max(start.z, start.z + velocity.z * end) >= box.min.z - radius &&
+      Math.min(start.z, start.z + velocity.z * end) <= box.max.z + radius,
+  );
   let from = launch.position;
   for (let t = FLIGHT_STEP; t <= FLIGHT_SECONDS; t += FLIGHT_STEP) {
     const to = {
@@ -278,7 +349,7 @@ function flightHit(
       y: launch.position.y + launch.velocity.y * t - 0.5 * gravity * t * t,
       z: launch.position.z + launch.velocity.z * t,
     };
-    const hit = lineHit(from, to, boxes, radius, ignore);
+    const hit = lineHit(from, to, near, radius, ignore);
     if (hit) return hit;
     if (to.y < 0) return undefined;
     from = to;

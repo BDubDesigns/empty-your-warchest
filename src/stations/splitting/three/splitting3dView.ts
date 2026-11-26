@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { releaseContext, restoreContext } from '../../../app/trouble';
 import { groundMesh, wornGround } from '../../../app/ground';
 import type { ScreenView } from '../../../app/screen';
 import type { Haptics } from '../../../app/haptics';
@@ -298,7 +299,12 @@ export class Splitting3DView implements ScreenView {
     );
     const item = recipe?.outputs[0]?.item;
     if (!item) throw new Error('The splitting recipe makes nothing');
-    const hud = await WarchestHud.create(element, { game: deps.game, item, haptics: deps.haptics });
+    const hud = await WarchestHud.create(element, {
+      game: deps.game,
+      item,
+      haptics: deps.haptics,
+      logger: deps.logger,
+    });
     return new Splitting3DView(element, deps, hud);
   }
 
@@ -310,6 +316,8 @@ export class Splitting3DView implements ScreenView {
   // ScreenView
 
   start(): void {
+    restoreContext(this.#renderer);
+    this.#hud.wake();
     this.#resize();
     this.#startLog();
     this.#timer.reset();
@@ -322,13 +330,14 @@ export class Splitting3DView implements ScreenView {
     this.#renderer.setAnimationLoop(null);
     this.#round?.exit();
     this.#round = undefined;
-    this.#hud.settle();
+    this.#hud.sleep();
     this.#skillBar.settle();
     this.#bankedXp = undefined;
     this.#heap = undefined;
     this.#deposit = undefined;
     delete document.body.dataset.splitting;
     this.#lastPhase = '';
+    releaseContext(this.#renderer, this.#deps.logger, 'splitting3d');
   }
 
   // Logs

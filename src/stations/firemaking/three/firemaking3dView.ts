@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { releaseContext, restoreContext } from '../../../app/trouble';
 import { groundMesh, wornGround } from '../../../app/ground';
 import type { Haptics } from '../../../app/haptics';
 import type { ScreenView } from '../../../app/screen';
@@ -274,7 +275,12 @@ export class Firemaking3DView implements ScreenView {
     const recipe = deps.game.data.recipes.find((entry) => entry.id === rules.recipe);
     const item = recipe?.outputs[0]?.item;
     if (!item) throw new Error('The hardening recipe makes nothing');
-    const hud = await WarchestHud.create(element, { game: deps.game, item, haptics: deps.haptics });
+    const hud = await WarchestHud.create(element, {
+      game: deps.game,
+      item,
+      haptics: deps.haptics,
+      logger: deps.logger,
+    });
     return new Firemaking3DView(element, deps, hud);
   }
 
@@ -286,6 +292,8 @@ export class Firemaking3DView implements ScreenView {
   // ScreenView
 
   start(): void {
+    restoreContext(this.#renderer);
+    this.#hud.wake();
     this.#resize();
     this.#startRack();
     this.#timer.reset();
@@ -299,7 +307,7 @@ export class Firemaking3DView implements ScreenView {
     this.#round?.exit();
     this.#round = undefined;
     this.#fireSound.setVolume(0);
-    this.#hud.settle();
+    this.#hud.sleep();
     this.#skillBar.settle();
     this.#bankedXp = undefined;
     this.#deposit = undefined;
@@ -307,6 +315,7 @@ export class Firemaking3DView implements ScreenView {
     this.#layers = 1;
     delete document.body.dataset.firemaking;
     this.#lastPhase = '';
+    releaseContext(this.#renderer, this.#deps.logger, 'firemaking3d');
   }
 
   // Racks

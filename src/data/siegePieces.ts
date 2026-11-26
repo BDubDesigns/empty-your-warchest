@@ -175,7 +175,13 @@ function wall(
   }
 }
 
-/** The keep: storeys of corner posts and plank floors, the banner's pole on the top floor. */
+/**
+ * The keep: storeys of corner posts and plank floors, the banner's pole on the top floor. Its weak
+ * storey stands on two thin posts at the front and a wall of `back` across the back: either thin
+ * post can go and the floor above still stands, so it takes both (more than one volley) to bring
+ * the keep down. Its other posts and that wall are sturdy (`keepPostHp`): the way in is the thin
+ * posts.
+ */
 function keep(
   piece: Extract<SiegePiece, { kind: 'keep' }>,
   parts: SiegeParts,
@@ -185,10 +191,12 @@ function keep(
   const inset = parts.post / 2 + 0.1;
   let floor = 0;
   piece.storeys.forEach((height, storey) => {
+    const weak = storey === piece.weak;
     for (const sx of [-1, 1]) {
       for (const side of [-1, 1]) {
-        // +z is the front, toward the ballista.
-        const thin = storey === piece.weak && side === 1;
+        // +z is the front, toward the ballista. The weak storey's back is a wall (below).
+        if (weak && side === -1) continue;
+        const thin = weak && side === 1;
         const across = thin ? parts.thinPost : parts.post;
         block(
           'wood',
@@ -198,9 +206,19 @@ function keep(
             floor + height / 2,
             z + side * (piece.depth / 2 - inset),
           ],
-          thin ? { weak: true, hp: parts.weakHp } : {},
+          thin ? { weak: true, hp: parts.weakHp } : { hp: parts.keepPostHp },
         );
       }
+    }
+    if (weak) {
+      // A heavy wall across the back: spears through a broken front post stop on it, and with
+      // only one front post gone the floor above still stands on it and the other.
+      block(
+        piece.back,
+        [piece.width - 0.2, height, parts.post],
+        [x, floor + height / 2, z - (piece.depth / 2 - inset)],
+        { hp: parts.keepPostHp },
+      );
     }
     floor += height;
     block('wood', [piece.width, parts.slab, piece.depth], [x, floor + parts.slab / 2, z]);

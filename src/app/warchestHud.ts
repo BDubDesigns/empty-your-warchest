@@ -1,11 +1,12 @@
 import * as THREE from 'three';
-import type { Game } from '../core';
+import type { EventLogger, Game } from '../core';
 import type { GameData, ItemLook } from '../data';
 import type { Haptics } from './haptics';
 import { loadModel } from './models';
 import { warchestRows } from '../camp/warchestRows';
 import { Sfx } from './sfx';
 import { PANEL_CLOSE_MS, WarchestPanel } from './warchestPanel';
+import { releaseContext, restoreContext } from './trouble';
 import { splitDeposit } from './warchestPour';
 
 const MODELS = { chest: 'models/kenney/chest.glb', log: 'models/kenney/log.glb' };
@@ -70,6 +71,7 @@ export interface HudDeps {
   /** The item this station collects, which the chest counts. */
   item: string;
   haptics: Haptics;
+  logger: EventLogger;
 }
 
 /** A point on the screen, in CSS pixels from the HUD's top-left corner. */
@@ -148,6 +150,7 @@ export class WarchestHud {
   #bump = 0;
   #last = 0;
   #running = false;
+  readonly #logger: EventLogger;
 
   private constructor(
     element: HTMLElement,
@@ -158,6 +161,7 @@ export class WarchestHud {
     this.#game = deps.game;
     this.#item = deps.item;
     this.#haptics = deps.haptics;
+    this.#logger = deps.logger;
     this.#pour = deps.game.data.warchest.pour;
     this.#sfx.load(SOUNDS);
 
@@ -166,6 +170,10 @@ export class WarchestHud {
     this.#renderer.setClearColor(0x000000, 0);
     this.#renderer.domElement.className = 'warchest-layer';
     element.append(this.#renderer.domElement);
+    // Given back while the station's hidden; once it's back, draw the chest again.
+    this.#renderer.domElement.addEventListener('webglcontextrestored', () => {
+      this.#resize();
+    });
     this.#scene.add(new THREE.HemisphereLight(0xfff4e0, 0x5a4a3a, 2.2));
     const sun = new THREE.DirectionalLight(0xffffff, 1.6);
     sun.position.set(-1, 2, 3);
@@ -280,6 +288,17 @@ export class WarchestHud {
     this.#showCount();
     this.#stop();
     this.#render();
+  }
+
+  /** The station's hidden: settle, and give the chest's WebGL context back to the browser. */
+  sleep(): void {
+    this.settle();
+    releaseContext(this.#renderer, this.#logger, 'hud');
+  }
+
+  /** The station's shown again: ask for the context back (the chest draws once it's back). */
+  wake(): void {
+    restoreContext(this.#renderer);
   }
 
   dispose(): void {

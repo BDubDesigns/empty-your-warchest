@@ -875,14 +875,15 @@ export const siegePieceSchema = z.discriminatedUnion('kind', [
   }),
   /**
    * The wooden keep with the banner on top: a storey for each of `storeys` (its posts' height), a
-   * post at every corner of a `width` × `depth` floor and a plank floor on them. The front posts
-   * of storey `weak` are thin: the weak point.
+   * post at every corner of a `width` × `depth` floor and a plank floor on them. Storey `weak`
+   * stands on two thin front posts (the weak point) and a wall of material `back` behind.
    */
   z.object({
     kind: z.literal('keep'),
     at: placeSchema,
     storeys: z.array(positive).min(1),
     weak: z.number().int().min(0),
+    back: id,
     width: positive,
     depth: positive,
   }),
@@ -956,11 +957,14 @@ const siegeWeaponSchema = z.object({
 /** Feel numbers for the siege. The debug menu can override them live. */
 export const siegeFeelSchema = z.object({
   /**
-   * Aiming: tap anywhere and the crosshair jumps there; drag to fine-tune it, `crosshairSpeed`
-   * pixels for each pixel the finger moves (so the thumb needn't cover the target). The weapon
-   * turns (up to `maxAim` degrees either way) and tilts to point straight at it.
+   * Aiming, looking down the sights: the crosshair stays in the middle of the screen, on the
+   * bolt's line, and a drag turns the view (and the weapon with it) `lookYawPerPx` degrees for
+   * every pixel across and tilts it `lookTiltPerPx` for every pixel up or down. It turns up to
+   * `maxAim` degrees either way, and stops at the weapon's tilt limits, so the crosshair never
+   * points where the bolt can't go.
    */
-  crosshairSpeed: positive,
+  lookYawPerPx: positive,
+  lookTiltPerPx: positive,
   maxAim: z.number().min(0).max(90),
   /**
    * The two volleys. Aimed: tight (each spear strays up to `aimedSpread` degrees sideways,
@@ -977,11 +981,9 @@ export const siegeFeelSchema = z.object({
   barrageStagger: nonNegative,
   lineStagger: nonNegative,
   /**
-   * Seeing the shot: a bright line along the bolt `aimLineLength` metres out (straight: learning
-   * the drop is the skill), and after a shot a solid line `ghostWidth` thick along the middle
-   * spear's real path, until the next shot.
+   * After a shot, a solid line `ghostWidth` thick along the middle spear's real path, until the
+   * next shot (it can be turned off): learning the drop is the skill.
    */
-  aimLineLength: nonNegative,
   ghostWidth: positive,
   /** The spear's mass (kg): how hard it hits. */
   spearMass: positive,
@@ -995,19 +997,13 @@ export const siegeFeelSchema = z.object({
   advanceDelaySeconds: nonNegative,
   advanceSeconds: positive,
   /**
-   * The camera: how high it sits and how far behind the weapon, and where it looks (metres).
-   * `cameraTurn` is how much of the weapon's turn it turns with (so what you aim at off to one
-   * side comes into view). `sightBlend` moves it from there (0) to the weapon's sight, looking
-   * down the bolt (1).
+   * The view down the sights: the eye sits on the bolt's line, `sightBack` metres behind the
+   * pivot, with a field of view `sightFov` degrees high.
    */
-  cameraHeight: positive,
-  cameraBack: positive,
-  cameraLookAhead: positive,
-  cameraLookHeight: nonNegative,
-  /** How far short of a wall the camera stops when one stands between it and the ballista (m). */
+  sightFov: z.number().min(10).max(100),
+  sightBack: nonNegative,
+  /** How far short of a wall a camera looking at something (a kill, a collapse) stops (m). */
   cameraClearance: nonNegative,
-  cameraTurn: fraction,
-  sightBlend: fraction,
   /**
    * Scouting: the camera rises over `scoutSeconds` to look down on the whole fort from
    * `scoutHeight` metres up, `scoutBack` metres short of its middle (a high three-quarter view).
@@ -1017,12 +1013,33 @@ export const siegeFeelSchema = z.object({
   scoutBack: nonNegative,
   scoutSeconds: positive,
   /**
-   * After a shot the camera follows the lead spear for `followSeconds`, `follow` of the way
-   * toward it (0 = not at all), then eases back over `followReturnSeconds`.
+   * The bolt cam: after a shot the camera cuts over in `boltCamInSeconds` to ride `boltCamBack`
+   * metres behind the middle spear and `boltCamRise` above it until it hits something, holds there
+   * `boltCamHoldSeconds`, then eases back to the sights over `boltCamReturnSeconds`. A tap sends
+   * it back early. A kill cam cuts in as fast.
    */
-  followSeconds: nonNegative,
-  follow: fraction,
-  followReturnSeconds: positive,
+  boltCamBack: nonNegative,
+  boltCamRise: nonNegative,
+  boltCamInSeconds: positive,
+  boltCamHoldSeconds: nonNegative,
+  boltCamReturnSeconds: positive,
+  /**
+   * The kill cam: when a shot brings a guard down (the first of the shot), or a big collapse
+   * (`collapseBlocks` blocks breaking within `collapseWindowSeconds`), time freezes for
+   * `killCamStopMs`, then runs at `killCamSlowMo` while the camera looks at it from
+   * `killCamDistance` metres off and `killCamRise` up, for `killCamSeconds` (real seconds). A tap
+   * skips it, and so does the next shot. `buzzKillMs` is its buzz.
+   */
+  killCamSeconds: nonNegative,
+  killCamSlowMo: z.number().min(0.05).max(1),
+  killCamStopMs: nonNegative,
+  killCamDistance: positive,
+  /** How far off a collapse cam (a big collapse, the keep) looks from (m). */
+  collapseCamDistance: positive,
+  killCamRise: nonNegative,
+  collapseBlocks: positiveInt,
+  collapseWindowSeconds: positive,
+  buzzKillMs: nonNegative,
   /** A spear hitting: the freeze (ms), and from `heavyHitSpeed` m/s a longer one (and on breaks). */
   hitStopMs: nonNegative,
   heavyHitStopMs: nonNegative,
@@ -1059,7 +1076,8 @@ export const siegeFeelSchema = z.object({
  * stone's height), a keep's corner `post`, its `thinPost` (the weak point) and its floors
  * `slab` thick, a watch platform's floor (`platform` across, `platformSlab` thick), a gate's
  * leaves `gateDepth` thick, the banner's `pole`. And the hit points of the parts that don't take
- * their material's: a gate leaf, a weak post, the banner (which never breaks: it has to fall).
+ * their material's: a gate leaf, a weak post, the keep's other posts, the banner (which never
+ * breaks: it has to fall).
  */
 const siegePartsSchema = z.object({
   stone: z.tuple([positive, positive, positive]),
@@ -1075,6 +1093,7 @@ const siegePartsSchema = z.object({
   pole: z.tuple([positive, positive, positive]),
   gateHp: positive,
   weakHp: positive,
+  keepPostHp: positive,
   bannerHp: positive,
 });
 
@@ -1104,6 +1123,20 @@ const siegeShape = z.object({
     topple: nonNegative,
   }),
   parts: siegePartsSchema,
+  /**
+   * The wooden shield (a mantlet) just in front of the sights, framing the view: `width` by
+   * `height` of planks `thickness` thick, `distance` in front of the eye, with a sight slit
+   * `slitWidth` by `slitHeight` through its middle (metres). Only how it's drawn: it stops no
+   * spear.
+   */
+  mantlet: z.object({
+    distance: positive,
+    width: positive,
+    height: positive,
+    thickness: positive,
+    slitWidth: positive,
+    slitHeight: positive,
+  }),
   physics: z.object({
     /** Seconds per physics step, whatever the frame rate. */
     timestep: positive,

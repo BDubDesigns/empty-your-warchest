@@ -7,18 +7,19 @@ type Piece = Fort['pieces'][number];
 // Metres and seconds; the weapon starts at the origin and shoots toward −z.
 //
 // The ballista shoots flat and fast: at its highest tilt nothing it shoots ever gets much above
-// 3 m, so a wall five stones high blocks every shot from in front of it (checked at startup), and
-// the banner, up on the keep, can only come down with the keep.
+// 3 m by the first wall, so a wall six stones high blocks every shot from in front of it (checked
+// at startup), and the banner, up on the keep, can only come down with the keep. You look down
+// its sights, so the drop over 20 m (about a metre) is yours to learn.
 
 /** How high a wall stone is: a wall's height is its courses of these. */
 const STONE_HEIGHT = 0.6;
 
-/** Three spots side by side at depth `z`, the middle one at x = 0. */
+/** Three spots 10 m apart at depth `z`, the middle one at x = 0. */
 function spots(z: number): [number, number][] {
   return [
-    [-3, z],
+    [-10, z],
     [0, z],
-    [3, z],
+    [10, z],
   ];
 }
 
@@ -54,17 +55,25 @@ function gatedWall(
   ];
 }
 
+/** The rolls in through a gate at `x` in a wall at depth `z`: up to it, then through. */
+function throughGate(x: number, z: number): [number, number][] {
+  return [
+    [x, z + 3],
+    [x, z - 3],
+  ];
+}
+
 /**
- * The two forts share a plan: an outer wall with a gate in the middle, a courtyard, a high inner
- * wall with its gate off to one side (so no shot through both gates finds the keep), and the
- * keep. The weapon rolls in through the inner gate on its way to the keep.
+ * The two forts share a plan, 29 m wide: an outer wall 20 m from where the weapon starts, its
+ * gate off to one side; a courtyard whose guards stand on the far side from that gate, so no line
+ * through it finds them; a high inner wall with its gate off to the other side; and the keep,
+ * 20 m on from where the weapon stops inside. The Stronghold is the Outpost mirrored, in stone.
  */
-const OUTER = { z: -11, span: { from: -5.5, to: 5.5 }, gate: { at: 0, width: 3 } };
-const INNER = { z: -27, span: { from: -6, to: 8 }, gate: { at: 4.5, width: 3 } };
-const THROUGH_INNER_GATE: [number, number][] = [
-  [4.5, -24],
-  [4.5, -29.5],
-];
+const SPAN = { from: -14.5, to: 14.5 };
+const OUTER_Z = -20;
+const INNER_Z = -54;
+const COURTYARD_Z = -26;
+const KEEP_SPOTS_Z = -58;
 
 export const siege = {
   item: 'spear',
@@ -72,14 +81,15 @@ export const siege = {
     {
       // An aimed volley of 5 at Command 1, one more every 5 levels; a barrage is three times that.
       // A fire pit round (6 to 18 spears) is a volley or three. Fast and flat: a few degrees of
-      // tilt either way is all it has.
+      // tilt either way is all it has. At 40 m/s a spear drops about 1.1 m over the 19 m to the
+      // first wall, so you aim above what you want to hit.
       id: 'ballista',
       name: 'Ballista',
       skill: 'command',
       aimed: { start: 5, everyLevels: 5, add: 1 },
       barrageTimes: 3,
-      speed: 38,
-      tilt: { min: -4, max: 8, start: 1 },
+      speed: 40,
+      tilt: { min: -3, max: 9, start: 3 },
       pivotHeight: 1.2,
       muzzle: 1,
       spacing: 0.08,
@@ -101,10 +111,22 @@ export const siege = {
     platformSlab: 0.2,
     gateDepth: 0.3,
     pole: [0.14, 1.4, 0.14],
-    // A gate leaf goes at two hits (an aimed volley at it), a thin post at one.
+    // A gate leaf or a thin post under the keep goes at two hits (an aimed volley at it).
     gateHp: 50,
-    weakHp: 25,
+    weakHp: 50,
+    // The keep's other posts and the wall behind its thin ones, as good as unbreakable: with the
+    // thin posts gone the keep tips forward over that wall, and the banner comes down with it.
+    keepPostHp: 1000,
     bannerHp: 100000,
+  },
+  // Just in front of the sights, so the view is through its slit; the slit takes up most of it.
+  mantlet: {
+    distance: 0.45,
+    width: 1.2,
+    height: 0.9,
+    thickness: 0.05,
+    slitWidth: 0.19,
+    slitHeight: 0.28,
   },
   // 60 steps a second keeps a phone's frame budget; the spears use continuous collision
   // detection, so even the fastest can't skip through a block between two steps.
@@ -131,8 +153,8 @@ export const siege = {
   stars: { by: 'throws', three: 1, two: 1.5 },
   // The same as woodcutting's, splitting's and firemaking's.
   starBonus: { two: 0.1, three: 0.25 },
-  // A spear at 38 m/s deals about 28: a guard or a thin post at one hit, a gate leaf or a wooden
-  // beam at two, fieldstone three, dressed stone four or five (two aimed volleys).
+  // A spear at 40 m/s deals about 30: a guard at one hit, a gate leaf or a wooden beam at two, a
+  // thin post or fieldstone at three, dressed stone at four (an aimed volley or two).
   damage: { spearMinSpeed: 10, spearPerSpeed: 1, crashMinSpeed: 3, crashPerSpeed: 6 },
   materials: [
     { id: 'stone', kind: 'stone', density: 1800, friction: 0.8, restitution: 0.05, hp: 120 },
@@ -145,76 +167,104 @@ export const siege = {
   ],
   forts: [
     {
-      // Par 8 shots: a gate and two guards behind it, three guards in the courtyard, the keep's
-      // two thin posts. In aimed volleys of 5 that's about 40 spears (a scripted player takes
-      // 25 to 45).
+      // A gate with two guards behind it, two guards in the courtyard, the keep's thin posts. Par
+      // is for aimed volleys of 8 (Command 15 and up): a scripted player at Command 17 takes 6
+      // shots, about 50 spears.
       id: 'outpost',
       name: 'Outpost',
-      par: 8,
+      par: 7,
       rewards: { xpPerBlock: 2, xpPerGuard: 10, winXp: 80 },
       pieces: [
-        // The outer wall and its gate, two guards behind the gate.
-        ...gatedWall(OUTER.z, 5, 'fieldstone', OUTER.span, OUTER.gate),
-        { kind: 'post', at: [-0.6, -12.5], guard: 0 },
-        { kind: 'post', at: [0.6, -12.5], guard: 0 },
-        // The courtyard: two guards ducking behind a low wall, one on a watch platform.
-        { kind: 'cover', at: [0, -22], length: 6, material: 'fieldstone' },
-        { kind: 'post', at: [-1.5, -23.2], guard: 1 },
-        { kind: 'post', at: [1.2, -23.2], guard: 1 },
-        { kind: 'platform', at: [4, -23], height: 1.4, guard: 1 },
-        // The inner wall: high, so the banner is out of sight from the courtyard.
-        ...gatedWall(INNER.z, 8, 'curtain', INNER.span, INNER.gate),
+        // The outer wall, its gate to the left, two guards behind the gate.
+        ...gatedWall(OUTER_Z, 6, 'fieldstone', SPAN, { at: -5, width: 3 }),
+        { kind: 'post', at: [-5.5, -21.6], guard: 0 },
+        { kind: 'post', at: [-4.5, -21.6], guard: 0 },
+        // The courtyard, over to the right: a guard ducking behind a low wall, one on a watch
+        // platform.
+        { kind: 'cover', at: [8, -44], length: 8, material: 'fieldstone' },
+        { kind: 'post', at: [7, -45.2], guard: 1 },
+        { kind: 'platform', at: [12.8, -46], height: 1.4, guard: 1 },
+        // The inner wall, its gate to the left: high, so the keep is out of sight from the
+        // courtyard.
+        ...gatedWall(INNER_Z, 8, 'curtain', SPAN, { at: -9, width: 3 }),
         // The keep, behind its own low wall.
-        { kind: 'cover', at: [0, -37.5], length: 5, material: 'fieldstone' },
-        { kind: 'keep', at: [0, -41], storeys: [1.2, 1.2, 1.4], weak: 1, width: 2.4, depth: 2 },
+        { kind: 'cover', at: [3, -75], length: 6, material: 'fieldstone' },
+        {
+          kind: 'keep',
+          at: [3, -78],
+          storeys: [1.2, 1.2, 1.4],
+          weak: 1,
+          back: 'fieldstone',
+          width: 2.4,
+          depth: 2,
+        },
       ],
       positions: [
         { name: 'The outer gate', spots: spots(0), objective: { kind: 'guards_down' } },
-        { name: 'The courtyard', spots: spots(-16), objective: { kind: 'guards_down' } },
+        {
+          name: 'The courtyard',
+          spots: spots(COURTYARD_Z),
+          approach: throughGate(-5, OUTER_Z),
+          objective: { kind: 'guards_down' },
+        },
         {
           name: 'The keep',
-          spots: spots(-32),
-          approach: THROUGH_INNER_GATE,
+          spots: spots(KEEP_SPOTS_Z),
+          approach: throughGate(-9, INNER_Z),
           objective: { kind: 'banner_down' },
         },
       ],
     },
     {
-      // Harder: dressed stone, a gate, guards on towers you have to bring down from under them.
-      // Par 12 shots, about 60 spears in aimed volleys (a scripted player takes 45 to 80).
+      // Harder: dressed stone, and guards on towers you have to bring down from under them. A
+      // scripted player at Command 17 takes 8 to 10 shots, 60 to 100 spears.
       id: 'stronghold',
       name: 'Stronghold',
-      par: 12,
+      par: 10,
       rewards: { xpPerBlock: 3, xpPerGuard: 12, winXp: 160 },
       pieces: [
-        ...gatedWall(OUTER.z, 5, 'stone', OUTER.span, OUTER.gate),
-        { kind: 'post', at: [-0.6, -12.5], guard: 0 },
-        { kind: 'post', at: [0.6, -12.5], guard: 0 },
+        ...gatedWall(OUTER_Z, 6, 'stone', SPAN, { at: 5, width: 3 }),
+        { kind: 'post', at: [4.5, -21.6], guard: 0 },
+        { kind: 'post', at: [5.5, -21.6], guard: 0 },
         // A tower behind the wall: its guard falls when the wall in front and under him goes.
-        { kind: 'tower', at: [-4, -12.6], courses: 3, material: 'stone', guard: 0 },
-        { kind: 'cover', at: [0, -22], length: 6, material: 'stone' },
-        { kind: 'post', at: [-1.5, -23.2], guard: 1 },
-        { kind: 'post', at: [1.2, -23.2], guard: 1 },
-        { kind: 'tower', at: [4.2, -23], courses: 3, material: 'stone', guard: 1 },
-        ...gatedWall(INNER.z, 8, 'curtain', INNER.span, INNER.gate),
-        { kind: 'cover', at: [0, -37.5], length: 5, material: 'stone' },
-        { kind: 'keep', at: [0, -41], storeys: [1.4, 1.4, 1.2], weak: 1, width: 3, depth: 2.4 },
+        { kind: 'tower', at: [-7, -22.4], courses: 3, material: 'stone', guard: 0 },
+        { kind: 'cover', at: [-8, -44], length: 8, material: 'stone' },
+        { kind: 'post', at: [-6.5, -45.2], guard: 1 },
+        { kind: 'post', at: [-9.5, -45.2], guard: 1 },
+        { kind: 'tower', at: [-12.6, -46.4], courses: 2, material: 'stone', guard: 1 },
+        ...gatedWall(INNER_Z, 8, 'curtain', SPAN, { at: 9, width: 3 }),
+        { kind: 'cover', at: [-3, -75], length: 6, material: 'stone' },
+        {
+          kind: 'keep',
+          at: [-3, -78],
+          storeys: [1.4, 1.4, 1.2],
+          weak: 1,
+          back: 'stone',
+          width: 3,
+          depth: 2.4,
+        },
       ],
       positions: [
         { name: 'The gatehouse', spots: spots(0), objective: { kind: 'guards_down' } },
-        { name: 'The bailey', spots: spots(-16), objective: { kind: 'guards_down' } },
+        {
+          name: 'The bailey',
+          spots: spots(COURTYARD_Z),
+          approach: throughGate(5, OUTER_Z),
+          objective: { kind: 'guards_down' },
+        },
         {
           name: 'The keep',
-          spots: spots(-32),
-          approach: THROUGH_INNER_GATE,
+          spots: spots(KEEP_SPOTS_Z),
+          approach: throughGate(9, INNER_Z),
           objective: { kind: 'banner_down' },
         },
       ],
     },
   ],
   feel: {
-    crosshairSpeed: 0.6,
-    maxAim: 30,
+    lookYawPerPx: 0.12,
+    lookTiltPerPx: 0.05,
+    maxAim: 40,
     aimedSpread: 1,
     aimedTiltSpread: 0.4,
     aimedSpeedStray: 0.015,
@@ -223,26 +273,32 @@ export const siege = {
     barrageSpeedStray: 0.07,
     barrageStagger: 0.15,
     lineStagger: 0.04,
-    aimLineLength: 5,
     ghostWidth: 0.07,
     spearMass: 14,
     reloadSeconds: 0.9,
     spotSeconds: 0.6,
     advanceDelaySeconds: 1.2,
     advanceSeconds: 2.5,
-    cameraHeight: 4.6,
-    cameraBack: 8,
-    cameraLookAhead: 15,
-    cameraLookHeight: 1,
+    sightFov: 55,
+    sightBack: 0.5,
     cameraClearance: 0.5,
-    cameraTurn: 0.6,
-    sightBlend: 0,
-    scoutHeight: 42,
-    scoutBack: 14,
+    scoutHeight: 90,
+    scoutBack: 35,
     scoutSeconds: 0.8,
-    followSeconds: 0.7,
-    follow: 0.5,
-    followReturnSeconds: 0.8,
+    boltCamBack: 2.2,
+    boltCamRise: 0.45,
+    boltCamInSeconds: 0.12,
+    boltCamHoldSeconds: 0.35,
+    boltCamReturnSeconds: 0.45,
+    killCamSeconds: 1,
+    killCamSlowMo: 0.3,
+    killCamStopMs: 90,
+    killCamDistance: 4,
+    collapseCamDistance: 10,
+    killCamRise: 1.2,
+    collapseBlocks: 6,
+    collapseWindowSeconds: 0.6,
+    buzzKillMs: 70,
     hitStopMs: 45,
     heavyHitStopMs: 90,
     heavyHitSpeed: 38,

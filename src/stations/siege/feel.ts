@@ -4,15 +4,29 @@ import type { SiegeFeel } from '../../data';
 /** Slider ranges for the debug menu's live tuning panel. */
 export const siegeTunables: readonly Tunable[] = [
   {
-    key: 'sightBlend',
-    label: 'Camera: behind (0) to down the sights (1)',
-    min: 0,
-    max: 1,
-    step: 0.05,
+    key: 'lookYawPerPx',
+    label: 'Look: turn per pixel dragged (°)',
+    min: 0.02,
+    max: 0.5,
+    step: 0.01,
   },
-  { key: 'crosshairSpeed', label: 'Crosshair: drag speed', min: 0.1, max: 2, step: 0.05 },
-  { key: 'maxAim', label: 'Most turn to the side (°)', min: 5, max: 60, step: 1 },
-  { key: 'aimLineLength', label: 'Aim line length (m)', min: 0, max: 20, step: 0.5 },
+  {
+    key: 'lookTiltPerPx',
+    label: 'Look: tilt per pixel dragged (°)',
+    min: 0.01,
+    max: 0.3,
+    step: 0.005,
+  },
+  { key: 'maxAim', label: 'Most turn to the side (°)', min: 5, max: 80, step: 1 },
+  { key: 'sightFov', label: 'Sights: field of view (°)', min: 20, max: 80, step: 1 },
+  {
+    key: 'sightBack',
+    label: 'Sights: eye behind the pivot (m)',
+    min: 0,
+    max: 2,
+    step: 0.05,
+    more: true,
+  },
   { key: 'ghostWidth', label: 'Last shot line thickness (m)', min: 0.01, max: 0.3, step: 0.01 },
   { key: 'aimedSpread', label: 'Aimed: stray sideways (°)', min: 0, max: 10, step: 0.1 },
   { key: 'aimedTiltSpread', label: 'Aimed: stray up and down (°)', min: 0, max: 10, step: 0.1 },
@@ -48,28 +62,9 @@ export const siegeTunables: readonly Tunable[] = [
     step: 0.1,
     more: true,
   },
-  {
-    key: 'cameraTurn',
-    label: 'Camera turns with the aim (share)',
-    min: 0,
-    max: 1,
-    step: 0.05,
-    more: true,
-  },
-  { key: 'scoutHeight', label: 'Scout: height (m)', min: 5, max: 60, step: 1, more: true },
+  { key: 'scoutHeight', label: 'Scout: height (m)', min: 5, max: 100, step: 1, more: true },
   { key: 'scoutBack', label: 'Scout: short of the fort (m)', min: 0, max: 40, step: 1, more: true },
   { key: 'scoutSeconds', label: 'Scout: rise (s)', min: 0.1, max: 3, step: 0.05, more: true },
-  { key: 'cameraHeight', label: 'Camera height (m)', min: 1, max: 15, step: 0.1, more: true },
-  { key: 'cameraBack', label: 'Camera back (m)', min: 1, max: 20, step: 0.1, more: true },
-  { key: 'cameraLookAhead', label: 'Camera looks out (m)', min: 3, max: 40, step: 0.5, more: true },
-  {
-    key: 'cameraLookHeight',
-    label: 'Camera looks at height (m)',
-    min: 0,
-    max: 6,
-    step: 0.1,
-    more: true,
-  },
   {
     key: 'cameraClearance',
     label: 'Camera stops short of a wall (m)',
@@ -78,11 +73,55 @@ export const siegeTunables: readonly Tunable[] = [
     step: 0.1,
     more: true,
   },
-  { key: 'followSeconds', label: 'Follow the spear (s)', min: 0, max: 3, step: 0.05, more: true },
-  { key: 'follow', label: 'Follow: how far', min: 0, max: 1, step: 0.05, more: true },
+  { key: 'boltCamBack', label: 'Bolt cam: behind the spear (m)', min: 0, max: 8, step: 0.1 },
+  { key: 'boltCamRise', label: 'Bolt cam: above the spear (m)', min: 0, max: 3, step: 0.05 },
   {
-    key: 'followReturnSeconds',
-    label: 'Follow: ease back (s)',
+    key: 'boltCamInSeconds',
+    label: 'Bolt cam: cut in (s)',
+    min: 0.01,
+    max: 1,
+    step: 0.01,
+    more: true,
+  },
+  { key: 'boltCamHoldSeconds', label: 'Bolt cam: hold on the hit (s)', min: 0, max: 2, step: 0.05 },
+  {
+    key: 'boltCamReturnSeconds',
+    label: 'Bolt cam: back to the sights (s)',
+    min: 0.05,
+    max: 2,
+    step: 0.05,
+  },
+  { key: 'killCamSeconds', label: 'Kill cam: length (s)', min: 0, max: 3, step: 0.05 },
+  { key: 'killCamSlowMo', label: 'Kill cam: slow-mo speed', min: 0.05, max: 1, step: 0.05 },
+  { key: 'killCamStopMs', label: 'Kill cam: freeze (ms)', min: 0, max: 400, step: 5, more: true },
+  {
+    key: 'killCamDistance',
+    label: 'Kill cam: distance (m)',
+    min: 1,
+    max: 15,
+    step: 0.25,
+    more: true,
+  },
+  {
+    key: 'collapseCamDistance',
+    label: 'Collapse cam: distance (m)',
+    min: 2,
+    max: 30,
+    step: 0.5,
+    more: true,
+  },
+  { key: 'killCamRise', label: 'Kill cam: height (m)', min: 0, max: 6, step: 0.1, more: true },
+  {
+    key: 'collapseBlocks',
+    label: 'Collapse cam: blocks breaking',
+    min: 2,
+    max: 30,
+    step: 1,
+    more: true,
+  },
+  {
+    key: 'collapseWindowSeconds',
+    label: 'Collapse cam: within (s)',
     min: 0.1,
     max: 3,
     step: 0.05,
@@ -137,6 +176,7 @@ export const siegeTunables: readonly Tunable[] = [
     step: 1,
     more: true,
   },
+  { key: 'buzzKillMs', label: 'Vibrate: kill cam (ms)', min: 0, max: 200, step: 5, more: true },
   {
     key: 'buzzGuardMs',
     label: 'Vibrate: guard down (ms)',
@@ -157,6 +197,22 @@ export const siegeTunables: readonly Tunable[] = [
 
 export function siegeFeel(defaults: SiegeFeel, store: KeyValueStore): LiveTuning<SiegeFeel> {
   return new LiveTuning('siege', defaults, siegeTunables, store);
+}
+
+export type GhostLine = 'on' | 'off';
+
+/** Whether the siege draws the last shot's path, kept on this phone (the player's switch). */
+export function ghostChoice(store: KeyValueStore): LiveChoice<GhostLine> {
+  return new LiveChoice<GhostLine>(
+    'warchest.siege.ghost',
+    'Siege: last shot line',
+    [
+      { value: 'on', label: 'On' },
+      { value: 'off', label: 'Off' },
+    ],
+    'on',
+    store,
+  );
 }
 
 export type WarTent = 'siege' | 'runner';
