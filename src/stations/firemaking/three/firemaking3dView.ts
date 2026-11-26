@@ -1595,7 +1595,13 @@ export class Firemaking3DView implements ScreenView {
     const bigger = opened[opened.length - 1];
     if (bigger) {
       const staves = bigger.spots * rules.rack.stavesPerSpot;
-      lines.push(`🔓 Bigger rack: ${String(staves)} staves from now on`);
+      // Say so when its spots hold more logs than the rack before it.
+      const before = rules.rack.sizes[rules.rack.sizes.indexOf(bigger) - 1];
+      const logs =
+        bigger.logsPerSpot > (before?.logsPerSpot ?? 0)
+          ? `, ${String(bigger.logsPerSpot)} logs a spot`
+          : '';
+      lines.push(`🔓 Bigger rack: ${String(staves)} staves${logs} from now on`);
       this.#pickedSpots = undefined;
     }
     this.#layers = layers;
