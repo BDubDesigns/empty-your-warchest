@@ -23,6 +23,8 @@ export interface DebugDeps {
   /** The workers' time: skipping ahead counts as time away. */
   work: WorkClock;
   buildLabel: string;
+  /** Opens the graphics stress test (its own screen). */
+  stressTest?: () => void;
 }
 
 const MINUTE = 60_000;
@@ -427,6 +429,15 @@ export function mountDebugMenu(root: HTMLElement, deps: DebugDeps): void {
     className: 'debug-close',
     textContent: 'Close',
   });
+  const stressTest = deps.stressTest;
+  const stressTestButton = stressTest
+    ? el('button', { type: 'button', textContent: 'Stress test' })
+    : undefined;
+  stressTestButton?.addEventListener('click', () => {
+    logger.log('debug.stressTest');
+    closeButton.click();
+    stressTest?.();
+  });
   const panel = el(
     'div',
     { className: 'debug-panel', hidden: true, role: 'dialog', ariaLabel: 'Debug menu' },
@@ -458,6 +469,19 @@ export function mountDebugMenu(root: HTMLElement, deps: DebugDeps): void {
       ),
       ...tuningSections,
       section('Time', lastSeen, el('div', { className: 'debug-row' }, skipButtons)),
+      ...(stressTestButton
+        ? [
+            section(
+              'Stress test',
+              el('p', {
+                className: 'debug-note',
+                textContent:
+                  'Flies through the same siege scene built from each art pack and measures the frame rate.',
+              }),
+              stressTestButton,
+            ),
+          ]
+        : []),
       section('Save', resetButton),
     ],
   );

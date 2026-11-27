@@ -36,7 +36,13 @@ export default tseslint.config(
     ...tseslint.configs.disableTypeChecked,
   },
   {
-    files: ['src/runner/sim/**', 'src/core/**', 'src/data/**', 'src/stations/*/logic/**'],
+    files: [
+      'src/runner/sim/**',
+      'src/core/**',
+      'src/data/**',
+      'src/stations/*/logic/**',
+      'src/bench/logic/**',
+    ],
     rules: { 'no-restricted-imports': ['error', renderingLibraries] },
   },
   prettier,
