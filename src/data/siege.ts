@@ -2,6 +2,14 @@ import type { GameDataInput } from './schema';
 
 type Fort = GameDataInput['siege']['forts'][number];
 type Piece = Fort['pieces'][number];
+type Window = Extract<Piece, { kind: 'wall' }>['windows'] extends (infer W)[] | undefined
+  ? W
+  : never;
+
+/** A glazed window `width` stones across from stone `from`, `courses` high from course `sill`. */
+function window(from: number, width: number, sill: number, courses: number): Window {
+  return { from, width, sill, courses, glass: 'glass', lintel: 'lintel' };
+}
 
 // The siege (M8 feel prototype). Every number is a first guess, meant to be tuned on a phone.
 // Metres and seconds; the weapon starts at the origin and shoots toward −z.
@@ -33,6 +41,7 @@ function gatedWall(
   material: string,
   span: { from: number; to: number },
   gate: { at: number; width: number },
+  windows: { left?: Window[]; right?: Window[] } = {},
 ): Piece[] {
   const left = gate.at - gate.width / 2;
   const right = gate.at + gate.width / 2;
@@ -43,6 +52,7 @@ function gatedWall(
       length: left - span.from,
       courses,
       material,
+      windows: windows.left ?? [],
     },
     {
       kind: 'gate',
@@ -51,7 +61,14 @@ function gatedWall(
       height: courses * STONE_HEIGHT,
       material: 'wood',
     },
-    { kind: 'wall', at: [(right + span.to) / 2, z], length: span.to - right, courses, material },
+    {
+      kind: 'wall',
+      at: [(right + span.to) / 2, z],
+      length: span.to - right,
+      courses,
+      material,
+      windows: windows.right ?? [],
+    },
   ];
 }
 
@@ -79,6 +96,7 @@ const KEEP_SPOTS_Z = -58;
 
 export const siege = {
   item: 'spear',
+  potion: 'sense_potion',
   weapons: [
     {
       // An aimed volley of 5 at Command 1, one more every 5 levels; a barrage is three times that.
@@ -115,6 +133,7 @@ export const siege = {
     pole: [0.14, 1.4, 0.14],
     walkway: 2,
     walkwayWidth: 1,
+    pane: 0.12,
     // A gate leaf or a thin post under the keep goes at two hits (an aimed volley at it).
     gateHp: 50,
     weakHp: 50,
@@ -138,8 +157,9 @@ export const siege = {
   // Smashing stone wakes everything near it; a clean hit on a guard is all but silent.
   noise: {
     fire: 25,
-    hit: { stone: 12, wood: 8, guard: 3 },
-    break: { stone: 22, wood: 16 },
+    hit: { stone: 12, wood: 8, glass: 10, guard: 3 },
+    // Glass shattering is loud: it wakes everyone near it.
+    break: { stone: 22, wood: 16, glass: 24 },
     crashShare: 0.5,
     sleepShare: 0.4,
   },
@@ -180,28 +200,41 @@ export const siege = {
     // The inner curtain wall: massive. It's what keeps the keep out of reach from the courtyard,
     // so no amount of spears should open it (the inner gate's the way through).
     { id: 'curtain', kind: 'stone', density: 2200, friction: 0.85, restitution: 0.05, hp: 600 },
+    // A window's pane: a touch shatters it, and a spear goes on through.
+    { id: 'glass', kind: 'glass', density: 2500, friction: 0.4, restitution: 0.05, hp: 1 },
+    // A window's lintel: a stout beam, so the wall over a window stands when the glass goes.
+    { id: 'lintel', kind: 'wood', density: 700, friction: 0.7, restitution: 0.1, hp: 200 },
   ],
   forts: [
     {
-      // A gate with two guards behind it, two guards in the courtyard, the keep's thin posts. Par
-      // is for aimed volleys of 8 (Command 15 and up): a scripted player at Command 17 takes 6
-      // shots, about 50 spears.
+      // The first fort, and the easiest: every guard is in sight from the start (a walker standing
+      // tall on his walkway, one behind a window, one on a platform), and par is loose.
       id: 'outpost',
       name: 'Outpost',
-      par: 7,
+      par: 9,
+      guardsVisible: 'all',
       rewards: { xpPerBlock: 2, xpPerGuard: 10, winXp: 80 },
       pieces: [
         // The outer wall, its gate to the left: a guard walking the walkway behind the wall to
-        // the right of it.
-        ...gatedWall(OUTER_Z, 6, 'fieldstone', SPAN, { at: -5, width: 3 }),
+        // the right of it, high, so he's well above the battlements; one behind a window to the
+        // left of the gate.
+        ...gatedWall(
+          OUTER_Z,
+          6,
+          'fieldstone',
+          SPAN,
+          { at: -5, width: 3 },
+          { left: [window(2, 2, 1, 3)] },
+        ),
         {
           kind: 'walkway',
           at: [6, behind(OUTER_Z)],
           segments: 6,
-          height: 2.7,
+          height: 3.2,
           guard: 0,
           watch: 'patrol',
         },
+        { kind: 'post', at: [-11.5, -21], guard: 0 },
         // The courtyard, over to the right: a low wall, and a guard asleep on a watch platform.
         { kind: 'cover', at: [8, -44], length: 8, material: 'fieldstone' },
         { kind: 'platform', at: [12.8, -46], height: 1.4, guard: 1, watch: 'sleep' },
@@ -264,8 +297,18 @@ export const siege = {
           watch: 'sleep',
         },
         { kind: 'post', at: [5, -21.6], guard: 0, watch: 'sleep' },
-        { kind: 'cover', at: [-8, -44], length: 8, material: 'stone' },
-        { kind: 'post', at: [-6.5, -45.2], guard: 1 },
+        // The bailey: a room behind a wall with a window, a guard at the window and one asleep
+        // out of sight beside it.
+        {
+          kind: 'wall',
+          at: [-8, -44],
+          length: 8,
+          courses: 4,
+          material: 'stone',
+          merlons: false,
+          windows: [window(4, 2, 1, 2)],
+        },
+        { kind: 'post', at: [-7, -45.2], guard: 1 },
         { kind: 'post', at: [-9.5, -45.2], guard: 1, watch: 'sleep' },
         { kind: 'tower', at: [-12.6, -46.4], courses: 2, material: 'stone', guard: 1 },
         ...gatedWall(INNER_Z, 8, 'curtain', SPAN, { at: 9, width: 3 }),
@@ -324,7 +367,12 @@ export const siege = {
     kickTilt: 1.5,
     kickSeconds: 0.22,
     cameraClearance: 0.5,
-    zzzSize: 1,
+    zzzSize: 0.9,
+    zzzRise: 1.2,
+    zzzSeconds: 2.4,
+    zzzDrift: 0.25,
+    senseSeconds: 10,
+    ghostPx: 4,
     markSize: 1,
     markSeconds: 1.6,
     flyoverSeconds: 7,

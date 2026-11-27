@@ -2506,6 +2506,25 @@ body:not([data-view='camp']) #build-label {
   touch-action: manipulation;
 }
 
+.sg-potion {
+  min-height: 36px;
+  margin-left: 4px;
+  padding: 0 10px;
+  border: 2px solid rgb(255 90 90 / 0.6);
+  border-radius: 999px;
+  background: rgb(120 20 20 / 0.45);
+  color: #ffb0a8;
+  font:
+    700 12px system-ui,
+    sans-serif;
+  touch-action: manipulation;
+}
+
+.sg-potion[aria-pressed='true'] {
+  border-color: #ff4a3a;
+  color: #fff;
+}
+
 .sg-ghost[aria-pressed='true'] {
   border-color: #7fe8ff;
   color: #7fe8ff;

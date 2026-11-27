@@ -369,6 +369,19 @@ function checkSiege(data: GameData, issue: (path: Path, message: string) => void
     forts.add(fort.id);
     fort.pieces.forEach((piece, pieceIndex) => {
       const at = [...path, 'pieces', pieceIndex];
+      if (piece.kind === 'wall') {
+        piece.windows.forEach((window, windowIndex) => {
+          if (
+            window.from + window.width > piece.length ||
+            window.sill + window.courses >= piece.courses
+          ) {
+            issue(
+              [...at, 'windows', windowIndex],
+              'A window must fit in its wall, with a course over it for the lintel',
+            );
+          }
+        });
+      }
       if ('watch' in piece && piece.watch === 'patrol' && piece.kind !== 'walkway') {
         issue([...at, 'watch'], 'Only a guard on a walkway can patrol');
       }

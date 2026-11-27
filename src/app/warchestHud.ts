@@ -30,7 +30,12 @@ async function loadHudModels(): Promise<{ chest: THREE.Object3D; log: THREE.Obje
 const CHEST_SIZE = 46;
 const PIECE_LENGTH = 30;
 /** How long each look of piece flies, as a share of `PIECE_LENGTH`: a spear is long and thin. */
-const PIECE_LENGTHS: Record<ItemLook, number> = { round: 1, split: 1.15, pointed: 1.6 };
+const PIECE_LENGTHS: Record<ItemLook, number> = {
+  round: 1,
+  split: 1.15,
+  pointed: 1.6,
+  bottle: 0.6,
+};
 
 /**
  * A piece of an item, as it flies into the chest, its length along z: the log model for a round
@@ -40,6 +45,27 @@ function pieceModel(look: ItemLook, log: THREE.Object3D): THREE.Object3D {
   if (look === 'round') return log.clone(true);
   const piece = new THREE.Group();
   const wood = new THREE.MeshLambertMaterial({ color: look === 'split' ? 0xd9b07a : 0xa47a4a });
+  if (look === 'bottle') {
+    // A small bottle: a green glass body, a neck, a cork (lying along z).
+    const glass = new THREE.MeshLambertMaterial({
+      color: 0x5fae7a,
+      transparent: true,
+      opacity: 0.85,
+    });
+    const body = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.28, 0.6, 12), glass);
+    const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.12, 0.25, 10), glass);
+    neck.position.y = 0.42;
+    const cork = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.09, 0.09, 0.12, 8),
+      new THREE.MeshLambertMaterial({ color: 0x9a7448 }),
+    );
+    cork.position.y = 0.6;
+    const bottle = new THREE.Group();
+    bottle.add(body, neck, cork);
+    bottle.rotation.x = Math.PI / 2;
+    piece.add(bottle);
+    return piece;
+  }
   if (look === 'split') {
     // A split stave: a squared-off length of pale, fresh wood.
     piece.add(new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.12, 1), wood));

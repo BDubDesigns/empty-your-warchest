@@ -11,7 +11,7 @@ function expectInvalid(edit: (raw: ReturnType<typeof editableRawData>) => void, 
 
 describe('game data', () => {
   it('validates the prototype data', () => {
-    expect(data.items.map((item) => item.id)).toEqual(['log', 'stave', 'spear']);
+    expect(data.items.map((item) => item.id)).toEqual(['log', 'stave', 'spear', 'sense_potion']);
     expect(data.stations.map((station) => station.id)).toEqual([
       'tree_line',
       'workbench',

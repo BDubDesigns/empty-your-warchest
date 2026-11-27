@@ -18,7 +18,7 @@ export const skillSchema = z.object({ id, name });
  * How an item looks as a piece flying into a warchest: a round log, a split stave, a pointed shaft
  * (a spear).
  */
-export const itemLooks = ['round', 'split', 'pointed'] as const;
+export const itemLooks = ['round', 'split', 'pointed', 'bottle'] as const;
 
 export const itemSchema = z.object({ id, name, look: z.enum(itemLooks) });
 
@@ -814,7 +814,7 @@ const firemakingSchema = z.object({
 /** What a fort's blocks are made of. `kind` is how a block looks and sounds. */
 const siegeMaterialSchema = z.object({
   id,
-  kind: z.enum(['stone', 'wood']),
+  kind: z.enum(['stone', 'wood', 'glass']),
   /** kg per cubic metre. */
   density: positive,
   friction: nonNegative,
@@ -861,6 +861,23 @@ export const siegePieceSchema = z.discriminatedUnion('kind', [
     courses: positiveInt,
     material: id,
     merlons: z.boolean().default(true),
+    /**
+     * Windows through it: an opening `width` stones across from stone `from` (counting from its
+     * left end), from course `sill` up `courses` courses, glazed with a pane of `glass`, and a
+     * beam of `lintel` across the course above it, resting on the stones either side.
+     */
+    windows: z
+      .array(
+        z.object({
+          from: z.number().int().min(0),
+          width: positiveInt,
+          sill: z.number().int().min(0),
+          courses: positiveInt,
+          glass: id,
+          lintel: id,
+        }),
+      )
+      .default([]),
   }),
   /** A gate: two door leaves, `width` across between them and `height` tall, quick to break. */
   z.object({
@@ -950,6 +967,11 @@ const siegeFortSchema = z.object({
   id,
   name,
   par: positiveInt,
+  /**
+   * `all`: every guard can be seen from a spot of his position as the round starts (through a
+   * gap or a window), checked at startup; for the first forts. `some`: some may hide.
+   */
+  guardsVisible: z.enum(['all', 'some']).default('some'),
   /** XP for each block knocked down, each guard brought down, and winning (before stars). */
   rewards: z.object({ xpPerBlock: nonNegative, xpPerGuard: nonNegative, winXp: nonNegative }),
   pieces: z.array(siegePieceSchema).min(1),
@@ -1051,6 +1073,17 @@ export const siegeFeelSchema = z.object({
    * "!" `markSize` tall for `markSeconds`.
    */
   zzzSize: positive,
+  /**
+   * Each Z floats up `zzzRise` metres from a sleeper's head over `zzzSeconds`, drifting `zzzDrift`
+   * either way, fading in and out, one after another.
+   */
+  zzzRise: positive,
+  zzzSeconds: positive,
+  zzzDrift: nonNegative,
+  /** A Sense potion shows every guard in red through walls for `senseSeconds`. */
+  senseSeconds: positive,
+  /** The last shot's line is at least `ghostPx` pixels wide on screen, however far off. */
+  ghostPx: positive,
   markSize: positive,
   markSeconds: nonNegative,
   /**
@@ -1150,6 +1183,8 @@ const siegePartsSchema = z.object({
   platformSlab: positive,
   gateDepth: positive,
   pole: z.tuple([positive, positive, positive]),
+  /** A window's pane of glass: this thick. */
+  pane: positive,
   /** A walkway segment: `walkway` long (along it) and `walkwayWidth` across. */
   walkway: positive,
   walkwayWidth: positive,
@@ -1167,6 +1202,8 @@ const siegePartsSchema = z.object({
 const siegeShape = z.object({
   /** The warchest item shot. */
   item: id,
+  /** The item a Sense potion is: drunk, every guard shows through walls for a while. */
+  potion: id,
   /** The weapons, and the one the siege uses (more, arc weapons, come later as unlocks). */
   weapons: z.array(siegeWeaponSchema).min(1),
   weapon: id,
@@ -1208,8 +1245,13 @@ const siegeShape = z.object({
    */
   noise: z.object({
     fire: nonNegative,
-    hit: z.object({ stone: nonNegative, wood: nonNegative, guard: nonNegative }),
-    break: z.object({ stone: nonNegative, wood: nonNegative }),
+    hit: z.object({
+      stone: nonNegative,
+      wood: nonNegative,
+      glass: nonNegative,
+      guard: nonNegative,
+    }),
+    break: z.object({ stone: nonNegative, wood: nonNegative, glass: nonNegative }),
     crashShare: fraction,
     sleepShare: fraction,
   }),

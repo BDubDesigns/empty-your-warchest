@@ -32,17 +32,12 @@ const DUCK_RATE = 5;
 /** The least an alerted guard dashes before ducking again (m). */
 const LEAST_DASH = 1.5;
 
-/** A guard as he starts the round: a walker starts somewhere along his walk, either way. */
-export function startWalker(
-  mode: GuardMode,
-  x: number,
-  walk: [number, number] | undefined,
-  rng: Rng,
-): Walker {
-  const walking = mode === 'patrol' && walk !== undefined;
+/** A guard as he starts the round: where the fort puts him, a walker heading either way. */
+export function startWalker(mode: GuardMode, x: number, rng: Rng): Walker {
   return {
     mode,
-    x: walking ? rng.range(walk[0], walk[1]) : x,
+    // Where the fort puts him, so the fort's checks see him as the round starts.
+    x,
     heading: rng.next() < 0.5 ? -1 : 1,
     timer: 0,
     step: 'dash',

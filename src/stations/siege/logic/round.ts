@@ -354,7 +354,7 @@ export class SiegeRound {
             { kind: 'guard', index },
           ),
         );
-        const walker = startWalker(guard.watch, x, guard.walk, this.#watchRng);
+        const walker = startWalker(guard.watch, x, this.#watchRng);
         this.guards.push({
           guard,
           position: positionIndex,
@@ -849,7 +849,10 @@ export class SiegeRound {
     if (!spear || !tracked) return;
     const before = tracked.velocity;
     const speed = Math.hypot(before.x, before.y, before.z);
-    if (spear.flying) {
+    // Glass shatters at a touch and stops nothing: the spear flies on as it was.
+    const glass = target?.kind === 'block' && this.blocks[target.index]?.kind === 'glass';
+    if (glass) tracked.body.setLinvel(before, true);
+    else if (spear.flying) {
       spear.flying = false;
       // A spear that's hit something is spent: it glances off slowly (never on across the fort).
       const now = tracked.body.linvel();

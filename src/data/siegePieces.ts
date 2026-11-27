@@ -19,6 +19,8 @@ export interface FortBlock {
   weak: boolean;
   /** A merlon on top of a wall: the cover a guard on the walkway behind ducks behind. */
   merlon: boolean;
+  /** A window's pane of glass: seen through, and shattered by a touch. */
+  pane: boolean;
   /** Its own hit points, in place of its material's. */
   hp?: number;
   /** The piece it's part of (its index in the fort's pieces) and what kind that is. */
@@ -61,7 +63,7 @@ export function buildFort(
       material: string,
       size: Vec3,
       at: Vec3,
-      extra: Partial<Pick<FortBlock, 'banner' | 'weak' | 'hp' | 'merlon'>> = {},
+      extra: Partial<Pick<FortBlock, 'banner' | 'weak' | 'hp' | 'merlon' | 'pane'>> = {},
     ) => {
       blocks.push({
         material,
@@ -70,6 +72,7 @@ export function buildFort(
         banner: extra.banner ?? false,
         weak: extra.weak ?? false,
         merlon: extra.merlon ?? false,
+        pane: extra.pane ?? false,
         ...(extra.hp !== undefined && { hp: extra.hp }),
         piece: index,
         pieceKind: piece.kind,
@@ -83,10 +86,20 @@ export function buildFort(
     const [x, z] = piece.at;
     switch (piece.kind) {
       case 'wall':
-        wall(piece.length, piece.courses, x, z, piece.material, piece.merlons, parts, block);
+        wall(
+          piece.length,
+          piece.courses,
+          x,
+          z,
+          piece.material,
+          piece.merlons,
+          parts,
+          block,
+          piece.windows,
+        );
         break;
       case 'cover':
-        wall(piece.length, 2, x, z, piece.material, false, parts, block);
+        wall(piece.length, 2, x, z, piece.material, false, parts, block, []);
         break;
       case 'gate': {
         // Two leaves, meeting in the middle.
@@ -180,7 +193,7 @@ type AddBlock = (
   material: string,
   size: Vec3,
   at: Vec3,
-  extra?: Partial<Pick<FortBlock, 'banner' | 'weak' | 'hp' | 'merlon'>>,
+  extra?: Partial<Pick<FortBlock, 'banner' | 'weak' | 'hp' | 'merlon' | 'pane'>>,
 ) => void;
 
 /**
@@ -197,20 +210,64 @@ function wall(
   merlons: boolean,
   parts: SiegeParts,
   block: AddBlock,
+  windows: Extract<SiegePiece, { kind: 'wall' }>['windows'],
 ): void {
-  const [, height] = parts.stone;
+  const [across, height, deep] = parts.stone;
+  const left = x - (wide * across) / 2;
+  // Each window's opening (along x, up y), and the course its lintel takes.
+  const openings = windows.map((window) => ({
+    from: left + window.from * across,
+    to: left + (window.from + window.width) * across,
+    low: window.sill,
+    high: window.sill + window.courses,
+    window,
+  }));
+  // A stone goes where no window, nor the stones a lintel takes the place of, would be.
+  const clear = (course: number, middle: number, width: number) =>
+    openings.every((opening) => {
+      const reach = course === opening.high ? across : 0;
+      const inside = course >= opening.low && course <= opening.high;
+      return (
+        !inside ||
+        middle + width / 2 <= opening.from - reach + 1e-6 ||
+        middle - width / 2 >= opening.to + reach - 1e-6
+      );
+    });
   for (let course = 0; course < courses; course++) {
     const y = height / 2 + course * height;
     const shifted = course % 2 === 1 && wide > 1;
     const stones = shifted ? wide - 1 : wide;
     for (let index = 0; index < stones; index++) {
-      block(material, parts.stone, [x + (index - (stones - 1) / 2) * parts.stone[0], y, z]);
+      const middle = x + (index - (stones - 1) / 2) * across;
+      if (clear(course, middle, across)) block(material, parts.stone, [middle, y, z]);
     }
     if (shifted) {
-      const end = (wide * parts.stone[0]) / 2 - parts.halfStone[0] / 2;
-      block(material, parts.halfStone, [x - end, y, z]);
-      block(material, parts.halfStone, [x + end, y, z]);
+      const end = (wide * across) / 2 - parts.halfStone[0] / 2;
+      for (const side of [-1, 1]) {
+        if (clear(course, x + side * end, parts.halfStone[0])) {
+          block(material, parts.halfStone, [x + side * end, y, z]);
+        }
+      }
     }
+  }
+  for (const opening of openings) {
+    const width = opening.to - opening.from;
+    const middle = (opening.from + opening.to) / 2;
+    // The pane, thin, in the middle of the wall; the lintel over it, a stone wider each side.
+    const tall = opening.window.courses * height;
+    block(
+      opening.window.glass,
+      [width, tall, parts.pane],
+      [middle, opening.low * height + tall / 2, z],
+      {
+        pane: true,
+      },
+    );
+    block(
+      opening.window.lintel,
+      [width + 2 * across, height, deep],
+      [middle, opening.high * height + height / 2, z],
+    );
   }
   if (!merlons) return;
   const top = courses * height;

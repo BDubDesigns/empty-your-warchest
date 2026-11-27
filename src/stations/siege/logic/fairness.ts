@@ -23,6 +23,8 @@ import {
 interface Box {
   min: Vec3;
   max: Vec3;
+  /** A window's glass: seen through, and broken at a touch. */
+  pane?: boolean;
   kind: 'block' | 'guard';
   index: number;
   /** The piece kind it belongs to. */
@@ -181,7 +183,9 @@ export function fortProblems(siege: Siege, fort: SiegeFort): FortProblem[] {
   // A position's guards are out of reach and out of sight from every spot of the positions before
   // it, even with every gate and low wall broken: or they're shot from afar, and the position is
   // won before the weapon gets there.
-  const gatesDown = (box: Box) => box.kind === 'block' && GATES.has(box.piece);
+  const gatesDown = (box: Box) =>
+    box.kind === 'block' && (GATES.has(box.piece) || box.pane === true);
+  const glass = (box: Box) => box.pane === true;
   fort.positions.forEach((_, positionIndex) => {
     const guards = boxes.filter(
       (box) => box.kind === 'guard' && guardPosition(fort, box.index) === positionIndex,
@@ -197,7 +201,7 @@ export function fortProblems(siege: Siege, fort: SiegeFort): FortProblem[] {
               guardPoints(pose).some((point) => {
                 const muzzle = muzzleAt(spot, straightAt(spot, point, weapon.pivotHeight), weapon);
                 return (
-                  lineHit(muzzle, point, set, 0, ignore) === pose ||
+                  lineHit(muzzle, point, set, 0, (box) => ignore(box) || glass(box)) === pose ||
                   reaches(spot, point, pose, ignore, set)
                 );
               }),
@@ -214,7 +218,45 @@ export function fortProblems(siege: Siege, fort: SiegeFort): FortProblem[] {
     });
   });
 
+  // In the first forts every guard is in sight from a spot of his position as the round starts
+  // (through a gap or a window): no hunting for one.
+  if (fort.guardsVisible === 'all') {
+    fort.positions.forEach((position, positionIndex) => {
+      boxes
+        .filter((box) => box.kind === 'guard' && guardPosition(fort, box.index) === positionIndex)
+        .forEach((guard) => {
+          const seen = position.spots.some(([x, z]) =>
+            sightPoints(guard).some((point) => {
+              const spot = { x, z };
+              const muzzle = muzzleAt(spot, straightAt(spot, point, weapon.pivotHeight), weapon);
+              return lineHit(muzzle, point, boxes, 0, glass) === guard;
+            }),
+          );
+          if (!seen) {
+            problems.push({
+              path: ['siege', 'forts', fort.id, 'positions', positionIndex],
+              message: `A guard (${String(guard.index)}) can't be seen from his position as the round starts`,
+            });
+          }
+        });
+    });
+  }
   return problems;
+}
+
+/** Points over the front of a guard, across and up, that a sight line can find him at. */
+function sightPoints(guard: Box): Vec3[] {
+  const points: Vec3[] = [];
+  for (const across of [0.2, 0.5, 0.8]) {
+    for (const up of [0.3, 0.55, 0.8, 0.95]) {
+      points.push({
+        x: guard.min.x + (guard.max.x - guard.min.x) * across,
+        y: guard.min.y + (guard.max.y - guard.min.y) * up,
+        z: guard.max.z,
+      });
+    }
+  }
+  return points;
 }
 
 /** Fails loudly at startup if any fort is unfair. */
@@ -234,6 +276,7 @@ function fortBoxes(siege: Siege, fort: SiegeFort): Box[] {
     kind: 'block',
     index,
     piece: block.pieceKind,
+    pane: block.pane,
   }));
   const [width, height, depth] = siege.guard.size;
   let index = 0;

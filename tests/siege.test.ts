@@ -107,19 +107,22 @@ function aimAt(spot: Spot, target: Vec3): Aim {
 
 /** The real data with an extra one-position fort, `test`, of these blocks (unchecked). */
 function fortData(
-  blocks: Omit<FortBlock, 'piece' | 'pieceKind' | 'banner' | 'weak' | 'merlon'>[] & object[],
+  blocks: Omit<FortBlock, 'piece' | 'pieceKind' | 'banner' | 'weak' | 'merlon' | 'pane'>[] &
+    object[],
 ) {
   const game = structuredClone(data);
   game.siege.forts.push({
     id: 'test',
     name: 'Test',
     par: 5,
+    guardsVisible: 'some',
     rewards: { xpPerBlock: 2, xpPerGuard: 5, winXp: 10 },
     pieces: [],
     blocks: blocks.map((block) => ({
       banner: false,
       weak: false,
       merlon: false,
+      pane: false,
       ...block,
       piece: 0,
       pieceKind: 'wall' as const,
@@ -268,7 +271,7 @@ describe('siege forts', () => {
     }
     expect(fort.blocks.some((block) => block.merlon)).toBe(true);
     expect(fort.blocks.filter((block) => block.banner)).toHaveLength(1);
-    expect(fort.positions.map((position) => position.guards.length)).toEqual([1, 1, 0]);
+    expect(fort.positions.map((position) => position.guards.length)).toEqual([2, 1, 0]);
   });
 
   it('an aimed volley at the outer wall hits it, dealing damage', () => {
@@ -502,13 +505,14 @@ describe('siege guards and positions', () => {
     }
   }, 120_000);
 
-  it('a scripted player at Command 19 takes the Outpost for about 30 to 50 spears, the Stronghold 50 to 90', () => {
+  it('a scripted player at Command 19 takes the Outpost for 25 to 40 spears, the Stronghold about 50 to 90', () => {
     // Guards on the walls dodge and duck: the scripted player waits them out and shoots through
     // the gaps, so a run costs a volley more or less than it used to.
     // Brandon's level: aimed volleys of 8, so a shot is 8 spears and "about" is a shot either way.
     const aimed = aimedVolley(WEAPON, 19);
     for (const [fort, low, high] of [
-      ['outpost', 30, 50 + aimed],
+      // The first fort is the easy one.
+      ['outpost', 25, 40],
       ['stronghold', 50, 90 + aimed],
     ] as const) {
       const spent: number[] = [];
@@ -607,6 +611,34 @@ describe('siege guards on watch', () => {
   });
 });
 
+describe('siege windows', () => {
+  it('a spear shatters a window and flies on through; the shatter is loud', () => {
+    const { round, events, logs } = siege('outpost');
+    const pane = round.blocks.findIndex((block) => block.block.pane);
+    const state = round.blocks[pane];
+    if (!state) throw new Error('No window');
+    // From the spot in front of it, at the guard behind it.
+    round.moveTo(0);
+    run(round, Math.ceil(data.siege.feel.spotSeconds * 60) + 2);
+    const guard = round.guards.find(
+      (entry) => entry.guard.watch === 'stand' && entry.position === 0,
+    );
+    const [x, y, z] = guard?.guard.at ?? state.block.at;
+    round.throw('aimed', aimAt(round.ballista(), { x, y: y + 1.1, z }));
+    run(round, 60);
+    expect(state.broken).toBe(true);
+    expect(events).toContainEqual(
+      expect.objectContaining({ type: 'break', block: pane, kind: 'glass' }),
+    );
+    // On through: the guard behind it is hit.
+    expect(events.some((event) => event.type === 'hit' && event.kind === 'guard')).toBe(true);
+    expect(
+      logs.some((event) => event.type === 'siege.noise' && event.data?.source === 'break:glass'),
+    ).toBe(true);
+    round.dispose();
+  });
+});
+
 describe('fort fairness', () => {
   it('passes for every fort in data', () => {
     for (const fort of data.siege.forts) expect(fortProblems(data.siege, fort)).toEqual([]);
@@ -640,6 +672,18 @@ describe('fort fairness', () => {
       raw.siege.forts[0]?.pieces.push({ kind: 'post', at: [1, -45.2], guard: 1 });
     });
     expect(problems.some((message) => message.includes('can be seen or hit from here'))).toBe(true);
+  });
+
+  it('fails when a fort that shows all its guards hides one', () => {
+    // The Outpost's window bricked up: the guard behind it can't be seen as the round starts.
+    const problems = outpost((raw) => {
+      for (const piece of raw.siege.forts[0]?.pieces ?? []) {
+        if (piece.kind === 'wall') piece.windows = [];
+      }
+    });
+    expect(problems.some((message) => message.includes("can't be seen from his position"))).toBe(
+      true,
+    );
   });
 
   it('fails when a guard is out of reach of every spot', () => {

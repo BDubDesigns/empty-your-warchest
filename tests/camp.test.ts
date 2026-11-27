@@ -67,6 +67,7 @@ describe('warchest view', () => {
       { item: 'log', name: 'Log', detail: '12' },
       { item: 'stave', name: 'Stave', detail: '0' },
       { item: 'spear', name: 'Spear', detail: '5' },
+      { item: 'sense_potion', name: 'Sense potion', detail: '0' },
     ]);
   });
 });

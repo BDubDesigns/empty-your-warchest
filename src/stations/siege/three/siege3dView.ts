@@ -109,6 +109,8 @@ const COLORS = {
   leather: 0x4a3322,
   bannerTrim: 0xf0cd5c,
   weakBand: 0xd23a2a,
+  glass: 0x9fd8ec,
+  sense: 0xff2a2a,
   stone: 0x9b978d,
   wood: 0xc39a66,
   dust: 0xcdbb9c,
@@ -200,9 +202,24 @@ export class Siege3DView implements ScreenView {
   /** The kick of the last shot, from 1 (just shot) down to 0 (settled). */
   #kick = 0;
   /** Over each guard's head: "Z z z" while he sleeps, "!" a moment when he's alerted. */
-  #marks: { zzz: THREE.Sprite; bang: THREE.Sprite; alertedAt: number }[] = [];
+  #marks: {
+    zs: { sprite: THREE.Sprite; material: THREE.SpriteMaterial }[];
+    bang: THREE.Sprite;
+    alertedAt: number;
+    /** Red through walls, while a Sense potion lasts or scouting. */
+    sense: THREE.Mesh;
+  }[] = [];
+  /** A Sense potion's red lasts until then (real seconds). */
+  #senseUntil = 0;
+  readonly #senseMaterial = new THREE.MeshBasicMaterial({
+    color: COLORS.sense,
+    transparent: true,
+    opacity: 0.75,
+    depthTest: false,
+    depthWrite: false,
+  });
   readonly #zzzMaterial = new THREE.SpriteMaterial({
-    map: textSprite('Z z z', '#eef4ff'),
+    map: textSprite('z', '#eef4ff'),
   });
   readonly #bangMaterial = new THREE.SpriteMaterial({
     map: textSprite('!', '#ffd23c'),
@@ -301,6 +318,15 @@ export class Siege3DView implements ScreenView {
       wood: this.#textures.wood.map(
         (map, stage) =>
           new THREE.MeshLambertMaterial({ map, color: stageTint(COLORS.wood, stage) }),
+      ),
+      glass: [0, 1, 2].map(
+        () =>
+          new THREE.MeshLambertMaterial({
+            color: COLORS.glass,
+            transparent: true,
+            opacity: 0.32,
+            depthWrite: false,
+          }),
       ),
     };
     const { length, radius } = rules.projectile;
@@ -471,8 +497,13 @@ export class Siege3DView implements ScreenView {
     for (const look of this.#guards) this.#free(look.root);
     // The marks' look is shared: only out of the scene.
     for (const mark of this.#marks) {
-      mark.zzz.removeFromParent();
+      for (const z of mark.zs) {
+        z.sprite.removeFromParent();
+        z.material.dispose();
+      }
       mark.bang.removeFromParent();
+      mark.sense.removeFromParent();
+      mark.sense.geometry.dispose();
     }
     this.#marks = [];
     for (const spear of this.#spears) this.#free(spear);
@@ -630,12 +661,25 @@ export class Siege3DView implements ScreenView {
       this.#fortGroup.add(look.root);
       return { ...look, down: false };
     });
+    const [width, height, depth] = size;
     this.#marks = round.guards.map(() => {
-      const zzz = new THREE.Sprite(this.#zzzMaterial);
+      const zs = [0, 1, 2].map(() => {
+        const material = this.#zzzMaterial.clone();
+        const sprite = new THREE.Sprite(material);
+        sprite.renderOrder = 5;
+        this.#effects.add(sprite);
+        return { sprite, material };
+      });
       const bang = new THREE.Sprite(this.#bangMaterial);
-      zzz.renderOrder = bang.renderOrder = 5;
-      this.#effects.add(zzz, bang);
-      return { zzz, bang, alertedAt: -Infinity };
+      bang.renderOrder = 5;
+      const sense = new THREE.Mesh(
+        new THREE.BoxGeometry(width, height, depth),
+        this.#senseMaterial,
+      );
+      sense.renderOrder = 20;
+      sense.visible = false;
+      this.#effects.add(bang, sense);
+      return { zs, bang, alertedAt: -Infinity, sense };
     });
     this.#drawBodies();
   }
@@ -856,7 +900,17 @@ export class Siege3DView implements ScreenView {
     if (!look || !state) return;
     look.gone = true;
     look.mesh.visible = false;
-    this.#play(kind === 'stone' ? 'break-stone' : 'break-wood', 0.55, kind === 'stone' ? -900 : 0);
+    if (kind === 'glass') {
+      // A bright, high shatter.
+      this.#play('break-stone', 0.6, 1400);
+      this.#play('star', 0.4, 900);
+    } else {
+      this.#play(
+        kind === 'stone' ? 'break-stone' : 'break-wood',
+        0.55,
+        kind === 'stone' ? -900 : 0,
+      );
+    }
     this.#stop(feel.heavyHitStopMs);
     this.#deps.haptics.pulse(feel.buzzBreakMs);
     this.#shake = Math.max(this.#shake, 0.06 * feel.shakeStrength);
@@ -987,6 +1041,8 @@ export class Siege3DView implements ScreenView {
     this.#drawBodies();
     this.#drawBallista(realDt);
     this.#drawAim();
+    // The ghost keeps its width on screen as the camera moves.
+    if (this.#ghost.visible && this.#trailPoints.length > 1) this.#drawGhost();
     this.#updateEffects(dt);
     this.#updateFlag(time / 1000);
     this.#updateUi();
@@ -1041,11 +1097,30 @@ export class Siege3DView implements ScreenView {
         look.root.rotateY(Math.sin(this.#now * 7) * 0.5);
       }
       const head = new THREE.Vector3(pose.position.x, pose.position.y + tall / 2, pose.position.z);
-      mark.zzz.visible = state.walker.mode === 'sleep' && !state.down;
-      mark.zzz.position
-        .copy(head)
-        .add(new THREE.Vector3(0.15, feel.zzzSize * 0.8 + Math.sin(this.#now * 2) * 0.06, 0));
-      mark.zzz.scale.set(feel.zzzSize * 2, feel.zzzSize, 1);
+      const asleep = state.walker.mode === 'sleep' && !state.down;
+      mark.zs.forEach((z, order) => {
+        // Each Z rises from his head, drifting and growing, fading in and out; then the next.
+        const share = (this.#now / Math.max(feel.zzzSeconds, 0.1) + order / mark.zs.length) % 1;
+        z.sprite.visible = asleep;
+        z.sprite.position
+          .copy(head)
+          .add(
+            new THREE.Vector3(
+              0.1 + Math.sin(share * Math.PI * 2 + order) * feel.zzzDrift,
+              0.15 + share * feel.zzzRise,
+              0,
+            ),
+          );
+        const grow = feel.zzzSize * (0.6 + share * 0.7);
+        // The letter sits in a canvas twice as wide as it is tall.
+        z.sprite.scale.set(grow * 2, grow, 1);
+        z.material.opacity = Math.sin(share * Math.PI);
+      });
+      // Red through walls while a Sense potion lasts, or scouting.
+      const sensing = this.#now < this.#senseUntil || this.#scout.blend > 0.3;
+      mark.sense.visible = sensing && !state.down;
+      mark.sense.position.set(pose.position.x, pose.position.y, pose.position.z);
+      mark.sense.quaternion.copy(look.root.quaternion);
       mark.bang.visible = !state.down && this.#now - mark.alertedAt < feel.markSeconds;
       mark.bang.position.copy(head).add(new THREE.Vector3(0, feel.markSize * 0.8, 0));
       mark.bang.scale.set(feel.markSize, feel.markSize, 1);
@@ -1070,7 +1145,10 @@ export class Siege3DView implements ScreenView {
 
   /** The solid line along the last shot's path, `ghostWidth` thick. */
   #drawGhost(): void {
-    const width = this.#deps.feel.values.ghostWidth;
+    const feel = this.#deps.feel.values;
+    // Metres a pixel spans at a metre off, so each segment can be made wide enough to see.
+    const perPixel =
+      (2 * Math.tan((this.#camera.fov * DEG) / 2)) / Math.max(this.#element.clientHeight, 1);
     const matrix = new THREE.Matrix4();
     const turn = new THREE.Quaternion();
     const forward = new THREE.Vector3(0, 0, 1);
@@ -1082,7 +1160,10 @@ export class Siege3DView implements ScreenView {
       const way = to.clone().sub(from);
       const length = way.length();
       turn.setFromUnitVectors(forward, way.normalize());
-      matrix.compose(from.clone().lerp(to, 0.5), turn, new THREE.Vector3(width, width, length));
+      const middle = from.clone().lerp(to, 0.5);
+      const far = middle.distanceTo(this.#camera.position);
+      const width = Math.max(feel.ghostWidth, far * perPixel * feel.ghostPx);
+      matrix.compose(middle, turn, new THREE.Vector3(width, width, length));
       this.#ghost.setMatrixAt(count++, matrix);
     }
     this.#ghost.count = count;
@@ -1633,6 +1714,25 @@ export class Siege3DView implements ScreenView {
     return { x: point.x, y: point.y, z: point.z };
   }
 
+  /** A Sense potion: one from the warchest, and every guard shows in red through walls a while. */
+  #drinkPotion(): void {
+    const { game } = this.#deps;
+    const rules = game.data.siege;
+    const round = this.#round;
+    if (!round || this.#now < this.#senseUntil || game.inventory.count(rules.potion) < 1) return;
+    game.removeItems(rules.potion, 1);
+    const seconds = this.#deps.feel.values.senseSeconds;
+    this.#senseUntil = this.#now + seconds;
+    this.#play('creak', 0.4, 1200);
+    this.#deps.logger.log('siege.potion', {
+      fort: round.fort.id,
+      position: round.position,
+      throws: round.throws,
+      seconds,
+      left: game.inventory.count(rules.potion),
+    });
+  }
+
   /** Scout: up over the fort to look down on it, or back down to the weapon. */
   #toggleScout(): void {
     const round = this.#round;
@@ -1712,6 +1812,11 @@ export class Siege3DView implements ScreenView {
       this.#toggleScout();
     });
     scout.setAttribute('aria-pressed', 'false');
+    // A Sense potion: every guard in red through walls for a while (shown when there's one).
+    const potion = button('Sense', 'sg-potion', () => {
+      this.#drinkPotion();
+    });
+    spots.append(potion);
     const shoot = el('div', 'sg-shoot');
     shoot.append(scout, modes, fire);
     controls.replaceChildren(spots, shoot);
@@ -1754,6 +1859,7 @@ export class Siege3DView implements ScreenView {
       fire,
       scout,
       ghost,
+      potion,
       crosshair,
       card,
       cardStars,
@@ -1834,6 +1940,13 @@ export class Siege3DView implements ScreenView {
     ui.scout.setAttribute('aria-pressed', String(this.#scout.on));
     ui.scout.textContent = this.#scout.on ? 'Back' : 'Scout';
     ui.ghost.setAttribute('aria-pressed', String(this.#deps.ghost.value === 'on'));
+    const potions = this.#deps.game.inventory.count(rules.potion);
+    const senseLeft = this.#senseUntil - this.#now;
+    ui.potion.hidden = potions < 1 && senseLeft <= 0;
+    ui.potion.disabled = senseLeft > 0;
+    ui.potion.setAttribute('aria-pressed', String(senseLeft > 0));
+    ui.potion.textContent =
+      senseLeft > 0 ? `Sense ${String(Math.ceil(senseLeft))}s` : `Sense ×${String(potions)}`;
     for (const { mode, element, cost } of ui.modeButtons) {
       element.setAttribute('aria-checked', String(mode === this.#mode));
       const spears = spearsShot(mode, round.aimed, left, round.weapon);
