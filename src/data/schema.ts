@@ -1009,9 +1009,8 @@ export const siegeObjectiveSchema = z.discriminatedUnion('kind', [
  * every `aimed.everyLevels` levels of `skill`; a barrage is `barrageTimes` as many. Every spear
  * leaves at `speed` m/s (one speed: there's no power to set), tilted from `tilt.min` to `tilt.max`
  * degrees. It turns and tilts about a pivot `pivotHeight` up from where it stands; spears leave
- * from its muzzle, `muzzle` along the bolt from the pivot, side by side `spacing` apart. `size`
- * (width, height, length) is only how big it's drawn. The ballista shoots flat and fast; arc
- * weapons (a catapult, a trebuchet) come later.
+ * from its muzzle, `muzzle` along the bolt from the pivot, side by side `spacing` apart. The
+ * ballista shoots flat and fast; arc weapons (a catapult, a trebuchet) come later.
  */
 const siegeWeaponSchema = z.object({
   id,
@@ -1024,7 +1023,6 @@ const siegeWeaponSchema = z.object({
   pivotHeight: positive,
   muzzle: positive,
   spacing: nonNegative,
-  size: z.tuple([positive, positive, positive]),
 });
 
 /** Feel numbers for the siege. The debug menu can override them live. */
@@ -1184,13 +1182,15 @@ const siegeSchema = z.object({
     topple: nonNegative,
   }),
   /**
-   * The captain: a guard `scale` times as big, tinted `tint`, with `hp` hit points, standing in
+   * The captain: a guard `scale` times as big, tinted `tint` (and glowing `glow` of it, so he
+   * reads far off), with `hp` hit points, standing in
    * one of the keep's captain windows with his middle `inset` m inside its face. Only what shows
    * of him is hit: his box starts `sill` m above his floor (the window's sill).
    */
   captain: z.object({
     scale: positive,
     tint: hexColor,
+    glow: fraction,
     hp: positive,
     sill: nonNegative,
     inset: z.number(),
@@ -1229,7 +1229,6 @@ const siegeSchema = z.object({
    * name (the ballista's bolt, for the spear). Guards play the named `clips` of their model.
    */
   skins: z.object({
-    ballista: skinSchema,
     bolt: skinSchema,
     guard: skinSchema.extend({
       clips: z.object({ stand: name, patrol: name, down: name }),

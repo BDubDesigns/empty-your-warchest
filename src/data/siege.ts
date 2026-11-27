@@ -24,19 +24,18 @@ export const siege = {
       pivotHeight: 1.2,
       muzzle: 1,
       spacing: 0.08,
-      size: [1.4, 1.1, 2.2],
     },
   ],
   weapon: 'ballista',
-  // Just ahead of the camera and under it: at the low ground (the camera 1.7 m up) it stands on
-  // the field.
-  mount: { ahead: 2.5, below: 0.5 },
+  // Just under the camera, out of its view: its spears come up from the bottom of the screen. At
+  // the low ground (the camera 1.7 m up) it stands on the field.
+  mount: { ahead: 0, below: 0.5 },
   // Kenney's chibi soldier, 1.5 m tall and nearly as wide: a big target, seen at range. A direct
   // hit brings him down.
   guard: { size: [1.1, 1.5, 0.8], density: 400, friction: 0.8, hp: 20, downTilt: 50, topple: 2 },
   // A size bigger, in gold. He stands just inside his window, and shows from its sill up (the
   // kit's wide window opens about 1 m over its floor).
-  captain: { scale: 1.2, tint: '#ffc64a', hp: 20, sill: 1, inset: 0.15 },
+  captain: { scale: 1.2, tint: '#ffc64a', glow: 0.35, hp: 20, sill: 1, inset: 0.15 },
   materials: [
     { id: 'stone', kind: 'stone', density: 1800, friction: 0.8, restitution: 0.05 },
     { id: 'timber', kind: 'wood', density: 600, friction: 0.7, restitution: 0.1 },
@@ -45,13 +44,13 @@ export const siege = {
     // What never breaks: the gatehouse, the keep, the stretches of wall inside the towers.
     { id: 'solid_stone', kind: 'stone', density: 2200, friction: 0.85, restitution: 0.05 },
   ],
-  // A spear at 90 m/s deals about 30: a wall chunk or a tower's wedge takes two aimed volleys on
-  // it, a battlement one, a merlon a spear or two; the gate goes at about four spears, the spear
-  // rack at one.
+  // A spear at 90 m/s deals about 30: a wall chunk or a tower's wedge takes six spears (an aimed
+  // volley and a bit), a battlement three, a merlon a spear or two; the gate goes at about four
+  // spears, the spear rack at one.
   parts: {
-    wallChunk: { material: 'stone', hp: 260 },
+    wallChunk: { material: 'stone', hp: 180 },
     battlement: { material: 'stone', hp: 80 },
-    towerChunk: { material: 'stone', hp: 260 },
+    towerChunk: { material: 'stone', hp: 180 },
     merlon: { material: 'stone', hp: 35 },
     gate: { material: 'timber', hp: 120 },
     towerRoof: { material: 'tiles', hp: 90 },
@@ -82,7 +81,7 @@ export const siege = {
   guardMoves: { patrolSpeed: 0.8, patrolPause: 1.2 },
   // Kenney's Castle Kit and Mini Characters (CC0): skins over the rules' boxes.
   skins: {
-    ballista: { model: 'models/kenney/castle/siege-ballista.glb', fit: 'box', turn: 90 },
+    // The spear is the ballista's bolt.
     bolt: {
       model: 'models/kenney/castle/siege-ballista.glb',
       fit: 'height',
