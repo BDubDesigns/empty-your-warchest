@@ -195,6 +195,86 @@ describe('foraging a chain', () => {
       paid,
     );
     expect(byBoulder.patches).toEqual([]);
+    // A boulder alone pays a patch nothing has touched yet.
+    const fresh = forageChain(
+      clearing,
+      {
+        steps: [],
+        rolls: [
+          roll('b1', [
+            { x: 100, y: 600 },
+            { x: 300, y: 600 },
+          ]),
+        ],
+      },
+      { ...forage, boulders: new Map() },
+      rules,
+      new Set<string>(),
+    );
+    expect(fresh.patches).toEqual(['patch1']);
+    expect(total(fresh.drops, 'red_cap')).toBe(rules.patches.yield);
+    // A trunk that crashes into the cabin never reaches the patch.
+    const crashed = forageChain(
+      clearing,
+      {
+        steps: [{ ...step('c4', angle), paths: [{ angle, cabin: { at: 10, tilt: 0.5 } }] }],
+        rolls: [],
+      },
+      forage,
+      rules,
+      new Set<string>(),
+    );
+    expect(crashed.patches).toEqual([]);
+  });
+
+  it('sheds a mossy boulder’s moss on its first hit in a round, banks it, and logs it', async () => {
+    const { logger } = testLogger();
+    const banked: Stack[] = [];
+    // d3 at (300, 610) felled to the left knocks k1 rolling on to the left, over the patch.
+    const withBoulder: Clearing = {
+      ...tutorial,
+      boulders: [{ id: 'k1', x: 240, y: 610, radius: 20 }],
+    };
+    const round = new WoodcuttingRound(
+      withBoulder,
+      {
+        logger,
+        feel: () => data.woodcutting.feel,
+        bank: (batches) => batches,
+        forage: {
+          ...rules,
+          mossyTrees: { ...rules.mossyTrees, share: 0 },
+          mushroomTrees: { ...rules.mushroomTrees, share: 0 },
+          mossyBoulders: { ...rules.mossyBoulders, share: 1 },
+        },
+        bankDrops: (drops) => banked.push(...drops),
+        view: 'test',
+      },
+      9,
+    );
+    round.forage.patches = [{ id: 'patch1', x: 150, y: 610, radius: rules.patches.radius }];
+    const moss = round.forage.boulders.get('k1') ?? 0;
+    expect(moss).toBeGreaterThanOrEqual(rules.mossyBoulders.count.min);
+    round.touchTree('d3');
+    round.aimTo(Math.PI);
+    round.tick(0.5);
+    round.releaseAim();
+    round.chop();
+    for (let i = 0; i < 200 && round.phase.kind === 'chop'; i++) {
+      round.grab();
+      round.setPull(1);
+      round.tick(0.2);
+      round.releaseAxe();
+      round.tick(1);
+    }
+    for (let i = 0; i < 400 && round.phase.kind === 'falling'; i++) round.tick(0.05);
+    expect(total(banked, 'moss')).toBe(moss);
+    expect(total(banked, 'red_cap')).toBe(rules.patches.yield);
+    expect(round.hasForaged('boulder:k1')).toBe(true);
+    expect(round.hasForaged('patch:patch1')).toBe(true);
+    const events = await logger.readAll();
+    const shed = events.find((event) => event.type === 'woodcutting.mossShed');
+    expect(shed?.data).toMatchObject({ boulder: 'k1', moss, by: 'd3' });
   });
 
   it('banks a chain’s drops with its logs, and logs them', async () => {
