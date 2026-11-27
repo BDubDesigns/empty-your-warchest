@@ -527,6 +527,7 @@ export class Woodcutting3DView implements ScreenView {
         feel: () => this.#feel(),
         chainExponent: this.#deps.game.data.woodcutting.chainExponent,
         forage: game.data.woodcutting.forage,
+        ...(plan.seed !== undefined && { forageSeed: plan.seed }),
         bankDrops: (drops) => {
           for (const stack of drops) game.addItems(stack.item, stack.count);
         },

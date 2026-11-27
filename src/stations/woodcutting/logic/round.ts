@@ -123,6 +123,11 @@ export interface RoundHooks {
    * (into the warchest). Without it, a round forages nothing.
    */
   forage?: WoodcuttingForage;
+  /**
+   * The forage's seed: the clearing's, so replaying a clearing's seed shows the same moss,
+   * mushrooms and patches. Defaults to the round's seed (the tutorial has no clearing seed).
+   */
+  forageSeed?: number;
   bankDrops?: (drops: Stack[]) => void;
   /** Economy: a chain of N trees banks N^chainExponent logs. Defaults to 1 (a log per tree). */
   chainExponent?: number;
@@ -257,7 +262,7 @@ export class WoodcuttingRound {
     this.logs = 0;
     this.lostLogs = 0;
     this.forage = this.#hooks.forage
-      ? seedForage(this.startClearing, this.#hooks.forage, seed)
+      ? seedForage(this.startClearing, this.#hooks.forage, this.#hooks.forageSeed ?? seed)
       : { trees: new Map(), boulders: new Map(), patches: [] };
     this.drops = [];
     this.lostDrops = [];

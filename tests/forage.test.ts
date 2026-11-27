@@ -57,6 +57,26 @@ describe('seeding the forage', () => {
     ).toBe(true);
   });
 
+  it('follows the clearing’s seed, so replaying a clearing shows the same forage', () => {
+    const { logger } = testLogger();
+    const rounds = [101, 202].map(
+      (roundSeed) =>
+        new WoodcuttingRound(
+          clearing,
+          {
+            logger,
+            feel: () => data.woodcutting.feel,
+            bank: (batches) => batches,
+            forage: rules,
+            forageSeed: 3,
+            view: 'test',
+          },
+          roundSeed,
+        ),
+    );
+    for (const round of rounds) expect(round.forage).toEqual(seedForage(clearing, rules, 3));
+  });
+
   it('makes about the shares in data mossy and mushroom trees, over many rounds', () => {
     let trees = 0;
     let mossy = 0;
