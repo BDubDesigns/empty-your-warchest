@@ -1618,6 +1618,306 @@ const workersSchema = z.object({
     .min(1),
 });
 
+// The castle: the siege's next target, built from the Quaternius kits (Debug → Castle preview shows
+// it). Metres, y up, the castle's middle at the origin and its front (the gate) facing +z, toward
+// the player. castleLayout.ts lays it out and checks it holds together.
+
+const castleTowerShape = z.enum(['round', 'square']);
+const castlePoint = z.tuple([z.number(), z.number()]);
+const castleVec3 = z.tuple([z.number(), z.number(), z.number()]);
+/** A building's sides, as seen from outside: front faces +z (the gate), back −z, left −x, right +x. */
+export const castleSides = ['front', 'back', 'left', 'right'] as const;
+
+/**
+ * One storey of a side of a building, left to right as seen from outside, one letter per kit
+ * module: `-` a plain wall, `t` a thin window, `w` a wide window, `d` a door (ground floor only).
+ */
+const castleFacade = z.string().regex(/^[-twd]+$/, 'Use - t w d, one per module');
+
+/** A piece of the kit (a node of its GLB), turned (degrees) and moved (m) from where it's placed. */
+const castlePieceSchema = z.object({
+  node: name,
+  turn: z.number().default(0),
+  offset: castleVec3.default([0, 0, 0]),
+});
+
+/**
+ * A tower (round or square) or the gatehouse: a node of the curtain wall's ring. `size` is a round
+ * tower's radius or half a square one's width; `height` its stonework's top; `top` a pointed tile
+ * roof or battlements a guard can stand behind. A gatehouse is a square tower `depth` m deep with
+ * an arched gate `gate` (width, height) through it, front to back.
+ */
+const castleTowerSchema = z.object({
+  id,
+  shape: castleTowerShape,
+  at: castlePoint,
+  size: positive,
+  /** Half its depth (z), for a square tower that isn't square; its `size` otherwise. */
+  depth: positive.optional(),
+  height: positive,
+  top: z.enum(['roof', 'battlements']),
+  gate: z.object({ width: positive, height: positive }).optional(),
+});
+
+/** A stretch of curtain wall from one tower to another, straight along x or z. */
+const castleWallSchema = z.object({ id, from: id, to: id });
+
+/**
+ * A building in the courtyard, built from the kit's wall modules: `modules` across (x) and deep
+ * (z), `storeys` high, each side's storeys from the ground up (see `castleFacade`). Its roof is the
+ * kit's `roof` piece, stretched to fit, with `gable` closing its ends.
+ */
+const castleBuildingSchema = z.object({
+  id,
+  name,
+  at: castlePoint,
+  modules: z.tuple([positiveInt, positiveInt]),
+  storeys: positiveInt,
+  facades: z.object({
+    front: z.array(castleFacade),
+    back: z.array(castleFacade),
+    left: z.array(castleFacade),
+    right: z.array(castleFacade),
+  }),
+});
+
+/** A thing from the kit standing in the courtyard (the spear rack, barrels, a wagon). */
+const castlePropSchema = z.object({
+  id,
+  piece: id,
+  at: castlePoint,
+  turn: z.number().default(0),
+});
+
+/**
+ * Steps up the inside of a wall to its walk: starting `start` m along the wall (from its `from`
+ * tower's middle) and climbing `run` m along it (negative: back toward `from`), `width` wide.
+ */
+const castleStairSchema = z.object({
+  id,
+  wall: id,
+  start: z.number(),
+  run: z.number().refine((run) => run !== 0, 'A stair must climb somewhere'),
+  width: positive,
+});
+
+/**
+ * A guard's way round the castle: on a wall's walk (`at` m along it from its `from` tower), on the
+ * courtyard's ground, or up or down a stair. Walking from one to the next must stay on its level
+ * (the same wall's walk; the ground clear of buildings), or change level by a stair.
+ */
+const castleWaypointSchema = z.union([
+  z.object({ walk: id, at: z.number() }),
+  z.object({ ground: castlePoint }),
+  z.object({ stair: id }),
+]);
+
+/** A place the player shoots from: the camera there, looking at `look`, `fov` degrees high. */
+const castleVantageSchema = z.object({
+  id,
+  name,
+  at: castleVec3,
+  look: castleVec3,
+  fov: z.number().min(20).max(90),
+});
+
+/**
+ * How the castle draws on one graphics tier: with the sun's real-time shadows or none, its colour
+ * maps `textureSize` px (each named in `textureSizes` its own size), and the trees round it (this
+ * many of this model).
+ */
+const castleTierSchema = z.object({
+  shadows: z.boolean(),
+  textureSize: z.union([z.literal(256), z.literal(512), z.literal(1024)]),
+  textureSizes: z.record(name, z.union([z.literal(256), z.literal(512), z.literal(1024)])),
+  trees: z.object({ model: name, count: z.number().int().nonnegative() }),
+});
+
+/**
+ * A kit material for the castle's own stonework: the kit's `material`, its texture repeating every
+ * `tile` m. `band` keeps to one strip of a trim sheet (v from, v to): the RockTrim's capstones.
+ */
+const castleSkinSchema = z.object({
+  material: name,
+  tile: positive,
+  band: z.tuple([fraction, fraction]).optional(),
+});
+
+export const castleSchema = z.object({
+  /**
+   * The kit's GLB (tools/castle/build.py). Its colour maps sit beside it in tex-1024/, tex-512/ and
+   * tex-256/; each tier picks their sizes.
+   */
+  kit: name,
+  /** Towers stand on this grid (m), so walls meet them square. */
+  grid: positive,
+  /** The curtain wall: its height to the walk, its thickness, and the parapet on its outer edge. */
+  wall: z.object({
+    height: positive,
+    thickness: positive,
+    /** The parapet: a low wall `height` high and `thickness` thick, merlons on top. */
+    parapet: z.object({ height: positive, thickness: positive }),
+    /** Merlons: `width` wide and `height` high, with crenels `gap` wide between them. */
+    merlon: z.object({ width: positive, height: positive, gap: positive }),
+    /** The wider foot: `height` high, standing `out` m proud of each face. */
+    plinth: z.object({ height: positive, out: positive }),
+    /** A band of trim stone round walls and towers at the walk's level, standing `out` m proud. */
+    course: z.object({ height: positive, out: positive }),
+    /** Each wall comes apart in sections about this long (m). */
+    section: positive,
+  }),
+  towers: z.array(castleTowerSchema).min(3),
+  walls: z.array(castleWallSchema).min(3),
+  /**
+   * The kit's wall module (m): a building's walls are this wide, each storey `storey` high, a
+   * window's middle `windowMiddle` above its storey's floor.
+   */
+  module: positive,
+  storey: positive,
+  windowMiddle: positive,
+  /** The kit's pieces for each facade letter, the roof and its gables. */
+  facadePieces: z.object({
+    '-': z.array(castlePieceSchema).min(1),
+    t: z.array(castlePieceSchema).min(1),
+    w: z.array(castlePieceSchema).min(1),
+    d: z.array(castlePieceSchema).min(1),
+  }),
+  roof: z.object({
+    piece: castlePieceSchema,
+    gable: castlePieceSchema,
+    /** How far (m) the roof reaches past the walls, all round. */
+    overhang: nonNegative,
+  }),
+  /** The tile roof on a round tower: stretched to the tower, reaching `overhang` m past it. */
+  towerRoof: z.object({ piece: castlePieceSchema, overhang: nonNegative }),
+  /** A stone quoin at each corner of a building, this wide. */
+  quoin: positive,
+  /**
+   * The stonework's small parts (m): sides round a round tower; the corbels a tower's top stands
+   * out on (`out` and `height`); a merlon's capstone (`height`, and `out` past the merlon all
+   * round); an arrow slit (width, height, depth) and the dark doorway from a walk into a tower
+   * (width, height); the trim round a gate's arch (`width`, standing `proud` of the face); how far
+   * the gate's leaves stand back in the passage, and the heights of their iron straps.
+   */
+  details: z.object({
+    towerSides: z.number().int().min(6),
+    corbel: z.object({ out: positive, height: positive }),
+    cap: z.object({ height: positive, out: nonNegative }),
+    slit: z.tuple([positive, positive, positive]),
+    doorway: z.tuple([positive, positive]),
+    archTrim: z.object({ width: positive, proud: positive }),
+    gateSetBack: positive,
+    straps: z.array(positive),
+  }),
+  buildings: z.array(castleBuildingSchema).min(1),
+  /** Kit pieces that stand about: what each prop id draws. */
+  pieces: z.record(id, z.array(castlePieceSchema).min(1)),
+  props: z.array(castlePropSchema),
+  /** The alarm bell: a timber frame `size` (width, height), its bell `bell` m across. */
+  bell: z.object({
+    id,
+    at: castlePoint,
+    turn: z.number().default(0),
+    size: z.tuple([positive, positive]),
+    bell: positive,
+  }),
+  stairs: z.array(castleStairSchema),
+  /** Each step of a stair rises this much (m). */
+  stairRise: positive,
+  /**
+   * What the siege plays with: the windows the captain shows at (a building's side, storey and
+   * module, counted from 0 as its facade is), the spear rack (a prop), and the guards' ways round.
+   */
+  anchors: z.object({
+    captainWindows: z
+      .array(
+        z.object({
+          building: id,
+          side: z.enum(castleSides),
+          storey: z.number().int().nonnegative(),
+          module: z.number().int().nonnegative(),
+        }),
+      )
+      .min(1),
+    spearRack: id,
+    guardPaths: z.array(
+      z.object({ id, loop: z.boolean(), points: z.array(castleWaypointSchema).min(2) }),
+    ),
+  }),
+  vantages: z.array(castleVantageSchema).min(1),
+  /** The castle's own stonework (drawn in code) in the kit's materials. */
+  skins: z.object({
+    wall: castleSkinSchema,
+    tower: castleSkinSchema,
+    trim: castleSkinSchema,
+    cap: castleSkinSchema,
+    walk: castleSkinSchema,
+    courtyard: castleSkinSchema,
+    timber: castleSkinSchema,
+  }),
+  /**
+   * Kit pieces dressing the stonework, anywhere (banners, torches): `at` is where the piece's
+   * origin goes (m), `turn` degrees about y.
+   */
+  dressing: z.array(z.object({ piece: id, at: castleVec3, turn: z.number().default(0) })),
+  /** Ivy on the walls' and towers' outer faces: `count` of the `pieces` hung by a seeded scatter. */
+  vines: z.object({
+    seed: z.number().int(),
+    count: z.number().int().nonnegative(),
+    pieces: z.array(id).min(1),
+  }),
+  colors: z.object({
+    /** The dark inside a building, seen through its windows and door, and in the arrow slits. */
+    inside: hexColor,
+    bell: hexColor,
+    sky: hexColor,
+    /** The sky's light from above and the ground's from below, and the sun's. */
+    skyLight: hexColor,
+    groundLight: hexColor,
+    sun: hexColor,
+  }),
+  /** The scene round it: haze, light, the meadow and the trees. */
+  scene: z.object({
+    fog: z.tuple([positive, positive]),
+    hemisphere: positive,
+    sun: z.object({ intensity: positive, from: castleVec3 }),
+    shadowMap: z.object({
+      size: positiveInt,
+      halfWidth: positive,
+      far: positive,
+      bias: z.number(),
+    }),
+    ground: positive,
+    /** The trodden road out of the gate: `width` wide, `length` long. */
+    road: z.object({ width: positive, length: positive }),
+    /** The courtyard's floor: one of the game's grounds. */
+    yard: z.enum(['forestGrass', 'meadowGrass', 'troddenDirt']),
+    trees: z.object({
+      seed: z.number().int(),
+      /** Trees stand between these distances (m) from the middle, `height` tall. */
+      near: positive,
+      far: positive,
+      height: z.tuple([positive, positive]),
+    }),
+  }),
+  tiers: z.object({ high: castleTierSchema, low: castleTierSchema }),
+  /**
+   * Debug → Castle preview: the orbit camera round `target`, starting at `yaw` and `pitch`
+   * (degrees) and `distance` (m), dragged `dragDegrees` a screen width, zoomed `zoomStep` a wheel
+   * notch or pinched; and how long (s) it flies to a vantage point.
+   */
+  preview: z.object({
+    target: castleVec3,
+    yaw: z.number(),
+    pitch: z.object({ start: z.number(), min: z.number(), max: z.number() }),
+    distance: z.object({ start: positive, min: positive, max: positive }),
+    fov: z.number().min(20).max(90),
+    dragDegrees: positive,
+    zoomStep: positive,
+    flySeconds: positive,
+  }),
+});
+
 /** A regular expression's source, checked to compile. */
 const pattern = z.string().refine(
   (source) => {
@@ -1665,6 +1965,7 @@ export const gameDataShape = z.object({
   workers: workersSchema,
   tuning: tuningSchema,
   graphics: graphicsSchema,
+  castle: castleSchema,
 });
 
 export type GameDataInput = z.input<typeof gameDataShape>;
@@ -1680,6 +1981,14 @@ export type Enemy = GameData['enemies'][number];
 export type Level = GameData['levels'][number];
 export type Tuning = GameData['tuning'];
 export type Graphics = GameData['graphics'];
+export type Castle = GameData['castle'];
+export type CastleSide = (typeof castleSides)[number];
+export type CastleTower = Castle['towers'][number];
+export type CastleWall = Castle['walls'][number];
+export type CastleBuilding = Castle['buildings'][number];
+export type CastleWaypoint = Castle['anchors']['guardPaths'][number]['points'][number];
+export type CastleVantage = Castle['vantages'][number];
+export type CastlePiece = Castle['roof']['piece'];
 export type Camp = GameData['camp'];
 export type CampSpot = Camp['chest'];
 export type Clearing = GameData['woodcutting']['clearings'][number];
