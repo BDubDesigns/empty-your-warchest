@@ -89,3 +89,81 @@ test('exported logs include debug actions taken since the menu was opened', asyn
   ]);
   expect(debugEvents[0]?.data).toEqual({ skill: 'woodcutting', level: 50 });
 });
+
+test('Send logs posts the log export and shows its code', async ({ page }) => {
+  const posted: { method: string; body: unknown }[] = [];
+  await page.route('**/api/logs', async (route) => {
+    const request = route.request();
+    posted.push({ method: request.method(), body: request.postDataJSON() });
+    await route.fulfill({ json: { code: 'K7QX', key: '20261127-134805-bench-K7QX' } });
+  });
+  await page.goto('/');
+  await expect(page.locator('body')).toHaveAttribute('data-screen', 'phaser');
+  await openDebug(page);
+  const send = page.getByRole('button', { name: 'Send logs' });
+  await expect(send).toBeEnabled();
+  await send.tap();
+  const status = page.getByRole('dialog', { name: 'Debug menu' }).getByRole('status');
+  await expect(status).toHaveText('Sent ✓ code K7QX');
+  expect(posted).toHaveLength(1);
+  const body = posted[0]?.body as { exportedAt: string; build: string; events: { type: string }[] };
+  expect(posted[0]?.method).toBe('POST');
+  expect(typeof body.exportedAt).toBe('string');
+  expect(typeof body.build).toBe('string');
+  expect(body.events.map((event) => event.type)).toContain('session.start');
+
+  // When it can't get through, it says so and Share logs… is still there.
+  await page.route('**/api/logs', (route) =>
+    route.fulfill({ status: 500, json: { error: 'KV down' } }),
+  );
+  await send.tap();
+  await expect(status).toContainText("Couldn't send: the server said 500: KV down");
+  await expect(page.getByRole('button', { name: 'Share logs…' })).toBeVisible();
+});
+
+// Real touches, through Chrome's own input: a swipe that starts on a slider scrolls the menu, a
+// tap leaves it alone, and only a sideways drag moves it.
+test('a slider ignores scrolls and taps and moves on a sideways drag', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('body')).toHaveAttribute('data-screen', 'phaser');
+  await openDebug(page);
+  const panel = page.getByRole('dialog', { name: 'Debug menu' });
+  const slider = page.getByLabel('Fall time (s)');
+  await slider.scrollIntoViewIfNeeded();
+  const before = await slider.inputValue();
+  const cdp = await page.context().newCDPSession(page);
+  const touch = async (points: [number, number][]) => {
+    const [first, ...rest] = points;
+    if (!first) return;
+    const at = ([x, y]: [number, number]) => [{ x, y }];
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: at(first) });
+    for (const point of rest) {
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: at(point) });
+    }
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  };
+  const box = await slider.boundingBox();
+  if (!box) throw new Error('No slider');
+  const x = box.x + box.width * 0.85;
+  const y = box.y + box.height / 2;
+  const scrolled = () => panel.evaluate((element) => element.scrollTop);
+
+  // A swipe up, starting on the slider, near its right end.
+  const top = await scrolled();
+  await touch(Array.from({ length: 12 }, (_, step): [number, number] => [x, y - step * 15]));
+  await expect.poll(scrolled).toBeGreaterThan(top);
+  await expect(slider).toHaveValue(before);
+
+  // A tap on the slider, far from its thumb.
+  const tapBox = await slider.boundingBox();
+  if (!tapBox) throw new Error('No slider');
+  const tapY = tapBox.y + tapBox.height / 2;
+  await touch([[tapBox.x + tapBox.width * 0.9, tapY]]);
+  await expect(slider).toHaveValue(before);
+
+  // A drag to the right moves it up from where it was.
+  const from = tapBox.x + tapBox.width * 0.3;
+  await touch(Array.from({ length: 8 }, (_, step): [number, number] => [from + step * 12, tapY]));
+  await expect.poll(async () => Number(await slider.inputValue())).toBeGreaterThan(Number(before));
+  await expect(page.locator('.debug-tune', { hasText: 'Fall time (s)' })).toContainText('•');
+});

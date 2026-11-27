@@ -86,6 +86,9 @@ export async function startApp(): Promise<void> {
       ],
       clearings: booted.clearings,
       buildLabel: __BUILD_LABEL__,
+      stressTest: () => {
+        openStressTest();
+      },
     });
   } catch (error) {
     // Bad data or a broken save must fail loudly, not leave a half-working game.
@@ -317,6 +320,24 @@ export async function startApp(): Promise<void> {
     if (!phaser) throw new Error('Phaser did not start');
     return phaser;
   };
+
+  /**
+   * Debug → Stress test: its own screen over everything, its code and models loaded only now. The
+   * screen on show (and the background loading) pauses while it's open, so it measures alone.
+   */
+  function openStressTest(): void {
+    preloader.pause();
+    run(async () => {
+      try {
+        await switcher.aside(async () => {
+          const { openBench } = await import('../bench/view/benchScreen');
+          await openBench(byId('app'), { logger, buildLabel: __BUILD_LABEL__ });
+        });
+      } finally {
+        if (document.body.dataset.view === 'camp') preloader.resume();
+      }
+    })();
+  }
 
   const navigation = new Navigation(
     game.data,
