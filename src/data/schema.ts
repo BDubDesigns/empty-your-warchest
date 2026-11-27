@@ -157,6 +157,12 @@ export const tuningSchema = z.object({
     /** How long a station may take to open before the loading card shows (ms). */
     loadingCardDelayMs: nonNegative,
   }),
+  /**
+   * The debug menu's sliders on a touch screen. A touch that starts on one does nothing until it
+   * has moved `slopPx` (CSS px); then it drags the slider only if it went more than `sideways`
+   * times as far across as up or down, and otherwise it's left to scroll the menu.
+   */
+  debugSliders: z.object({ slopPx: positive, sideways: positive }),
 });
 
 const clearingSchema = z.object({

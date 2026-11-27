@@ -6,6 +6,7 @@ import {
   type BenchPixelRatio,
   type BenchShadows,
 } from '../../data/bench';
+import { sendLogs } from '../../debug/sendLogs';
 import { loadPhysics } from '../../stations/siege/logic/physics';
 import { CollapseSim, type BodyPose } from '../logic/collapse';
 import { cameraAt, walkerAt } from '../logic/layout';
@@ -16,14 +17,17 @@ import {
   runAllPlan,
   type RunSettings,
 } from '../logic/plan';
+import type { ResultRow } from '../logic/results';
 import { frameStats, timingStats, type FrameStats } from '../logic/stats';
 import { buildPackScene, type PackScene } from './packScene';
+import { BenchResults } from './results';
 import './bench.css';
 
 // Debug → Stress test: its own full-screen three.js screen. Pick a pack, a scale and what to turn
 // off, and run it (or Run all): each run flies the same 20 s camera path through the scene,
-// the fort comes down at 10 s, and every frame's time is kept. The results are shown in a table
-// and logged as `bench.result`, so they come back with Debug → Share logs.
+// the fort comes down at 10 s, and every frame's time is kept. The results are shown (a summary
+// sized for a phone's screenshots, or the full table) and logged as `bench.result`, so they come
+// back with Debug → Share logs.
 
 export interface BenchDeps {
   logger: EventLogger;
@@ -133,7 +137,7 @@ class Bench {
   readonly #hud: HTMLElement;
   readonly #hudText: HTMLElement;
   readonly #status: HTMLElement;
-  readonly #table: HTMLTableSectionElement;
+  readonly #results: BenchResults;
   readonly #renderer: THREE.WebGLRenderer;
   readonly #camera: THREE.PerspectiveCamera;
   readonly #device: DeviceInfo;
@@ -178,7 +182,13 @@ class Bench {
     });
     this.#hud = el('div', { className: 'bench-hud', hidden: true }, [this.#hudText, stop]);
     this.#status = el('p', { className: 'bench-status', role: 'status' });
-    this.#table = el('tbody');
+    this.#results = new BenchResults(
+      data.results.summaryUpToPx,
+      (text) => {
+        this.#say(text);
+      },
+      () => this.#send(),
+    );
     this.#panel = this.#buildPanel();
     this.#root = el(
       'div',
@@ -329,48 +339,33 @@ class Bench {
       ),
       el('div', { className: 'bench-row' }, [runButton, runAllButton]),
       this.#status,
-      el('div', { className: 'bench-results' }, [
-        el('table', {}, [
-          el('thead', {}, [
-            el(
-              'tr',
-              {},
-              [
-                '#',
-                'Pack',
-                '×',
-                'Shad.',
-                'PR',
-                'Note',
-                'FPS med',
-                '5% low',
-                '1% low',
-                'Worst ms',
-                'CPU ms',
-                'Phys ms',
-                'Calls',
-                'Tris k',
-                'Tex MB',
-                'Load s',
-              ].map((text) => el('th', { textContent: text })),
-            ),
-          ]),
-          this.#table,
-        ]),
-      ]),
-      el('p', { className: 'bench-device' }),
+      this.#results.element,
       caveat,
     ]);
   }
 
   #showDevice(): void {
-    const line = this.#panel.querySelector('.bench-device');
-    if (!line) return;
     const device = this.#device;
     const canvas = this.#renderer.domElement;
-    line.textContent =
+    const memory = device.memoryGB === null ? '' : ` · ${String(device.memoryGB)} GB`;
+    this.#results.device =
       `${this.#deps.buildLabel} · GPU: ${device.gpu} · devicePixelRatio ${String(Math.round(device.devicePixelRatio * 100) / 100)}` +
-      ` · canvas ${String(canvas.width)}×${String(canvas.height)} · ${device.webgl} · ${device.userAgent}`;
+      ` · canvas ${String(canvas.width)}×${String(canvas.height)} · ${String(device.cores)} cores${memory}` +
+      ` · ${device.webgl} · ${device.userAgent}`;
+  }
+
+  /** Sends the whole log (each run is in it as bench.result), as Debug → Send logs does. */
+  async #send(): Promise<void> {
+    this.#say('Sending results…');
+    const { logger, buildLabel } = this.#deps;
+    const events = await logger.readAll();
+    const result = await sendLogs(events, buildLabel);
+    logger.log('debug.sendLogs', { ...result, events: events.length, from: 'bench' });
+    this.#say(
+      result.ok
+        ? `Sent ✓ code ${result.code}`
+        : `Couldn't send: ${result.error}. Debug → Share logs… still works`,
+    );
   }
 
   /** Whether Stop was tapped (read through here, as it changes while a run is awaited). */
@@ -447,6 +442,8 @@ class Bench {
       this.#panel.hidden = false;
       this.#root.dataset.benchState = 'done';
       this.#showDevice();
+      // Straight to the results, the device line at the top, ready for a screenshot.
+      if (done > 0) this.#results.element.scrollIntoView({ block: 'start' });
     }
   }
 
@@ -615,33 +612,31 @@ class Bench {
 
   #addRow(index: number, result: BenchResult): void {
     const pack = this.#data.packs.find((candidate) => candidate.id === result.pack);
-    const cells = [
-      String(index),
-      pack?.name ?? result.pack,
-      `${String(result.scale)}×`,
-      result.shadows,
-      String(Math.round(result.pixelRatio * 100) / 100),
-      [result.note, result.physics ? '' : 'no physics', result.matte && !result.note ? 'matte' : '']
+    const row: ResultRow = {
+      run: String(index),
+      pack: pack?.name ?? result.pack,
+      scale: `${String(result.scale)}×`,
+      shadows: result.shadows,
+      pixelRatio: String(Math.round(result.pixelRatio * 100) / 100),
+      note: [
+        result.note,
+        result.physics ? '' : 'no physics',
+        result.matte && !result.note ? 'matte' : '',
+      ]
         .filter(Boolean)
         .join(', '),
-      String(result.fps.medianFps),
-      String(result.fps.p5Fps),
-      String(result.fps.low1Fps),
-      String(result.fps.worstMs),
-      String(result.cpuMs.median),
-      String(result.physicsMs.median),
-      String(result.drawCalls.median),
-      String(Math.round(result.triangles.median / 1000)),
-      String(result.textureMB),
-      String(Math.round((result.loadMs + result.warmMs) / 100) / 10),
-    ];
-    this.#table.append(
-      el(
-        'tr',
-        { dataset: { pack: result.pack } },
-        cells.map((text) => el('td', { textContent: text })),
-      ),
-    );
+      fps: String(result.fps.medianFps),
+      p5: String(result.fps.p5Fps),
+      low1: String(result.fps.low1Fps),
+      worstMs: String(result.fps.worstMs),
+      cpuMs: String(result.cpuMs.median),
+      physicsMs: String(result.physicsMs.median),
+      calls: String(result.drawCalls.median),
+      trisK: String(Math.round(result.triangles.median / 1000)),
+      textureMB: String(result.textureMB),
+      loadS: String(Math.round((result.loadMs + result.warmMs) / 100) / 10),
+    };
+    this.#results.add(row, result.pack);
   }
 
   #dispose(): void {

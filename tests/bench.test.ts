@@ -2,6 +2,13 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { CollapseSim, type BodyPose } from '../src/bench/logic/collapse';
 import { cameraAt, layoutScene, walkerAt, type Size } from '../src/bench/logic/layout';
 import { pixelRatioFor, pixelRatioLabel, runAllPlan } from '../src/bench/logic/plan';
+import {
+  resultColumns,
+  resultsText,
+  summaryColumns,
+  summaryTitle,
+  type ResultRow,
+} from '../src/bench/logic/results';
 import { frameStats, percentile, textureBytes, timingStats } from '../src/bench/logic/stats';
 import {
   bench,
@@ -242,5 +249,54 @@ describe('collapse', () => {
     expect(first.after).not.toEqual(first.before);
     expect(first.moving).toBeGreaterThan(0);
     expect(run()).toEqual(first);
+  });
+});
+
+describe('results', () => {
+  const row = (run: number, note = ''): ResultRow => ({
+    run: String(run),
+    pack: 'Village optimised',
+    scale: '2×',
+    shadows: 'blob',
+    pixelRatio: '2',
+    note,
+    fps: '58.3',
+    p5: '51',
+    low1: '40.2',
+    worstMs: '61.7',
+    cpuMs: '6.41',
+    physicsMs: '0.8',
+    calls: '214',
+    trisK: '310',
+    textureMB: '38.5',
+    loadS: '3.4',
+  });
+
+  it('copies as tab-separated text: the device line, the headings, a line a run', () => {
+    const text = resultsText('build abc · GPU: Mali-G57', [row(1), row(2, 'two\tlines\nhere')]);
+    const lines = text.trimEnd().split('\n');
+    expect(lines).toHaveLength(4);
+    expect(lines[0]).toBe('build abc · GPU: Mali-G57');
+    expect(lines[1]?.split('\t')).toEqual(resultColumns.map((column) => column.label));
+    expect(lines[2]?.split('\t')).toEqual(resultColumns.map((column) => row(1)[column.key]));
+    // A tab or line break inside a cell can't split it.
+    expect(lines[3]?.split('\t')).toHaveLength(resultColumns.length);
+    expect(lines[3]).toContain('two lines here');
+  });
+
+  it('sums each run up as a title line and the numbers that matter', () => {
+    expect(summaryTitle(row(14, 'blob shadows'))).toBe(
+      '14 · Village optimised 2× · shadows blob · blob shadows',
+    );
+    expect(summaryTitle(row(1))).toBe('1 · Village optimised 2× · shadows blob');
+    expect(summaryColumns.map((column) => column.key)).toEqual([
+      'fps',
+      'low1',
+      'worstMs',
+      'cpuMs',
+      'calls',
+      'textureMB',
+      'loadS',
+    ]);
   });
 });

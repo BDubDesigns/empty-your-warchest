@@ -114,32 +114,111 @@
 }
 
 .bench-results {
-  overflow-x: auto;
   margin: 8px 0;
 }
 
-.bench-results table {
+.bench-results [hidden] {
+  display: none;
+}
+
+.bench-device {
+  margin: 0 0 4px;
+  color: var(--fg);
+  font-size: 12px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+/* The full table: every column, scrolling sideways on a phone. */
+.bench-table {
+  overflow-x: auto;
+}
+
+.bench-table table {
   border-collapse: collapse;
   font-size: 12px;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
-.bench-results th,
-.bench-results td {
+.bench-table th,
+.bench-table td {
   padding: 4px 6px;
   border-bottom: 1px solid #33382f;
   text-align: right;
 }
 
-.bench-results th:nth-child(2),
-.bench-results td:nth-child(2),
-.bench-results th:nth-child(6),
-.bench-results td:nth-child(6) {
+.bench-table th:nth-child(2),
+.bench-table td:nth-child(2),
+.bench-table th:nth-child(6),
+.bench-table td:nth-child(6) {
   text-align: left;
 }
 
-.bench-device,
+/*
+ * The phone summary: a title line and a line of numbers a run, as wide as the screen and no
+ * wider, under headings that stay at the top while it scrolls (so every screenshot has them).
+ */
+.bench-summary {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+
+.bench-summary thead th {
+  position: sticky;
+  /* Into the panel's top padding (12px), so no rows show above the headings. */
+  top: -12px;
+  z-index: 1;
+  padding: 4px 2px;
+  background: #1d201b;
+  border-bottom: 1px solid #4a5045;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.2;
+  text-align: right;
+}
+
+.bench-summary thead span {
+  display: block;
+  font-weight: 400;
+}
+
+.bench-summary tbody:nth-of-type(even) {
+  background: rgb(255 255 255 / 0.05);
+}
+
+.bench-summary tbody th {
+  padding: 4px 4px 0;
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.3;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+.bench-summary tbody td {
+  padding: 1px 2px 5px;
+  border-bottom: 1px solid #33382f;
+  font-size: 14px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.bench-copy {
+  box-sizing: border-box;
+  width: 100%;
+  height: 160px;
+  margin: 4px 0 8px;
+  background: #1d201b;
+  color: var(--fg);
+  font:
+    11px ui-monospace,
+    monospace;
+}
+
 .bench-note {
   color: var(--muted);
   font-size: 12px;

@@ -23,9 +23,36 @@ test('the stress test opens from Debug and runs the box scene at 1×', async ({ 
   await bench.getByRole('button', { name: 'Run', exact: true }).tap();
   await expect(bench).toHaveAttribute('data-bench-state', 'running');
   await expect(bench).toHaveAttribute('data-bench-state', 'done', { timeout: 100_000 });
-  const row = bench.locator('tbody tr[data-pack=boxes]');
-  await expect(row).toHaveCount(1);
   await expect(bench.getByRole('status')).toContainText('1 of 1 run done');
+
+  // On a phone the results open as the summary, which fits the screen without scrolling sideways.
+  const results = bench.getByRole('region', { name: 'Results' });
+  const views = results.getByRole('group', { name: 'Results view' });
+  await expect(views.getByRole('button', { name: 'Summary' })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
+  const summary = results.locator('.bench-summary tbody[data-pack=boxes]');
+  await expect(summary).toHaveCount(1);
+  await expect(summary).toContainText('1 · Boxes 1× · shadows on');
+  await expect(results.locator('.bench-device')).toContainText('GPU:');
+  const panel = bench.locator('.bench-panel');
+  const sideways = await panel.evaluate((element) => element.scrollWidth - element.clientWidth);
+  expect(sideways).toBeLessThanOrEqual(0);
+  // The full table is a tap away.
+  await views.getByRole('button', { name: 'Full table' }).tap();
+  await expect(results.locator('.bench-table tr[data-pack=boxes]')).toHaveCount(1);
+  await expect(results.locator('.bench-summary')).toBeHidden();
+
+  // Send results posts the whole log, every run in it as bench.result.
+  let posted: { events: { type: string }[] } | undefined;
+  await page.route('**/api/logs', async (route) => {
+    posted = route.request().postDataJSON() as typeof posted;
+    await route.fulfill({ json: { code: 'B3NC', key: 'k' } });
+  });
+  await results.getByRole('button', { name: 'Send results' }).tap();
+  await expect(bench.getByRole('status')).toHaveText('Sent ✓ code B3NC');
+  expect(posted?.events.filter((event) => event.type === 'bench.result')).toHaveLength(1);
 
   // Closing it goes back to the camp, running again.
   await bench.getByRole('button', { name: 'Close' }).tap();

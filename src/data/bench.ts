@@ -245,6 +245,11 @@ export const benchDataShape = z
       wallDepth: positive,
       guard: vec3,
     }),
+    /**
+     * The results: on a screen up to `summaryUpToPx` CSS px wide they open as the phone summary
+     * (one small card a run, readable in a screenshot), on a wider one as the full table.
+     */
+    results: z.object({ summaryUpToPx: positive }),
     packs: z.array(packSchema).min(1),
     runAll: z.array(runSchema).min(1),
   })
@@ -425,6 +430,8 @@ export const bench = {
     { at: 20, from: [0, 1.8, 16], look: [0, 3, -20] },
   ],
   blob: { width: 1.1, opacity: 0.45 },
+  // Phones are 360–450 px wide, the smallest tablets about 600: the full table fits from about 800.
+  results: { summaryUpToPx: 700 },
   boxes: {
     stone: 0x9b978d,
     wood: 0xc39a66,

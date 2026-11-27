@@ -77,7 +77,9 @@ src/
   camp/       Phaser camp hub and warchest screen (stations built from data)
   stations/   one folder per mini game: logic/ (rules, unit tested) and its view
   runner/     sim/ (pure, deterministic) and view/ (three.js)
-  debug/      debug menu (items, levels, log export, live tuning)
+  debug/      debug menu (items, levels, log export and Send logs, live tuning)
+functions/    Cloudflare Pages Functions: api/logs.ts keeps sent logs in the LOGS KV namespace
+              (bound in the Pages dashboard; no wrangler.toml, which would override that)
 tests/        Vitest unit tests      e2e/   Playwright tests
 public/       models and audio (CC0; credits in each CREDITS.md)
 ```

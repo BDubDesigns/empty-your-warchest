@@ -8,6 +8,7 @@ export * from './inventory';
 export * from './liveChoice';
 export * from './liveTuning';
 export * from './logger';
+export * from './logUpload';
 export * from './recipes';
 export * from './rng';
 export * from './save';

@@ -42,6 +42,7 @@ export default tseslint.config(
       'src/data/**',
       'src/stations/*/logic/**',
       'src/bench/logic/**',
+      'functions/**',
     ],
     rules: { 'no-restricted-imports': ['error', renderingLibraries] },
   },

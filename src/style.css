@@ -338,13 +338,22 @@ body:not([data-view='camp']) #build-label {
   color: var(--accent);
 }
 
+/* The track takes the touches (see src/debug/slider.ts): a vertical swipe scrolls the menu. */
+.debug-slider {
+  touch-action: pan-y;
+  cursor: pointer;
+}
+
 .debug-panel input[type='range'] {
+  display: block;
   width: 100%;
   min-height: 36px;
+  margin: 0;
   padding: 0;
   border: 0;
   background: none;
   accent-color: var(--accent);
+  pointer-events: none;
 }
 
 /* Woodcutting 3D spike overlay */
