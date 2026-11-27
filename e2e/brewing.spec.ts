@@ -89,10 +89,8 @@ async function drag(page: Page, id: string, to?: { x: number; y: number }) {
   const start = { x: tile.x + tile.width / 2, y: tile.y + tile.height / 2 };
   const client = await page.context().newCDPSession(page);
   await client.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [start] });
-  const steps = 8;
-  for (let step = 1; step <= steps; step++) {
-    await page.waitForTimeout(16);
-    const t = step / steps;
+  // Few moves: CI draws in software, and each touch waits for a frame.
+  for (const t of [0.3, 0.7, 1]) {
     await client.send('Input.dispatchTouchEvent', {
       type: 'touchMove',
       touchPoints: [{ x: start.x + (end.x - start.x) * t, y: start.y + (end.y - start.y) * t }],
@@ -105,7 +103,7 @@ async function drag(page: Page, id: string, to?: { x: number; y: number }) {
 test('brews a Sense potion: drag in, stir, bottle, and it pours into the chest', async ({
   page,
 }) => {
-  test.setTimeout(120_000);
+  test.setTimeout(180_000);
   const errors: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));
   await openCauldron(page);
@@ -166,7 +164,7 @@ test('brews a Sense potion: drag in, stir, bottle, and it pours into the chest',
 });
 
 test('says when 3 stars goes out of reach, and the ladle frees room', async ({ page }) => {
-  test.setTimeout(120_000);
+  test.setTimeout(180_000);
   const errors: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));
   await openCauldron(page);
