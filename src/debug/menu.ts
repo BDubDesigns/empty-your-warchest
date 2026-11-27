@@ -9,6 +9,8 @@ import type {
 } from '../core';
 import type { ClearingPicker } from '../stations/woodcutting';
 import { canShareFile, downloadFile, shareFile } from './exportFile';
+import { sendLogs } from './sendLogs';
+import { touchSlider } from './slider';
 
 export interface DebugDeps {
   game: Game;
@@ -23,6 +25,8 @@ export interface DebugDeps {
   /** The workers' time: skipping ahead counts as time away. */
   work: WorkClock;
   buildLabel: string;
+  /** Opens the graphics stress test (its own screen). */
+  stressTest?: () => void;
 }
 
 const MINUTE = 60_000;
@@ -140,11 +144,29 @@ export function mountDebugMenu(root: HTMLElement, deps: DebugDeps): void {
     downloadFile(file);
     say(`Downloaded ${file.name}`);
   });
+  // Straight to us: no file to save and pass on.
+  const sendButton = el('button', { type: 'button', textContent: 'Send logs', disabled: true });
+  let sending = false;
+  sendButton.addEventListener('click', () => {
+    if (sending) return;
+    sending = sendButton.disabled = true;
+    say('Sending logs…');
+    void sendLogs(events, deps.buildLabel).then((result) => {
+      sending = false;
+      sendButton.disabled = !loaded;
+      logger.log('debug.sendLogs', { ...result, events: events.length });
+      say(
+        result.ok
+          ? `Sent ✓ code ${result.code}`
+          : `Couldn't send: ${result.error}. Share logs… still works`,
+      );
+    });
+  });
   const refreshLogs = (): void => {
     loaded = false;
     loggedWhileLoading = [];
     logCount.textContent = 'Loading…';
-    shareButton.disabled = downloadButton.disabled = true;
+    shareButton.disabled = downloadButton.disabled = sendButton.disabled = true;
     logger.readAll().then(
       (all) => {
         // An event logged during the read may or may not be in `all`; add the ones that aren't.
@@ -156,6 +178,7 @@ export function mountDebugMenu(root: HTMLElement, deps: DebugDeps): void {
         loaded = true;
         showLogCount();
         shareButton.disabled = downloadButton.disabled = false;
+        sendButton.disabled = sending;
       },
       (error: unknown) => {
         logCount.textContent = `Couldn't read logs: ${String(error)}`;
@@ -352,7 +375,7 @@ export function mountDebugMenu(root: HTMLElement, deps: DebugDeps): void {
       });
       const row = el('label', { className: 'debug-tune' }, [
         el('span', { className: 'debug-tune-label' }, [tunable.label, value]),
-        input,
+        touchSlider(input, data.tuning.debugSliders),
       ]);
       return { row, show, more: tunable.more === true };
     });
@@ -427,6 +450,15 @@ export function mountDebugMenu(root: HTMLElement, deps: DebugDeps): void {
     className: 'debug-close',
     textContent: 'Close',
   });
+  const stressTest = deps.stressTest;
+  const stressTestButton = stressTest
+    ? el('button', { type: 'button', textContent: 'Stress test' })
+    : undefined;
+  stressTestButton?.addEventListener('click', () => {
+    logger.log('debug.stressTest');
+    closeButton.click();
+    stressTest?.();
+  });
   const panel = el(
     'div',
     { className: 'debug-panel', hidden: true, role: 'dialog', ariaLabel: 'Debug menu' },
@@ -442,7 +474,7 @@ export function mountDebugMenu(root: HTMLElement, deps: DebugDeps): void {
       section(
         'Playtest logs',
         logCount,
-        el('div', { className: 'debug-row' }, [shareButton, downloadButton]),
+        el('div', { className: 'debug-row' }, [sendButton, shareButton, downloadButton]),
       ),
       section(
         'Warchest',
@@ -458,6 +490,19 @@ export function mountDebugMenu(root: HTMLElement, deps: DebugDeps): void {
       ),
       ...tuningSections,
       section('Time', lastSeen, el('div', { className: 'debug-row' }, skipButtons)),
+      ...(stressTestButton
+        ? [
+            section(
+              'Stress test',
+              el('p', {
+                className: 'debug-note',
+                textContent:
+                  'Flies through the same siege scene built from each art pack and measures the frame rate.',
+              }),
+              stressTestButton,
+            ),
+          ]
+        : []),
       section('Save', resetButton),
     ],
   );
