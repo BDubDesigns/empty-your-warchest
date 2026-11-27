@@ -72,6 +72,7 @@ describe('warchest view', () => {
       { item: 'moss', name: 'Moss', detail: '0' },
       { item: 'red_cap', name: 'Red cap', detail: '0' },
       { item: 'ash', name: 'Ash', detail: '0' },
+      { item: 'woad', name: 'Woad', detail: '0' },
     ]);
   });
 });

@@ -19,6 +19,7 @@ describe('game data', () => {
       'moss',
       'red_cap',
       'ash',
+      'woad',
     ]);
     expect(data.stations.map((station) => station.id)).toEqual([
       'tree_line',

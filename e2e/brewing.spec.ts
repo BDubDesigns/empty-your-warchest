@@ -26,6 +26,7 @@ async function openCauldron(page: Page) {
             inventory: [
               { item: 'red_cap', count: 20 },
               { item: 'moss', count: 20 },
+              { item: 'woad', count: 20 },
               { item: 'ash', count: 20 },
             ],
             skills: xp,
@@ -86,6 +87,7 @@ test('brews a Sense potion: add, stir, bottle, and it pours into the chest', asy
   const names: Record<string, string> = {
     red_cap: 'Add red cap',
     moss: 'Add moss',
+    woad: 'Add woad',
     ash: 'Add ash',
     water: `Add ${brewing.water.name.toLowerCase()}`,
   };
@@ -97,13 +99,18 @@ test('brews a Sense potion: add, stir, bottle, and it pours into the chest', asy
       await expect(screen).toHaveAttribute('data-fill', String(fill));
     }
   }
-  // Unstirred, then stirred in.
+  // Unstirred, then stirred in: the map only shows the ring once it's stirred.
   await expect(screen).toHaveAttribute('data-unmixed', '1.00');
+  await expect(screen).toHaveAttribute('data-ring', '');
+  await expect(page.locator('.br-map-ring')).toHaveText('Stir to see');
   for (let round = 0; round < 6; round++) {
     if ((await screen.getAttribute('data-unmixed')) === '0.00') break;
     await stir(page, 2);
   }
   await expect(screen).toHaveAttribute('data-unmixed', '0.00');
+  // The hex target is the real one rounded, so allow a ring's slack.
+  await expect(screen).toHaveAttribute('data-ring', /[23]/);
+  await expect(page.locator('.br-map-ring')).toHaveText(/★★ ring/);
   await page.getByRole('button', { name: 'Bottle it' }).tap();
   await expect(page.locator('body')).toHaveAttribute('data-brewing', 'done');
   // The hex target is the real one rounded, so allow a star's slack.

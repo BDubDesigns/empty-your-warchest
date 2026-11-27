@@ -38,6 +38,7 @@ const PIECE_LENGTHS: Record<ItemLook, number> = {
   tuft: 0.55,
   cap: 0.5,
   heap: 0.5,
+  leaf: 0.6,
 };
 
 /**
@@ -109,6 +110,16 @@ function pieceModel(look: ItemLook, log: THREE.Object3D): THREE.Object3D {
     );
     heap.rotation.x = Math.PI / 2;
     piece.add(heap);
+    return piece;
+  }
+  if (look === 'leaf') {
+    // A woad leaf: a long, flat, blue-green blade.
+    const leaf = new THREE.Mesh(
+      new THREE.SphereGeometry(0.3, 8, 4),
+      new THREE.MeshLambertMaterial({ color: 0x3a5a9a, flatShading: true }),
+    );
+    leaf.scale.set(0.5, 0.12, 1.4);
+    piece.add(leaf);
     return piece;
   }
   if (look === 'split') {

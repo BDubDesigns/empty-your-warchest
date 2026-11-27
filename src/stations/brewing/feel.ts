@@ -8,6 +8,14 @@ export const brewingTunables: readonly Tunable[] = [
   { key: 'stirDeadPx', label: 'Stir: dead zone (px)', min: 0, max: 40, step: 1, more: true },
   { key: 'dropSeconds', label: 'Drop falls in (s)', min: 0.1, max: 1.5, step: 0.05 },
   { key: 'swirlDrift', label: 'Swirls drift (turns/s)', min: 0, max: 0.5, step: 0.01, more: true },
+  {
+    key: 'revealUnmixed',
+    label: 'Map shows the ring below (unstirred share)',
+    min: 0,
+    max: 1,
+    step: 0.01,
+  },
+  { key: 'cloudPx', label: 'Map: unstirred blur (px)', min: 0, max: 40, step: 1, more: true },
   { key: 'buzzDropMs', label: 'Vibrate: a drop (ms)', min: 0, max: 60, step: 1, more: true },
   {
     key: 'buzzStirMs',

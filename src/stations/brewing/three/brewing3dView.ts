@@ -9,7 +9,8 @@ import { WarchestHud, type Deposit, type ScreenPoint } from '../../../app/warche
 import type { EventLogger, Game, LiveTuning } from '../../../core';
 import type { BrewingFeel } from '../../../data';
 import { BrewRound, WATER, type BrewEvent, type BrewResult } from '../logic/brew';
-import { labToHex, type Lab } from '../logic/color';
+import { labToHex, labToRgb, type Lab } from '../logic/color';
+import { mapPoint, mapScale } from '../logic/map';
 
 export interface Brewing3DDeps {
   game: Game;
@@ -34,6 +35,10 @@ const CAMERA_ELEVATION = 58 * DEG;
 const CAMERA_DISTANCE = 7.2;
 const CAMERA_TARGET = new THREE.Vector3(0, 0.9, 0);
 const CAMERA_LIFT = 0.02;
+/** The colour map's background is drawn this many cells across (smoothed up to its size). */
+const MAP_CELLS = 40;
+/** The map's star rings: the 3-star ring gold, the outer two paler. */
+const RING_COLORS = ['#f2c14e', 'rgba(255,255,255,0.85)', 'rgba(255,255,255,0.5)'];
 /** An empty pot's dark iron, and what a drop looks like falling in. */
 const EMPTY_POT = '#1d1a17';
 const SOUNDS: Record<string, string> = {
@@ -100,6 +105,8 @@ export class Brewing3DView implements ScreenView {
   #lastPhase = '';
   #shelfKey = '';
   #flashText: { text: string; until: number } | undefined;
+  /** The map's background for this brew (colours at the target's lightness), drawn once. */
+  readonly #mapCells = document.createElement('canvas');
 
   private constructor(element: HTMLElement, deps: Brewing3DDeps, hud: WarchestHud) {
     this.#element = element;
@@ -224,6 +231,196 @@ export class Brewing3DView implements ScreenView {
     this.#ui.cardName.textContent = name;
     this.#ui.target.style.background = labToHex(this.#round.target);
     this.#element.dataset.target = labToHex(this.#round.target);
+    this.#paintMapCells(this.#round);
+  }
+
+  // The colour map
+
+  /** The map's background: every a and b at the target's lightness, as the eye would see it. */
+  #paintMapCells(round: BrewRound): void {
+    const cells = this.#mapCells;
+    cells.width = cells.height = MAP_CELLS;
+    const context = cells.getContext('2d');
+    if (!context) return;
+    const image = context.createImageData(MAP_CELLS, MAP_CELLS);
+    const { map, target } = round;
+    for (let row = 0; row < MAP_CELLS; row++) {
+      for (let column = 0; column < MAP_CELLS; column++) {
+        const a = map.a - map.half + ((column + 0.5) / MAP_CELLS) * map.half * 2;
+        const b = map.b + map.half - ((row + 0.5) / MAP_CELLS) * map.half * 2;
+        const [r, g, bl] = labToRgb({ L: target.L, a, b });
+        const at = (row * MAP_CELLS + column) * 4;
+        image.data[at] = r * 255;
+        image.data[at + 1] = g * 255;
+        image.data[at + 2] = bl * 255;
+        image.data[at + 3] = 255;
+      }
+    }
+    context.putImageData(image, 0, 0);
+  }
+
+  /** Sizes a canvas's pixels to its size on screen. Returns its context and size in px. */
+  #fit(canvas: HTMLCanvasElement): { context: CanvasRenderingContext2D; w: number; h: number } {
+    const ratio = Math.min(window.devicePixelRatio, 2);
+    const w = canvas.clientWidth;
+    const h = canvas.clientHeight;
+    if (canvas.width !== Math.round(w * ratio) || canvas.height !== Math.round(h * ratio)) {
+      canvas.width = Math.round(w * ratio);
+      canvas.height = Math.round(h * ratio);
+    }
+    const context = canvas.getContext('2d');
+    if (!context) throw new Error('No 2D canvas');
+    context.setTransform(ratio, 0, 0, ratio, 0, 0);
+    return { context, w, h };
+  }
+
+  /**
+   * The map: the target as rings (inside the inner one is 3 stars, then 2, then 1), the shelf's
+   * colours round the edge, and the pot as a cloud of its drops that stirring draws in to a crisp
+   * dot at its true colour. The bar beside it is lightness: the target's band and the pot's mark.
+   */
+  #drawMap(round: BrewRound): void {
+    const ui = this.#ui;
+    const feel = this.#deps.feel.values;
+    const { map, target, rules } = round;
+    const { context, w, h } = this.#fit(ui.map);
+    if (w === 0) return;
+    context.imageSmoothingEnabled = true;
+    context.drawImage(this.#mapCells, 0, 0, w, h);
+    const clamp = (value: number) => Math.min(Math.max(value, 0.04), 0.96);
+    const at = (color: Lab) => {
+      const point = mapPoint(map, color);
+      return { x: clamp(point.x) * w, y: clamp(point.y) * h };
+    };
+    // Grey (no colour at all), where ash and water pull toward.
+    const grey = at({ L: target.L, a: 0, b: 0 });
+    context.strokeStyle = 'rgba(0,0,0,0.25)';
+    context.lineWidth = 1;
+    context.beginPath();
+    context.moveTo(grey.x - 4, grey.y);
+    context.lineTo(grey.x + 4, grey.y);
+    context.moveTo(grey.x, grey.y - 4);
+    context.lineTo(grey.x, grey.y + 4);
+    context.stroke();
+    // The shelf's colours: where each drop pulls the pot toward.
+    for (const entry of round.shelf) {
+      if (Math.hypot(entry.color.a, entry.color.b) < 0.03) continue;
+      const point = at(entry.color);
+      context.fillStyle = entry.hex;
+      context.beginPath();
+      context.arc(point.x, point.y, 5, 0, Math.PI * 2);
+      context.fill();
+      context.strokeStyle = 'rgba(0,0,0,0.7)';
+      context.lineWidth = 3.5;
+      context.stroke();
+      context.strokeStyle = '#fff';
+      context.lineWidth = 1.5;
+      context.stroke();
+    }
+    // The target's rings.
+    const middle = at(target);
+    const bands = [rules.stars.three, rules.stars.two, rules.stars.one];
+    bands.forEach((band, index) => {
+      context.strokeStyle = 'rgba(0,0,0,0.45)';
+      context.lineWidth = index === 0 ? 3.5 : 2.5;
+      context.beginPath();
+      context.arc(middle.x, middle.y, mapScale(map, band) * w, 0, Math.PI * 2);
+      context.stroke();
+      context.strokeStyle = RING_COLORS[index] ?? '#fff';
+      context.lineWidth = index === 0 ? 2 : 1;
+      context.stroke();
+    });
+    // The pot: a soft white haze over its unstirred drops (white reads on every colour), drawn
+    // in to a crisp dot at the true colour as it's stirred.
+    const cloud = round.cloud;
+    const total = cloud.reduce((sum, point) => sum + point.weight, 0);
+    for (const point of cloud) {
+      if (point.unmixed <= 0.02) continue;
+      const spot = at(point.color);
+      const radius = 3 + feel.cloudPx * point.unmixed;
+      const glow = context.createRadialGradient(spot.x, spot.y, 0, spot.x, spot.y, radius);
+      const alpha = Math.min(0.4 + (point.weight / Math.max(total, 1e-6)) * 1.5, 0.9);
+      glow.addColorStop(0, `rgba(255,255,255,${String(alpha)})`);
+      glow.addColorStop(0.6, `rgba(255,255,255,${String(alpha * 0.5)})`);
+      glow.addColorStop(1, 'rgba(255,255,255,0)');
+      context.fillStyle = glow;
+      context.beginPath();
+      context.arc(spot.x, spot.y, radius, 0, Math.PI * 2);
+      context.fill();
+    }
+    const mixed = round.mixed;
+    if (mixed && round.unmixed < 0.5) {
+      const dot = at(mixed);
+      context.globalAlpha = 1 - round.unmixed * 2;
+      context.fillStyle = labToHex(mixed);
+      context.strokeStyle = '#fff';
+      context.lineWidth = 2;
+      context.beginPath();
+      context.arc(dot.x, dot.y, 4.5, 0, Math.PI * 2);
+      context.fill();
+      context.stroke();
+      context.strokeStyle = 'rgba(0,0,0,0.6)';
+      context.lineWidth = 1;
+      context.beginPath();
+      context.arc(dot.x, dot.y, 6, 0, Math.PI * 2);
+      context.stroke();
+      context.globalAlpha = 1;
+    }
+    this.#drawLightness(round);
+    ui.mapRing.textContent =
+      round.fill === 0
+        ? 'Match the rings'
+        : !round.revealed
+          ? 'Stir to see'
+          : round.ring > 0
+            ? `${'★'.repeat(round.ring)} ring`
+            : 'Outside the rings';
+    ui.mapRing.dataset.ring = round.revealed ? String(round.ring) : '';
+    this.#element.dataset.ring = round.revealed ? String(round.ring) : '';
+  }
+
+  /** The lightness bar: dark at the bottom, light at the top, the target's bands and the pot. */
+  #drawLightness(round: BrewRound): void {
+    const { map, target, rules } = round;
+    const { context, w, h } = this.#fit(this.#ui.mapBar);
+    if (w === 0) return;
+    const y = (L: number) => (1 - Math.min(Math.max(mapPoint(map, { L, a: 0, b: 0 }).l, 0), 1)) * h;
+    const shade = context.createLinearGradient(0, 0, 0, h);
+    shade.addColorStop(0, labToHex({ L: map.high, a: target.a, b: target.b }));
+    shade.addColorStop(1, labToHex({ L: map.low, a: target.a, b: target.b }));
+    context.fillStyle = shade;
+    context.fillRect(0, 0, w, h);
+    // The target's bands, as the rings are on the map.
+    const bands = [rules.stars.one, rules.stars.two, rules.stars.three];
+    bands.forEach((band, index) => {
+      context.fillStyle =
+        index === 2 ? 'rgba(242,193,78,0.9)' : `rgba(255,255,255,${String(0.18 + index * 0.12)})`;
+      const top = y(target.L + band);
+      context.fillRect(0, top, w, y(target.L - band) - top);
+    });
+    context.fillStyle = '#000';
+    context.fillRect(0, y(target.L) - 1, w, 2);
+    // The pot: a smudge per unstirred drop, a crisp notch once stirred.
+    for (const point of round.cloud) {
+      if (point.unmixed <= 0.02) continue;
+      context.fillStyle = `rgba(255,255,255,${String(0.25 + 0.4 * point.unmixed)})`;
+      const spread = 1 + 6 * point.unmixed;
+      context.fillRect(-1, y(point.color.L) - spread / 2, w + 2, spread);
+    }
+    const mixed = round.mixed;
+    if (mixed && round.unmixed < 0.5) {
+      const notch = y(mixed.L);
+      context.fillStyle = '#fff';
+      context.strokeStyle = '#000';
+      context.lineWidth = 1;
+      context.beginPath();
+      context.moveTo(0, notch - 4);
+      context.lineTo(w, notch);
+      context.lineTo(0, notch + 4);
+      context.closePath();
+      context.fill();
+      context.stroke();
+    }
   }
 
   #onEvent(event: BrewEvent): void {
@@ -601,11 +798,17 @@ export class Brewing3DView implements ScreenView {
     target.setAttribute('aria-label', 'Target colour');
     bottle.append(target);
     targetBox.append(bottle, el('div', 'br-swatch-name', 'Recipe'));
-    const potBox = el('div', 'br-swatch-box');
-    const potSwatch = el('div', 'br-pot');
-    potSwatch.setAttribute('aria-label', 'Pot colour');
-    potBox.append(potSwatch, el('div', 'br-swatch-name', 'Your pot'));
-    swatches.append(targetBox, potBox);
+    // The colour map: where the pot is against the target's star rings, and lightness beside it.
+    const mapBox = el('div', 'br-map-box');
+    const mapRow = el('div', 'br-map-row');
+    const map = el('canvas', 'br-map');
+    map.setAttribute('aria-label', 'Colour map');
+    const mapBar = el('canvas', 'br-map-bar');
+    mapBar.setAttribute('aria-label', 'Lightness');
+    mapRow.append(map, mapBar);
+    const mapRing = el('div', 'br-swatch-name br-map-ring');
+    mapBox.append(mapRow, mapRing);
+    swatches.append(targetBox, mapBox);
     recipe.append(cardName, swatches);
     const hint = el('div', 'br-hint');
     const shelf = el('div', 'br-shelf');
@@ -642,7 +845,9 @@ export class Brewing3DView implements ScreenView {
       root,
       cardName,
       target,
-      potSwatch,
+      map,
+      mapBar,
+      mapRing,
       hint,
       shelf,
       fillBar,
@@ -713,8 +918,7 @@ export class Brewing3DView implements ScreenView {
     ui.shelf.hidden = !brewing;
     ui.controls.hidden = !brewing;
     this.#showShelf(round);
-    const shown = round.shown;
-    ui.potSwatch.style.background = shown ? labToHex(shown) : EMPTY_POT;
+    this.#drawMap(round);
     const { maxFill } = round.rules;
     ui.fillBar.style.width = `${String((round.fill / maxFill) * 100)}%`;
     ui.fillText.textContent = `Fill ${String(round.fill)} / ${String(maxFill)}`;
@@ -722,9 +926,9 @@ export class Brewing3DView implements ScreenView {
     const unmixed = round.unmixed;
     const hint =
       round.fill === 0
-        ? 'Tap the shelf to add ingredients. Match the colour on the recipe card'
+        ? 'Tap the shelf to add ingredients. Get your pot into the rings on the map'
         : unmixed > 0.15
-          ? 'Drag round the pot to stir: you only see the true colour once it’s stirred'
+          ? 'Drag round the pot to stir: the map shows where you are once it’s stirred'
           : round.full
             ? 'The pot is full. Bottle it when you’re happy'
             : 'Too light? Ash darkens. Too dark? Water lightens. Nothing comes back out';

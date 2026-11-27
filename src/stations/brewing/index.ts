@@ -2,3 +2,4 @@
 export * from './feel';
 export * from './logic/brew';
 export * from './logic/color';
+export * from './logic/map';

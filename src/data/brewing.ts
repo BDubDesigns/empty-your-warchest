@@ -1,16 +1,20 @@
 import type { GameDataInput } from './schema';
 
-// Brewing at the cauldron (M9 first slice). Colours and strengths were picked so a Sense potion's
-// red-orange is reachable from red caps, moss, ash and water (blue, woad, comes later from
-// farming); every number is a first guess, meant to be tuned on a phone.
+// Brewing at the cauldron (M9). Three base colours (a red, a yellow-green and a blue) span
+// oranges, purples, greens, browns and teals, with ash and water to darken and lighten. Every
+// number is a first guess, meant to be tuned on a phone.
 export const brewing = {
   // About 10 taps a brew, so one takes 30–60 s with the stirring and reading.
   maxFill: 10,
   ingredients: [
-    // Strong: the brew's red. 3–7 of them in a Sense potion.
+    // Strong red.
     { item: 'red_cap', color: '#d8301e', strength: 1.6 },
-    // Yellow-green: turns red toward orange (and toward mud if overdone).
+    // Yellow-green: with red, oranges and browns; with woad, greens and teals. Against a purple
+    // it dulls the colour without darkening it (ash darkens too).
     { item: 'moss', color: '#a3c23a', strength: 1 },
+    // Blue (from farming one day; the starting stock and the debug menu for now). With red,
+    // purples.
+    { item: 'woad', color: '#2a4f9e', strength: 1.2 },
     // Dark grey with next to no colour: darkens and dulls.
     { item: 'ash', color: '#3b3936', strength: 0.8 },
   ],
@@ -19,22 +23,30 @@ export const brewing = {
   potions: [
     {
       recipe: 'brew_sense',
-      // Red-orange. Its best answers are around 6 red caps, 2 moss and an ash.
-      target: '#c65530',
-      // Lighter or darker, redder or more orange: always solvable within the fill (checked at
-      // startup), with a different mix most brews.
-      jitter: { L: 0.035, a: 0.02, b: 0.012 },
+      // Dusk violet, from a blue-violet to a plum (OKLCh: lightness, chroma, hue in degrees).
+      // Every brew's target is picked anywhere in it (seeded), so brews differ visibly. Each one
+      // needs red caps and woad for its hue, then moss, ash or water to dull, darken or lighten
+      // it. The worst target is 0.015 from its nearest answer within the fill (checked at
+      // startup).
+      region: {
+        L: { min: 0.45, max: 0.58 },
+        chroma: { min: 0.035, max: 0.065 },
+        hue: { min: 300, max: 350 },
+      },
     },
   ],
-  // OKLab distance: about 0.02 is a just-noticeable difference side by side. The worst target in
-  // the jitter box is 0.019 from its nearest answer, so 3 stars is always reachable.
-  stars: { three: 0.025, two: 0.05, one: 0.1 },
+  // OKLab distance: about 0.02 is a just-noticeable difference side by side, so the bands are
+  // differences the eye can see. Drawn as rings round the target on the colour map.
+  stars: { three: 0.03, two: 0.06, one: 0.1 },
   // Brandon (Nov 26): every potion is the same; better brews make more and give an ingredient back.
   rewards: {
     one: { potions: 1, refunds: 0 },
     two: { potions: 1, refunds: 1 },
     three: { potions: 2, refunds: 1 },
   },
+  // The colour map beside the pot: hue and chroma (OKLab a and b) round every shelf colour,
+  // `margin` past the outermost.
+  map: { margin: 0.03 },
   yard: { radius: 2.4, wear: 0.65 },
   feel: {
     // About 3 turns of the spoon blend a drop in fully.
@@ -43,6 +55,10 @@ export const brewing = {
     stirDeadPx: 6,
     dropSeconds: 0.45,
     swirlDrift: 0.04,
+    // The map shows which ring the pot is in once no more than this share is unstirred.
+    revealUnmixed: 0.1,
+    // How wide each unstirred drop's blur is on the map (px at full strength).
+    cloudPx: 16,
     buzzDropMs: 14,
     buzzStirMs: 5,
     buzzBottleMs: 40,

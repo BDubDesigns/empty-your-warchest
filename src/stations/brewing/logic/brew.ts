@@ -1,6 +1,14 @@
 import { Rng, type EventLogger } from '../../../core';
 import { GameDataError, type BrewPotion, type Brewing, type BrewingFeel } from '../../../data';
 import { hexToLab, labDistance, labToHex, mixLab, roundLab, type Lab } from './color';
+import {
+  mapBounds,
+  mapPoint,
+  potCloud,
+  type CloudPoint,
+  type MapBounds,
+  type MapPoint,
+} from './map';
 
 /** What water is called among the drops: it's a tool, not an item. */
 export const WATER = 'water';
@@ -31,18 +39,23 @@ export function shelfOf(rules: Pick<Brewing, 'ingredients' | 'water'>): ShelfEnt
   ];
 }
 
+/** A colour from OKLCh: lightness, chroma and hue (degrees). */
+export function lchToLab(L: number, chroma: number, hue: number): Lab {
+  const radians = (hue * Math.PI) / 180;
+  return { L, a: chroma * Math.cos(radians), b: chroma * Math.sin(radians) };
+}
+
 /**
- * A brew's target: the potion's colour moved (seeded) up to its jitter along L, a and b, either
- * way. Takes the first three numbers from `rng`.
+ * A brew's target: anywhere in the potion's region (seeded), so brews differ visibly. Takes the
+ * first three numbers from `rng`.
  */
 export function targetFor(potion: BrewPotion, rng: Rng): Lab {
-  const base = hexToLab(potion.target);
-  const { jitter } = potion;
-  return {
-    L: base.L + rng.range(-1, 1) * jitter.L,
-    a: base.a + rng.range(-1, 1) * jitter.a,
-    b: base.b + rng.range(-1, 1) * jitter.b,
-  };
+  const { L, chroma, hue } = potion.region;
+  return lchToLab(
+    rng.range(L.min, L.max),
+    rng.range(chroma.min, chroma.max),
+    rng.range(hue.min, hue.max),
+  );
 }
 
 /** Stars for a brew `distance` from its target (OKLab): 0 past the one-star band (spoiled). */
@@ -113,23 +126,27 @@ export function bestAnswer(
   return best;
 }
 
+/** How many points along each of lightness, chroma and hue the answer check tries. */
+const REGION_STEPS = 6;
+
 /**
- * The worst a potion's target can be from its nearest answer anywhere in its jitter box: the box
- * is checked at its corners, edges, faces and middle (27 points).
+ * The worst a potion's target can be from its nearest answer anywhere in its region: checked on
+ * a grid through the region, corners and edges included (6 points along each of L, chroma and
+ * hue).
  */
 export function worstAnswer(rules: Brewing, potion: BrewPotion): number {
   const mixes = everyMix(rules);
-  const base = hexToLab(potion.target);
+  const along = (range: { min: number; max: number }) =>
+    Array.from(
+      { length: REGION_STEPS },
+      (_, step) => range.min + ((range.max - range.min) * step) / (REGION_STEPS - 1),
+    );
+  const { region } = potion;
   let worst = 0;
-  for (const sL of [-1, 0, 1]) {
-    for (const sa of [-1, 0, 1]) {
-      for (const sb of [-1, 0, 1]) {
-        const target = {
-          L: base.L + sL * potion.jitter.L,
-          a: base.a + sa * potion.jitter.a,
-          b: base.b + sb * potion.jitter.b,
-        };
-        worst = Math.max(worst, bestAnswer(mixes, target).distance);
+  for (const L of along(region.L)) {
+    for (const chroma of along(region.chroma)) {
+      for (const hue of along(region.hue)) {
+        worst = Math.max(worst, bestAnswer(mixes, lchToLab(L, chroma, hue)).distance);
       }
     }
   }
@@ -137,7 +154,7 @@ export function worstAnswer(rules: Brewing, potion: BrewPotion): number {
 }
 
 /**
- * Fails loudly at startup if any potion's target, anywhere in its jitter box, has no 3-star
+ * Fails loudly at startup if any potion's target, anywhere in its region, has no 3-star
  * answer within the fill from the shelf (like the fire pit's answer check).
  */
 export function checkBrews(data: { brewing: Brewing }): void {
@@ -210,6 +227,8 @@ export class BrewRound {
   readonly seed: number;
   readonly target: Lab;
   readonly shelf: ShelfEntry[];
+  /** The colour map round the shelf's colours. */
+  readonly map: MapBounds;
   readonly drops: Drop[] = [];
   phase: BrewPhase = 'brew';
   now = 0;
@@ -232,12 +251,17 @@ export class BrewRound {
     this.target = targetFor(potion, this.#rng);
     this.shelf = shelfOf(rules);
     this.#byId = new Map(this.shelf.map((entry) => [entry.id, entry]));
+    this.map = mapBounds(
+      this.shelf.map((entry) => entry.color),
+      rules.map.margin,
+    );
     const answer = bestAnswer(everyMix(rules), this.target);
     this.#log('brewing.start', {
       recipe: potion.recipe,
       seed,
       target: roundLab(this.target),
       targetHex: labToHex(this.target),
+      targetMap: roundMap(mapPoint(this.map, this.target)),
       answer: answer.counts,
       answerDistance: round3(answer.distance),
       stock: Object.fromEntries(
@@ -291,6 +315,36 @@ export class BrewRound {
       left += strength * drop.unmixed;
     }
     return total > 0 ? left / total : 0;
+  }
+
+  /** The pot on the colour map: a cloud of its drops, drawn in to one point as it's stirred. */
+  get cloud(): CloudPoint[] {
+    const mixed = this.mixed;
+    if (!mixed) return [];
+    return potCloud(
+      mixed,
+      this.drops.map((drop) => {
+        const entry = this.entry(drop.id);
+        return { color: entry.color, weight: entry.strength, unmixed: drop.unmixed };
+      }),
+    );
+  }
+
+  /** Stirred enough for the map to show which star ring the pot is in. */
+  get revealed(): boolean {
+    return this.fill > 0 && this.unmixed <= this.feel.revealUnmixed;
+  }
+
+  /** The star ring round the target the pot's true colour is in (0 outside them all). */
+  get ring(): number {
+    const mixed = this.mixed;
+    return mixed ? starsFor(this.rules, labDistance(mixed, this.target)) : 0;
+  }
+
+  /** Where the pot's true colour sits on the map, for the logs. */
+  #where(): { map: MapPoint | null; ring: number } {
+    const mixed = this.mixed;
+    return { map: mixed ? roundMap(mapPoint(this.map, mixed)) : null, ring: this.ring };
   }
 
   entry(id: string): ShelfEntry {
@@ -348,6 +402,8 @@ export class BrewRound {
       seed: this.seed,
       turns: round2(this.#stirred),
       unmixed: round3(this.unmixed),
+      revealed: this.revealed,
+      ...this.#where(),
       fill: this.fill,
       seconds: round2(this.now),
     });
@@ -404,6 +460,7 @@ export class BrewRound {
       targetHex: labToHex(this.target),
       distance: round3(distance),
       stars,
+      ...this.#where(),
       potions: reward.potions,
       banked,
       refund: refund ?? null,
@@ -446,4 +503,8 @@ function round2(value: number): number {
 
 function round3(value: number): number {
   return Math.round(value * 1000) / 1000;
+}
+
+function roundMap(point: MapPoint): MapPoint {
+  return { x: round3(point.x), y: round3(point.y), l: round3(point.l) };
 }

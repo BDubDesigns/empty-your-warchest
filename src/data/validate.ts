@@ -154,6 +154,38 @@ function checkReferences(data: GameData, ctx: z.RefinementCtx): void {
       issue(['brewing', 'potions', index, 'recipe'], 'A brew takes what went into the pot');
     }
   });
+  const span = (range: { min: number; max: number }) => range.min <= range.max;
+  const overlap = (one: { min: number; max: number }, other: { min: number; max: number }) =>
+    one.min <= other.max && other.min <= one.max;
+  brewing.potions.forEach((potion, index) => {
+    for (const key of ['L', 'chroma', 'hue'] as const) {
+      if (!span(potion.region[key])) {
+        issue(['brewing', 'potions', index, 'region', key], 'min must not be more than max');
+      }
+    }
+    if (potion.region.L.max > 1) {
+      issue(['brewing', 'potions', index, 'region', 'L'], 'Lightness runs 0–1');
+    }
+    brewing.potions.slice(0, index).forEach((other, before) => {
+      const hue = (range: { min: number; max: number }, turn: number) => ({
+        min: range.min + turn,
+        max: range.max + turn,
+      });
+      const hues = [-360, 0, 360].some((turn) =>
+        overlap(potion.region.hue, hue(other.region.hue, turn)),
+      );
+      if (
+        hues &&
+        overlap(potion.region.L, other.region.L) &&
+        overlap(potion.region.chroma, other.region.chroma)
+      ) {
+        issue(
+          ['brewing', 'potions', index, 'region'],
+          `Overlaps potion ${String(before)}'s region`,
+        );
+      }
+    });
+  });
   if (!(brewing.stars.three <= brewing.stars.two && brewing.stars.two <= brewing.stars.one)) {
     issue(['brewing', 'stars'], 'Bands must widen from three stars to one');
   }

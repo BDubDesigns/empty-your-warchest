@@ -16,9 +16,19 @@ export const skillSchema = z.object({ id, name });
 
 /**
  * How an item looks as a piece flying into a warchest: a round log, a split stave, a pointed shaft
- * (a spear), a bottle, a green tuft (moss), a mushroom cap, a little grey heap (ash).
+ * (a spear), a bottle, a green tuft (moss), a mushroom cap, a little grey heap (ash), a blue leaf
+ * (woad).
  */
-export const itemLooks = ['round', 'split', 'pointed', 'bottle', 'tuft', 'cap', 'heap'] as const;
+export const itemLooks = [
+  'round',
+  'split',
+  'pointed',
+  'bottle',
+  'tuft',
+  'cap',
+  'heap',
+  'leaf',
+] as const;
 
 /** A colour as '#rrggbb'. */
 const hexColor = z.string().regex(/^#[0-9a-f]{6}$/i, 'Use a #rrggbb colour');
@@ -863,6 +873,10 @@ export const brewingFeelSchema = z.object({
   dropSeconds: positive,
   /** How fast unstirred swirls drift round on their own (turns a second). */
   swirlDrift: nonNegative,
+  /** The map shows which star ring the pot is in once no more than this share is unstirred. */
+  revealUnmixed: fraction,
+  /** How wide an unstirred drop's blur is on the colour map (px, at full strength). */
+  cloudPx: nonNegative,
   /** Vibration (ms): a drop going in, each quarter turn of stirring, bottling. */
   buzzDropMs: nonNegative,
   buzzStirMs: nonNegative,
@@ -886,16 +900,20 @@ const brewingSchema = z.object({
   water: z.object({ name, color: hexColor, strength: positive }),
   /**
    * Potions to brew: the recipe bottling runs (its outputs, once per potion, and its XP per brew),
-   * the target colour on the card, and how far each brew's target is moved (seeded) along L, a
-   * and b, either way, so it can't be learned by heart. Every target within that box must have
-   * a 3-star answer within the fill (checked at startup).
+   * and the potion's region of colour (OKLCh: lightness 0–1, chroma, hue in degrees; a hue range
+   * may run past 360 to wrap). Each brew's target is picked anywhere in it (seeded), so it can't
+   * be learned by heart. Every target in it must have a 3-star answer within the fill (checked at
+   * startup), and no two potions' regions may overlap.
    */
   potions: z
     .array(
       z.object({
         recipe: id,
-        target: hexColor,
-        jitter: z.object({ L: nonNegative, a: nonNegative, b: nonNegative }),
+        region: z.object({
+          L: rangeSchema,
+          chroma: rangeSchema,
+          hue: z.object({ min: z.number().min(0).max(360), max: z.number().min(0).max(720) }),
+        }),
       }),
     )
     .min(1),
@@ -903,6 +921,8 @@ const brewingSchema = z.object({
   stars: z.object({ three: positive, two: positive, one: positive }),
   /** What each star count bottles: potions, and ingredients given back (picked from those put in). */
   rewards: z.object({ one: brewReward, two: brewReward, three: brewReward }),
+  /** The colour map: OKLab a and b round every shelf colour, `margin` past the outermost. */
+  map: z.object({ margin: nonNegative }),
   /** Grass round the cauldron, trodden bare round its fire. */
   yard: z.object({ radius: positive, wear: fraction }),
   feel: brewingFeelSchema,

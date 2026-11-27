@@ -11,4 +11,6 @@ export const items = [
   { id: 'moss', name: 'Moss', look: 'tuft' },
   { id: 'red_cap', name: 'Red cap', look: 'cap' },
   { id: 'ash', name: 'Ash', look: 'heap' },
+  // Blue for brewing: from farming one day; for now the starting stock and the debug menu.
+  { id: 'woad', name: 'Woad', look: 'leaf' },
 ] satisfies GameDataInput['items'];
