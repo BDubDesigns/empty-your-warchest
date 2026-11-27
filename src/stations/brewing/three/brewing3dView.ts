@@ -1,13 +1,16 @@
 import * as THREE from 'three';
 import { groundMesh, wornGround } from '../../../app/ground';
 import type { Haptics } from '../../../app/haptics';
+import { capturePointer } from '../../../app/pointer';
 import type { ScreenView } from '../../../app/screen';
 import { Sfx, type SoundLoop } from '../../../app/sfx';
 import { SkillBar, type XpDeposit } from '../../../app/skillBar';
+import { stickerOutline } from '../../../app/sticker';
 import { releaseContext, restoreContext } from '../../../app/trouble';
 import { WarchestHud, pieceModel, type Deposit, type ScreenPoint } from '../../../app/warchestHud';
 import type { EventLogger, Game, LiveTuning } from '../../../core';
 import type { BrewingFeel, ItemLook } from '../../../data';
+import { adviceText, offBy } from '../logic/advice';
 import { BrewRound, WATER, type BrewEvent, type BrewResult, type ShelfEntry } from '../logic/brew';
 import { labToHex, labToRgb, type Lab } from '../logic/color';
 import { mapPoint, mapScale } from '../logic/map';
@@ -48,8 +51,10 @@ const RING_OUT = 'rgba(70,64,58,0.75)';
  * way where only 2 stars can still be had there, `share` of the way past that.
  */
 const OUT_OF_REACH = { r: 46, g: 42, b: 38, half: 0.42, share: 0.74 };
-/** The shelf's icons: drawn this many pixels square from the warchest's item pieces. */
-const ICON_PX = 128;
+/** The pot's marker on the map, by the stars it would bottle now: as the rings, red for none. */
+const BAND_COLORS = ['#e0533a', 'rgba(255,255,255,0.6)', '#fff', '#f2c14e'];
+/** The lightness bar's pointer column on its left (px), where the pot's mark sits. */
+const BAR_POINTER_PX = 9;
 /** How each look sits in its icon (the pieces lie along z, as they fly into the chest). */
 const ICON_POSES: Partial<Record<ItemLook, [number, number, number]>> = {
   cap: [-Math.PI / 2, 0, 0],
@@ -430,33 +435,67 @@ export class Brewing3DView implements ScreenView {
       context.arc(spot.x, spot.y, radius, 0, Math.PI * 2);
       context.fill();
     }
+    // The pot: a dot ringed in the colour of the stars it would bottle now (true distance,
+    // lightness included), and once stirred, those stars beside it and, when lightness is most of
+    // the miss, which way: a dot dead centre can be a shade too light.
     const mixed = round.mixed;
+    const off = round.revealed ? round.off : undefined;
     if (mixed && round.unmixed < 0.5) {
       const dot = at(mixed);
+      const band = round.revealed ? (BAND_COLORS[round.ring] ?? '#fff') : '#fff';
       context.globalAlpha = 1 - round.unmixed * 2;
       context.fillStyle = labToHex(mixed);
-      context.strokeStyle = '#fff';
-      context.lineWidth = 2;
+      context.strokeStyle = band;
+      context.lineWidth = 2.5;
       context.beginPath();
       context.arc(dot.x, dot.y, 4.5, 0, Math.PI * 2);
       context.fill();
       context.stroke();
-      context.strokeStyle = 'rgba(0,0,0,0.6)';
+      context.strokeStyle = 'rgba(0,0,0,0.7)';
       context.lineWidth = 1;
       context.beginPath();
-      context.arc(dot.x, dot.y, 6, 0, Math.PI * 2);
+      context.arc(dot.x, dot.y, 6.2, 0, Math.PI * 2);
       context.stroke();
       context.globalAlpha = 1;
+      if (round.revealed) {
+        const label = round.ring > 0 ? '★'.repeat(round.ring) : '✕';
+        context.font = '700 10px system-ui, sans-serif';
+        context.textBaseline = 'middle';
+        const width = context.measureText(label).width;
+        const x = dot.x + 9 + width > w - 2 ? dot.x - 9 - width : dot.x + 9;
+        context.lineWidth = 3;
+        context.strokeStyle = 'rgba(0,0,0,0.85)';
+        context.strokeText(label, x, dot.y);
+        context.fillStyle = band;
+        context.fillText(label, x, dot.y);
+      }
+      if (off?.lightBadge) {
+        const text = off.lightWay === 'light' ? '▲ too light' : '▼ too dark';
+        context.font = '800 10px system-ui, sans-serif';
+        context.textBaseline = 'middle';
+        const width = context.measureText(text).width + 8;
+        const x = Math.min(Math.max(dot.x - width / 2, 2), w - width - 2);
+        // Below the dot, or above it near the bottom.
+        const y = dot.y + 20 > h - 4 ? dot.y - 15 : dot.y + 15;
+        context.fillStyle = 'rgba(20,14,8,0.88)';
+        context.beginPath();
+        context.roundRect(x, y - 7, width, 14, 7);
+        context.fill();
+        context.fillStyle = '#fff';
+        context.fillText(text, x + 4, y + 0.5);
+      }
     }
     this.#drawLightness(round);
+    const lightWord = off?.lightBadge ? ` · too ${off.lightWay ?? ''}` : '';
     ui.mapRing.textContent =
       round.fill === 0
         ? 'Match the rings'
         : !round.revealed
           ? 'Stir to see'
           : round.ring > 0
-            ? `${'★'.repeat(round.ring)} ring`
-            : 'Outside the rings';
+            ? `${'★'.repeat(round.ring)} ring${lightWord}`
+            : `Outside the rings${lightWord}`;
+    ui.mapRing.dataset.light = off?.lightBadge ? (off.lightWay ?? '') : '';
     ui.mapRing.dataset.ring = round.revealed ? String(round.ring) : '';
     this.#element.dataset.ring = round.revealed ? String(round.ring) : '';
     // The moment a star goes out of reach, say so (the ring above goes grey with it).
@@ -470,20 +509,27 @@ export class Brewing3DView implements ScreenView {
     ui.mapBest.dataset.best = String(stars);
   }
 
-  /** The lightness bar: dark at the bottom, light at the top, the target's bands and the pot. */
+  /**
+   * The lightness bar: light at the top, dark at the bottom (labelled), the target's bands on it
+   * with a black line at the target, and the pot as a white pointer on its left with a white line
+   * across, so the two can't be mixed up.
+   */
   #drawLightness(round: BrewRound): void {
     const { map, target, rules } = round;
     const { context, w, h } = this.#fit(this.#ui.mapBar);
     if (w === 0) return;
+    const left = BAR_POINTER_PX;
+    const across = w - left;
     const y = (L: number) => (1 - Math.min(Math.max(mapPoint(map, { L, a: 0, b: 0 }).l, 0), 1)) * h;
+    context.clearRect(0, 0, w, h);
     const shade = context.createLinearGradient(0, 0, 0, h);
     shade.addColorStop(0, labToHex({ L: map.high, a: target.a, b: target.b }));
     shade.addColorStop(1, labToHex({ L: map.low, a: target.a, b: target.b }));
     context.fillStyle = shade;
-    context.fillRect(0, 0, w, h);
+    context.fillRect(left, 0, across, h);
     // Dimmed where the pot can't reach, as on the map.
     context.imageSmoothingEnabled = true;
-    context.drawImage(this.#barMask, 0, 0, w, h);
+    context.drawImage(this.#barMask, left, 0, across, h);
     // The target's bands, as the rings are on the map.
     const bands = [rules.stars.one, rules.stars.two, rules.stars.three];
     const best = round.reach.best.distance;
@@ -495,30 +541,38 @@ export class Brewing3DView implements ScreenView {
             ? 'rgba(242,193,78,0.9)'
             : `rgba(255,255,255,${String(0.18 + index * 0.12)})`;
       const top = y(target.L + band);
-      context.fillRect(0, top, w, y(target.L - band) - top);
+      context.fillRect(left, top, across, y(target.L - band) - top);
     });
     context.fillStyle = '#000';
-    context.fillRect(0, y(target.L) - 1, w, 2);
-    // The pot: a smudge per unstirred drop, a crisp notch once stirred.
+    context.fillRect(left, y(target.L) - 1.5, across, 3);
+    context.strokeStyle = 'rgba(58,44,28,0.6)';
+    context.lineWidth = 1.5;
+    context.strokeRect(left + 0.75, 0.75, across - 1.5, h - 1.5);
+    // The pot: a smudge per unstirred drop, a crisp pointer and line once stirred.
     for (const point of round.cloud) {
       if (point.unmixed <= 0.02) continue;
       context.fillStyle = `rgba(255,255,255,${String(0.25 + 0.4 * point.unmixed)})`;
       const spread = 1 + 6 * point.unmixed;
-      context.fillRect(-1, y(point.color.L) - spread / 2, w + 2, spread);
+      context.fillRect(left, y(point.color.L) - spread / 2, across, spread);
     }
     const mixed = round.mixed;
     if (mixed && round.unmixed < 0.5) {
-      const notch = y(mixed.L);
+      const mark = Math.min(Math.max(y(mixed.L), 5), h - 5);
+      context.globalAlpha = 1 - round.unmixed * 2;
+      context.fillStyle = '#000';
+      context.fillRect(left, mark - 2.5, across, 5);
       context.fillStyle = '#fff';
+      context.fillRect(left, mark - 1.5, across, 3);
       context.strokeStyle = '#000';
-      context.lineWidth = 1;
+      context.lineWidth = 1.5;
       context.beginPath();
-      context.moveTo(0, notch - 4);
-      context.lineTo(w, notch);
-      context.lineTo(0, notch + 4);
+      context.moveTo(0.5, mark - 5);
+      context.lineTo(left + 1, mark);
+      context.lineTo(0.5, mark + 5);
       context.closePath();
       context.fill();
       context.stroke();
+      context.globalAlpha = 1;
     }
   }
 
@@ -880,7 +934,7 @@ export class Brewing3DView implements ScreenView {
       const round = this.#round;
       // Not while an ingredient is being dragged: a drag is never a stir.
       if (!round || round.phase !== 'brew' || this.#pointer || this.#drag) return;
-      canvas.setPointerCapture(event.pointerId);
+      if (!capturePointer(canvas, event.pointerId)) return;
       this.#pointer = { id: event.pointerId, angle: angleAt(event) };
     });
     canvas.addEventListener('pointermove', (event) => {
@@ -945,7 +999,13 @@ export class Brewing3DView implements ScreenView {
     map.setAttribute('aria-label', 'Colour map');
     const mapBar = el('canvas', 'br-map-bar');
     mapBar.setAttribute('aria-label', 'Lightness');
-    mapRow.append(map, mapBar);
+    const lightness = el('div', 'br-light');
+    lightness.append(
+      el('span', 'br-light-end', 'Light'),
+      mapBar,
+      el('span', 'br-light-end', 'Dark'),
+    );
+    mapRow.append(map, lightness);
     const mapRing = el('div', 'br-swatch-name br-map-ring');
     const mapBest = el('div', 'br-swatch-name br-map-best');
     mapBox.append(mapRow, mapRing, mapBest);
@@ -1094,11 +1154,14 @@ export class Brewing3DView implements ScreenView {
     const sphere = new THREE.Box3().setFromObject(posed).getBoundingSphere(new THREE.Sphere());
     const camera = new THREE.PerspectiveCamera(30, 1, 0.01, 100);
     const back = new THREE.Vector3(0, Math.sin(30 * DEG), Math.cos(30 * DEG));
+    const { px, outline, halo } = this.#deps.game.data.brewing.icons;
+    // Room round the item for its sticker outline.
+    const fill = 1 - (2 * (outline + halo + 2)) / px;
     camera.position
       .copy(sphere.center)
-      .addScaledVector(back, (sphere.radius / Math.sin(15 * DEG)) * 1.05);
+      .addScaledVector(back, (sphere.radius / Math.sin(15 * DEG)) * (1.02 / fill));
     camera.lookAt(sphere.center);
-    const target = new THREE.WebGLRenderTarget(ICON_PX, ICON_PX);
+    const target = new THREE.WebGLRenderTarget(px, px);
     target.texture.colorSpace = THREE.SRGBColorSpace;
     const renderer = this.#renderer;
     const clear = renderer.getClearColor(new THREE.Color());
@@ -1107,8 +1170,8 @@ export class Brewing3DView implements ScreenView {
     renderer.setClearColor(0x000000, 0);
     renderer.clear();
     renderer.render(scene, camera);
-    const pixels = new Uint8Array(ICON_PX * ICON_PX * 4);
-    renderer.readRenderTargetPixels(target, 0, 0, ICON_PX, ICON_PX, pixels);
+    const pixels = new Uint8Array(px * px * 4);
+    renderer.readRenderTargetPixels(target, 0, 0, px, px, pixels);
     renderer.setRenderTarget(null);
     renderer.setClearColor(clear, clearAlpha);
     target.dispose();
@@ -1118,16 +1181,19 @@ export class Brewing3DView implements ScreenView {
         (object.material as THREE.Material).dispose();
       }
     });
+    // WebGL reads bottom row first.
+    const upright = new Uint8ClampedArray(px * px * 4);
+    for (let row = 0; row < px; row++) {
+      const from = (px - 1 - row) * px * 4;
+      upright.set(pixels.subarray(from, from + px * 4), row * px * 4);
+    }
+    // A sticker outline round the item's shape, so it reads on its own colour's tile.
     const canvas = document.createElement('canvas');
-    canvas.width = canvas.height = ICON_PX;
+    canvas.width = canvas.height = px;
     const context = canvas.getContext('2d');
     if (!context) return '';
-    const image = context.createImageData(ICON_PX, ICON_PX);
-    // WebGL reads bottom row first.
-    for (let row = 0; row < ICON_PX; row++) {
-      const from = (ICON_PX - 1 - row) * ICON_PX * 4;
-      image.data.set(pixels.subarray(from, from + ICON_PX * 4), row * ICON_PX * 4);
-    }
+    const image = context.createImageData(px, px);
+    image.data.set(stickerOutline(upright, px, px, outline, halo));
     context.putImageData(image, 0, 0);
     const url = canvas.toDataURL();
     this.#icons.set(entry.id, url);
@@ -1145,7 +1211,7 @@ export class Brewing3DView implements ScreenView {
         this.#flash(`No ${this.#name(id).toLowerCase()} left in the warchest`);
         return;
       }
-      element.setPointerCapture(event.pointerId);
+      if (!capturePointer(element, event.pointerId)) return;
       this.#drag = {
         id,
         pointerId: event.pointerId,
@@ -1412,15 +1478,21 @@ export class Brewing3DView implements ScreenView {
     };
     ui.cardSwatches.replaceChildren(swatch(round?.target, 'Recipe'), swatch(result.color, 'Yours'));
     const { stars } = this.#deps.game.data.brewing;
-    const lines = [
+    // Which way it was off, and what fixes that, e.g. "Colour spot on, a shade too light. Ash
+    // darkens, water lightens." (a spoiled brew says so first).
+    const brewing = this.#deps.game.data.brewing;
+    const advice =
+      round && result.stars < 3
+        ? adviceText(offBy(brewing, round.shelf, result.color, round.target), round.shelf, (id) =>
+            this.#name(id),
+          )
+        : '';
+    const lines =
       result.stars >= 3
-        ? 'A perfect match'
-        : result.stars === 2
-          ? 'Close: a shade off'
-          : result.stars === 1
-            ? 'Drinkable, but well off the colour'
-            : 'Too far off the colour: it spoiled',
-    ];
+        ? ['A perfect match']
+        : result.stars === 0
+          ? ['Too far off the colour: it spoiled', advice]
+          : [advice];
     if (result.refund) lines.push(`${this.#name(result.refund)} given back`);
     const ladled =
       result.ladles > 0 ? ` · ${String(result.ladles)} ladle${result.ladles === 1 ? '' : 's'}` : '';

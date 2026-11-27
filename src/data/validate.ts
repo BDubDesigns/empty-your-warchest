@@ -189,6 +189,12 @@ function checkReferences(data: GameData, ctx: z.RefinementCtx): void {
   if (!(brewing.stars.three <= brewing.stars.two && brewing.stars.two <= brewing.stars.one)) {
     issue(['brewing', 'stars'], 'Bands must widen from three stars to one');
   }
+  if (brewing.advice.much < brewing.advice.spotOn) {
+    issue(['brewing', 'advice', 'much'], 'Must not be less than spotOn');
+  }
+  if ((brewing.icons.outline + brewing.icons.halo) * 4 > brewing.icons.px) {
+    issue(['brewing', 'icons'], 'The outline would leave no room for the item');
+  }
   data.newGame.inventory.forEach((stack, index) => {
     if (!itemIds.has(stack.item)) {
       issue(['newGame', 'inventory', index, 'item'], `Unknown item "${stack.item}"`);

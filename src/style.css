@@ -2243,13 +2243,13 @@ body:not([data-view='camp']) #build-label {
   }
 
   /* A smaller map, so the card clears the pot. */
-  .br-map,
-  .br-map-bar {
+  .br-map {
+    width: 100px;
     height: 100px;
   }
 
-  .br-map {
-    width: 100px;
+  .br-map-bar {
+    height: 76px;
   }
 }
 
@@ -2330,11 +2330,25 @@ body:not([data-view='camp']) #build-label {
   border: 2px solid rgb(58 44 28 / 0.5);
 }
 
+/* The lightness bar, labelled Light at the top and Dark at the bottom. Its left edge is a column
+ * for the pot's pointer (no border there). */
+.br-light {
+  display: grid;
+  justify-items: end;
+  align-content: space-between;
+}
+
+.br-light-end {
+  font:
+    700 9px system-ui,
+    sans-serif;
+  line-height: 12px;
+  opacity: 0.75;
+}
+
 .br-map-bar {
-  width: 12px;
-  height: 124px;
-  border-radius: 4px;
-  border: 2px solid rgb(58 44 28 / 0.5);
+  width: 30px;
+  height: 100px;
 }
 
 .br-map-ring {
@@ -2409,9 +2423,7 @@ body:not([data-view='camp']) #build-label {
 .br-jar-icon {
   width: 52px;
   height: 52px;
-  border-radius: 50%;
-  /* A pale glow behind the icon, so a red cap stands out on red. */
-  background: radial-gradient(circle, rgb(255 255 255 / 0.5), rgb(255 255 255 / 0) 68%);
+  /* The icon carries its own sticker outline (drawn with it), so it reads on its tile. */
   pointer-events: none;
   filter: drop-shadow(0 2px 2px rgb(0 0 0 / 0.45));
 }

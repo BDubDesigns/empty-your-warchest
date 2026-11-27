@@ -1,5 +1,6 @@
 import { Rng, type EventLogger } from '../../../core';
 import { GameDataError, type BrewPotion, type Brewing, type BrewingFeel } from '../../../data';
+import { offBy, type OffBy } from './advice';
 import { hexToLab, labDistance, labToHex, mixLab, roundLab, type Lab } from './color';
 import {
   mapBounds,
@@ -20,6 +21,8 @@ export interface ShelfEntry {
   color: Lab;
   hex: string;
   strength: number;
+  /** The way it pulls a colour ("red"), for advice; water has none. */
+  tint?: string | undefined;
 }
 
 /** The shelf: the ingredients in data order, then water. */
@@ -30,6 +33,7 @@ export function shelfOf(rules: Pick<Brewing, 'ingredients' | 'water'>): ShelfEnt
       color: hexToLab(entry.color),
       hex: entry.color,
       strength: entry.strength,
+      tint: entry.tint,
     })),
     {
       id: WATER,
@@ -391,6 +395,12 @@ export class BrewRound {
     return mixed ? starsFor(this.rules, labDistance(mixed, this.target)) : 0;
   }
 
+  /** Which way the pot's true colour is off from the target (lightness and colour apart). */
+  get off(): OffBy | undefined {
+    const mixed = this.mixed;
+    return mixed ? offBy(this.rules, this.shelf, mixed, this.target) : undefined;
+  }
+
   /** Where the pot's true colour sits on the map, for the logs. */
   #where(): { map: MapPoint | null; ring: number } {
     const mixed = this.mixed;
@@ -572,6 +582,7 @@ export class BrewRound {
       distance: round3(distance),
       stars,
       ...this.#where(),
+      off: roundOff(offBy(this.rules, this.shelf, color, this.target)),
       potions: reward.potions,
       banked,
       refund: refund ?? null,
@@ -623,6 +634,10 @@ function round3(value: number): number {
 /** Rounds away float dust (a ladled pot's drops add up to 6.9999999…). */
 function snap(value: number): number {
   return Math.round(value * 1e9) / 1e9;
+}
+
+function roundOff(off: OffBy): Record<string, unknown> {
+  return { ...off, light: round3(off.light), colour: round3(off.colour) };
 }
 
 function finite3(value: number): number | null {

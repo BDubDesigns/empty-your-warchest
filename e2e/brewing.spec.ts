@@ -171,6 +171,9 @@ test('says when 3 stars goes out of reach, and the ladle frees room', async ({ p
   const screen = page.locator('#screen-brewing3d');
   await expect(screen).toHaveAttribute('data-best', '3');
   await expect(page.locator('.br-map-best')).toHaveText('');
+  // The lightness bar is labelled.
+  await expect(page.locator('.br-light')).toContainText('Light');
+  await expect(page.locator('.br-light')).toContainText('Dark');
   // Moss is green, the far side of the map from a violet: enough of it puts 3 stars out of reach.
   for (let i = 0; i < 6 && (await screen.getAttribute('data-best')) === '3'; i++) {
     await drag(page, 'moss');

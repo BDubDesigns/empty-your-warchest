@@ -8,15 +8,15 @@ export const brewing = {
   maxFill: 10,
   ingredients: [
     // Strong red.
-    { item: 'red_cap', color: '#d8301e', strength: 1.6 },
+    { item: 'red_cap', color: '#d8301e', strength: 1.6, tint: 'red' },
     // Yellow-green: with red, oranges and browns; with woad, greens and teals. Against a purple
     // it dulls the colour without darkening it (ash darkens too).
-    { item: 'moss', color: '#a3c23a', strength: 1 },
+    { item: 'moss', color: '#a3c23a', strength: 1, tint: 'green' },
     // Blue (from farming one day; the starting stock and the debug menu for now). With red,
     // purples.
-    { item: 'woad', color: '#2a4f9e', strength: 1.2 },
+    { item: 'woad', color: '#2a4f9e', strength: 1.2, tint: 'blue' },
     // Dark grey with next to no colour: darkens and dulls.
-    { item: 'ash', color: '#3b3936', strength: 0.8 },
+    { item: 'ash', color: '#3b3936', strength: 0.8, tint: 'grey' },
   ],
   // Lightens, weakly, but uses fill like anything else.
   water: { name: 'Water', color: '#e4ecee', strength: 0.6 },
@@ -50,6 +50,14 @@ export const brewing = {
   // The colour map beside the pot: hue and chroma (OKLab a and b) round every shelf colour,
   // `margin` past the outermost.
   map: { margin: 0.03 },
+  // Which way a brew is off: within 0.012 (under the 0.02 the eye notices) is spot on, past 0.04
+  // it's "much too light" / "too red" rather than "a shade" / "a touch". The map badges the pot
+  // too light or too dark once lightness is half the error or more (Brandon's water drop: all of
+  // it was lightness, and the dot sat dead centre).
+  advice: { spotOn: 0.012, much: 0.04, lightShare: 0.5 },
+  // Shelf icons drawn 128 px (shown about 52 px across): 6 px of black round the item's shape,
+  // then 6 px of white, about 2.5 px each on screen.
+  icons: { px: 128, outline: 6, halo: 6 },
   yard: { radius: 2.4, wear: 0.65 },
   feel: {
     // About 3 turns of the spoon blend a drop in fully.

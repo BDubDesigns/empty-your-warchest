@@ -903,8 +903,14 @@ const brewReward = z.object({ potions: positiveInt, refunds: z.number().int().mi
 const brewingSchema = z.object({
   /** The most drops the pot holds, water included. */
   maxFill: positiveInt,
-  /** On the shelf: each ingredient item, its colour in the pot, and how much a drop counts. */
-  ingredients: z.array(z.object({ item: id, color: hexColor, strength: positive })).min(1),
+  /**
+   * On the shelf: each ingredient item, its colour in the pot, and how much a drop counts. `tint`
+   * names the way it pulls a colour ("red"), for saying which way a brew is off ("a touch too
+   * red"); one without a tint is never named that way (water, which only lightens).
+   */
+  ingredients: z
+    .array(z.object({ item: id, color: hexColor, strength: positive, tint: name.optional() }))
+    .min(1),
   /** Water is free and never runs out (a tool, not an item). */
   water: z.object({ name, color: hexColor, strength: positive }),
   /**
@@ -941,6 +947,18 @@ const brewingSchema = z.object({
   }),
   /** The colour map: OKLab a and b round every shelf colour, `margin` past the outermost. */
   map: z.object({ margin: nonNegative }),
+  /**
+   * Saying which way a brew is off (OKLab distances). Lightness or colour (hue and chroma) off by
+   * no more than `spotOn` is spot on, and past `much` it's "much too light" or "too red" rather
+   * than "a shade" or "a touch". The map badges the pot "too light" or "too dark" when lightness
+   * is at least `lightShare` of the error (squared, as distances add) and isn't spot on.
+   */
+  advice: z.object({ spotOn: positive, much: positive, lightShare: fraction }),
+  /**
+   * The shelf's icons: drawn `px` square, with a sticker outline round the item's shape, `outline`
+   * px of black and then `halo` px of white (in the picture's pixels), so it reads on any tile.
+   */
+  icons: z.object({ px: positiveInt, outline: nonNegative, halo: nonNegative }),
   /** Grass round the cauldron, trodden bare round its fire. */
   yard: z.object({ radius: positive, wear: fraction }),
   feel: brewingFeelSchema,
