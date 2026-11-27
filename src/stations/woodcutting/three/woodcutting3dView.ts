@@ -2092,7 +2092,7 @@ export class Woodcutting3DView implements ScreenView {
     const foraged = round.drops
       .map((stack) => {
         const name = items.find((item) => item.id === stack.item)?.name ?? stack.item;
-        return `${String(stack.count)} ${name.toLowerCase()}`;
+        return `${name} × ${String(stack.count)}`;
       })
       .join(', ');
     ui.summaryText.textContent =
