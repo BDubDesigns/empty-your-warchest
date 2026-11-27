@@ -838,6 +838,11 @@ const siegeObjectiveSchema = z.discriminatedUnion('kind', [
 const placeSchema = z.tuple([z.number(), z.number()]);
 /** The position (by index) a guard on a piece guards. */
 const guardForSchema = z.number().int().min(0);
+/**
+ * How a guard keeps watch until something alerts him: standing still, walking up and down (on a
+ * walkway only), or asleep (woken by noise).
+ */
+const watchSchema = z.enum(['stand', 'patrol', 'sleep']).default('stand');
 
 /**
  * The prebuilt structures forts are assembled from, each placed at its middle: forts are lists of
@@ -872,6 +877,7 @@ export const siegePieceSchema = z.discriminatedUnion('kind', [
     courses: positiveInt,
     material: id,
     guard: guardForSchema.optional(),
+    watch: watchSchema,
   }),
   /**
    * The wooden keep with the banner on top: a storey for each of `storeys` (its posts' height), a
@@ -893,9 +899,28 @@ export const siegePieceSchema = z.discriminatedUnion('kind', [
     at: placeSchema,
     height: positive,
     guard: guardForSchema.optional(),
+    watch: watchSchema,
   }),
   /** A guard post: a guard standing on the ground. */
-  z.object({ kind: z.literal('post'), at: placeSchema, guard: guardForSchema }),
+  z.object({
+    kind: z.literal('post'),
+    at: placeSchema,
+    guard: guardForSchema,
+    watch: watchSchema,
+  }),
+  /**
+   * A walkway behind a wall: `segments` timber blocks in a row along x, `height` tall (the guard's
+   * floor), so a guard on it stands behind the battlements, half covered. A guard on watch here
+   * walks up and down it; alerted, any guard on it paces, ducking behind the wall and leaning out.
+   */
+  z.object({
+    kind: z.literal('walkway'),
+    at: placeSchema,
+    segments: positiveInt,
+    height: positive,
+    guard: guardForSchema.optional(),
+    watch: watchSchema,
+  }),
   /** A low wall `length` stones across, two courses high: cover a guard can duck behind. */
   z.object({ kind: z.literal('cover'), at: placeSchema, length: positiveInt, material: id }),
 ]);
@@ -1021,6 +1046,21 @@ export const siegeFeelSchema = z.object({
   kickBack: nonNegative,
   kickTilt: nonNegative,
   kickSeconds: positive,
+  /**
+   * Guards' marks: a sleeper's "Z z z" `zzzSize` metres tall over his head, and an alerted guard's
+   * "!" `markSize` tall for `markSeconds`.
+   */
+  zzzSize: positive,
+  markSize: positive,
+  markSeconds: nonNegative,
+  /**
+   * The flyover as a fort first opens: the camera sweeps over each position in turn and the keep,
+   * `flyoverHeight` metres up and `flyoverBack` short of what it looks at, over `flyoverSeconds`
+   * in all. A tap skips it.
+   */
+  flyoverSeconds: positive,
+  flyoverHeight: positive,
+  flyoverBack: nonNegative,
   /** How far short of a wall a camera looking at something (a kill, a collapse) stops (m). */
   cameraClearance: nonNegative,
   /**
@@ -1110,6 +1150,9 @@ const siegePartsSchema = z.object({
   platformSlab: positive,
   gateDepth: positive,
   pole: z.tuple([positive, positive, positive]),
+  /** A walkway segment: `walkway` long (along it) and `walkwayWidth` across. */
+  walkway: positive,
+  walkwayWidth: positive,
   gateHp: positive,
   weakHp: positive,
   keepPostHp: positive,
@@ -1142,6 +1185,34 @@ const siegeShape = z.object({
     topple: nonNegative,
   }),
   parts: siegePartsSchema,
+  /**
+   * How guards move (m/s and s). On watch a guard on a walkway walks it at `patrolSpeed`, pausing
+   * `patrolPause` at each end. Alerted, he paces at `alertSpeed` to a new place, ducks `duck`
+   * metres behind the wall for `alertPause`, then leans out (stands) for `alertLean`, and again. A
+   * woken sleeper stands and looks round for `wakeSeconds` first.
+   */
+  guardMoves: z.object({
+    patrolSpeed: positive,
+    patrolPause: nonNegative,
+    alertSpeed: positive,
+    alertPause: nonNegative,
+    alertLean: positive,
+    duck: nonNegative,
+    wakeSeconds: nonNegative,
+  }),
+  /**
+   * Noise: how far (m) each thing is heard. The ballista firing; a spear hitting stone, wood or a
+   * guard; a stone or wooden block breaking. A crash (a block slamming into something) is heard
+   * `crashShare` as far as a spear hit on its material. A guard on watch who hears it is
+   * alerted; a sleeper wakes only if it's within `sleepShare` of its reach.
+   */
+  noise: z.object({
+    fire: nonNegative,
+    hit: z.object({ stone: nonNegative, wood: nonNegative, guard: nonNegative }),
+    break: z.object({ stone: nonNegative, wood: nonNegative }),
+    crashShare: fraction,
+    sleepShare: fraction,
+  }),
   physics: z.object({
     /** Seconds per physics step, whatever the frame rate. */
     timestep: positive,
@@ -1168,6 +1239,11 @@ const siegeShape = z.object({
      */
     landedDamping: nonNegative,
     landedSpinDamping: nonNegative,
+    /**
+     * The share of its speed a spear keeps after it first hits something: it's spent, so a
+     * glancing one can't fly on across the fort and hit something it was never aimed at.
+     */
+    afterHit: fraction,
   }),
   /**
    * Everything has settled once no body moves faster than `speed` (m/s) or turns faster than

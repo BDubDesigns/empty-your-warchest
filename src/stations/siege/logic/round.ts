@@ -11,6 +11,7 @@ import type {
   SiegeWeapon,
 } from '../../../data';
 import { objectiveMet } from './objective';
+import { alert, startWalker, stepWalker, walking, type GuardMode, type Walker } from './watch';
 import type { Physics } from './physics';
 import { siegeRewards, type SiegeRewards } from './score';
 import {
@@ -85,6 +86,8 @@ export type SiegeEvent =
   | { type: 'down'; block: number }
   /** A guard is down (no hit points left, or knocked over). */
   | { type: 'guardDown'; guard: number; at: Vec3 }
+  /** A guard heard something: a sleeper woke (`woke`), or a guard on watch was alerted. */
+  | { type: 'alerted'; guard: number; woke: boolean }
   /** The ballista set off for spot `spot` of the position it's at. */
   | { type: 'spot'; spot: number }
   /** Position `position` is won; the ballista rolls on to the next in a moment. */
@@ -164,6 +167,8 @@ export interface GuardState {
   hp: number;
   maxHp: number;
   down: boolean;
+  /** What he's about (on watch, asleep, alerted …), and where along his walkway. */
+  walker: Walker;
 }
 
 /** A shot spear. */
@@ -211,6 +216,10 @@ const groups = (member: number, filter: number) => (member << 16) | filter;
  * on it can reach (the widest floor in a fort).
  */
 const WAKE_REACH = 3;
+/** What's left of a spear's speed once it's hit a guard walking his walkway. */
+const SPEAR_IN_GUARD = 0.1;
+/** How near a walkway guard's feet a broken block must be for him to lose his footing (m). */
+const FOOTING = 0.3;
 
 /**
  * One siege: a fort of blocks and guards in a Rapier physics world, the ballista and the spears
@@ -241,6 +250,8 @@ export class SiegeRound {
   readonly #hooks: SiegeHooks;
   readonly #recovery: number;
   readonly #rng: Rng;
+  /** The guards' own random numbers (where they walk), apart from the shots'. */
+  readonly #watchRng: Rng;
   readonly #blockBodies: Tracked[] = [];
   readonly #guardBodies: Tracked[] = [];
   readonly #spearBodies: Tracked[] = [];
@@ -283,6 +294,7 @@ export class SiegeRound {
     this.#hooks = hooks;
     this.#recovery = data.tuning.weaponRecoveryOnWin;
     this.#rng = new Rng(options.seed);
+    this.#watchRng = new Rng((options.seed ^ 0x5bd1e995) >>> 0);
     this.#position = Math.min(Math.max(options.position ?? 0, 0), fort.positions.length - 1);
     this.#throwsAt = fort.positions.map(() => 0);
     this.#spot = middleSpot(fort.positions[this.#position]);
@@ -342,13 +354,17 @@ export class SiegeRound {
             { kind: 'guard', index },
           ),
         );
+        const walker = startWalker(guard.watch, x, guard.walk, this.#watchRng);
         this.guards.push({
           guard,
           position: positionIndex,
           hp: rules.hp,
           maxHp: rules.hp,
           down: false,
+          walker,
         });
+        // A guard walking his walkway is moved by the rules, not pushed about by the physics.
+        if (walking(walker, guard.walk)) this.#walkOn(index);
       }
     });
     this.#lastThud = this.blocks.map(() => -Infinity);
@@ -521,6 +537,12 @@ export class SiegeRound {
       step: this.#steps,
     });
     this.#hooks.onEvent({ type: 'throw', mode, spears: spears.length });
+    const from = this.ballista();
+    this.#noise(
+      'fire',
+      { x: from.x, y: this.weapon.pivotHeight, z: from.z },
+      this.rules.noise.fire,
+    );
     this.#launchDue(feel);
     return true;
   }
@@ -559,6 +581,7 @@ export class SiegeRound {
     for (const tracked of [...this.#blockBodies, ...this.#guardBodies, ...this.#spearBodies]) {
       if (!tracked.gone) remember(tracked);
     }
+    this.#walkGuards();
     this.#world.step(this.#queue);
     this.#steps++;
     const now = this.seconds;
@@ -585,6 +608,8 @@ export class SiegeRound {
       if (change > damage.crashMinSpeed) {
         const amount = (change - damage.crashMinSpeed) * damage.crashPerSpeed;
         this.#impact({ kind: 'block', index }, 'crash', change, amount);
+        const at = copy(tracked.body.translation());
+        this.#noise('crash', at, this.rules.noise.hit[state.kind] * this.rules.noise.crashShare);
         if (this.#hurt({ kind: 'block', index }, amount)) breaking.add(index);
       }
       if (change >= feel.thudSpeed && now - (this.#lastThud[index] ?? 0) >= feel.thudGapSeconds) {
@@ -610,8 +635,10 @@ export class SiegeRound {
 
     this.#guardBodies.forEach((tracked, index) => {
       const state = this.guards[index];
-      if (!state || state.down || tracked.body.isSleeping()) return;
-      const change = suddenChange(tracked);
+      if (!state || state.down) return;
+      // Walking his walkway, he's moved, not knocked about: only spears hurt him.
+      const change =
+        tracked.body.isSleeping() || tracked.body.isKinematic() ? 0 : suddenChange(tracked);
       if (change > damage.crashMinSpeed) {
         const amount = (change - damage.crashMinSpeed) * damage.crashPerSpeed;
         this.#impact({ kind: 'guard', index }, 'crash', change, amount);
@@ -824,6 +851,10 @@ export class SiegeRound {
     const speed = Math.hypot(before.x, before.y, before.z);
     if (spear.flying) {
       spear.flying = false;
+      // A spear that's hit something is spent: it glances off slowly (never on across the fort).
+      const now = tracked.body.linvel();
+      const kept = this.rules.projectile.afterHit;
+      tracked.body.setLinvel({ x: now.x * kept, y: now.y * kept, z: now.z * kept }, true);
       tracked.body.setLinearDamping(this.rules.projectile.landedDamping);
       tracked.body.setAngularDamping(this.rules.projectile.landedSpinDamping);
     }
@@ -832,12 +863,40 @@ export class SiegeRound {
       if (speed >= feel.thudSpeed) this.#hooks.onEvent({ type: 'land', spear: index, speed, at });
       return;
     }
+    // A guard walking his walkway can't be knocked back (the rules move him), so a spear that
+    // hits him would bounce off as off a wall, and fly on anywhere: it stops in him instead.
+    if (target.kind === 'guard' && this.#guardBodies[target.index]?.body.isKinematic()) {
+      tracked.body.setLinvel(
+        {
+          x: before.x * SPEAR_IN_GUARD,
+          y: before.y * SPEAR_IN_GUARD,
+          z: before.z * SPEAR_IN_GUARD,
+        },
+        true,
+      );
+    }
     const key = `${String(index)}:${target.kind}:${String(target.index)}`;
     if (this.#hits.has(key) || this.#gone(target)) return;
     this.#hits.add(key);
     const { spearMinSpeed, spearPerSpeed } = this.rules.damage;
     const damage = Math.max(speed - spearMinSpeed, 0) * spearPerSpeed;
     this.#impact(target, 'spear', speed, damage);
+    const kind = this.#kindOf(target);
+    this.#noise(`hit:${kind}`, at, this.rules.noise.hit[kind]);
+    if (target.kind === 'guard') {
+      const guard = this.guards[target.index];
+      const body = this.#guardBodies[target.index]?.body.translation();
+      this.#hooks.logger.log('siege.guardHit', {
+        fort: this.fort.id,
+        guard: target.index,
+        mode: guard?.walker.mode,
+        step: guard?.walker.mode === 'alert' ? guard.walker.step : undefined,
+        ducked: round2(guard?.walker.ducked ?? 0),
+        x: round2(body?.x ?? 0),
+        damage: round2(damage),
+        at: this.#steps,
+      });
+    }
     if (this.#hurt(target, damage) && target.kind === 'block') breaking.add(target.index);
     if (speed < feel.thudSpeed && damage <= 0) return;
     this.#hooks.onEvent({
@@ -894,6 +953,7 @@ export class SiegeRound {
     if (!state || !tracked || state.down) return;
     state.down = true;
     state.hp = 0;
+    this.#walkOff(index);
     const { body } = tracked;
     const at = copy(body.translation());
     if (tiltOf(body.rotation()) < this.rules.guard.downTilt) {
@@ -933,10 +993,28 @@ export class SiegeRound {
       const there = other.body.translation();
       if (Math.hypot(there.x - at.x, there.y - at.y, there.z - at.z) <= reach) other.body.wakeUp();
     }
+    // A guard walking on it loses his footing: the physics has him from here.
+    const [width, height, depth] = state.block.size;
+    this.guards.forEach((guard, guardIndex) => {
+      const body = this.#guardBodies[guardIndex]?.body;
+      if (!body?.isKinematic()) return;
+      const feet = body.translation().y - this.rules.guard.size[1] / 2;
+      const there = body.translation();
+      if (
+        Math.abs(feet - (at.y + height / 2)) <=
+          FOOTING + guard.walker.ducked * this.rules.guardMoves.duck &&
+        Math.abs(there.x - at.x) <= width / 2 + FOOTING &&
+        Math.abs(there.z - at.z) <= depth / 2 + FOOTING
+      ) {
+        this.#walkOff(guardIndex);
+        guard.walker.mode = 'stand';
+      }
+    });
     this.#colliders.delete(tracked.collider);
     this.#world.removeRigidBody(tracked.body);
     tracked.gone = true;
     this.#hooks.onEvent({ type: 'break', block: index, kind: state.kind, at });
+    this.#noise(`break:${state.kind}`, at, this.rules.noise.break[state.kind]);
   }
 
   /** Nothing is moving faster than the settle speeds (resting bodies are asleep or nearly). */
@@ -954,6 +1032,95 @@ export class SiegeRound {
       [...this.#blockBodies, ...this.#guardBodies].every((tracked) => still(tracked, true)) &&
       this.#spearBodies.every((tracked) => still(tracked, false))
     );
+  }
+
+  /**
+   * A guard starts walking his walkway: the rules move him (kinematic), and only spears touch him
+   * (he walks through the walkway as he ducks; nothing else pushes him about).
+   */
+  #walkOn(index: number): void {
+    const tracked = this.#guardBodies[index];
+    if (!tracked || tracked.body.isKinematic()) return;
+    tracked.body.setBodyType(this.#physics.RigidBodyType.KinematicPositionBased, true);
+    tracked.body.setRotation({ x: 0, y: 0, z: 0, w: 1 }, true);
+    this.#world.getCollider(tracked.collider).setCollisionGroups(groups(BLOCK, SPEAR));
+  }
+
+  /** A walking guard stops (down, or his footing gone): stood up straight, the physics has him. */
+  #walkOff(index: number): void {
+    const tracked = this.#guardBodies[index];
+    const state = this.guards[index];
+    if (!tracked || !state || !tracked.body.isKinematic()) return;
+    const [, y, z] = state.guard.at;
+    const there = tracked.body.translation();
+    tracked.body.setTranslation({ x: there.x, y: y + this.rules.guard.size[1] / 2, z }, true);
+    state.walker.ducked = 0;
+    tracked.body.setBodyType(this.#physics.RigidBodyType.Dynamic, true);
+    this.#world
+      .getCollider(tracked.collider)
+      .setCollisionGroups(groups(BLOCK, GROUND | BLOCK | SPEAR));
+  }
+
+  /** One step of every guard on watch: walking, waking, pacing and ducking. */
+  #walkGuards(): void {
+    const { timestep } = this.rules.physics;
+    const moves = this.rules.guardMoves;
+    const [, tall] = this.rules.guard.size;
+    this.guards.forEach((state, index) => {
+      if (state.down) return;
+      const { walker, guard } = state;
+      stepWalker(walker, guard, moves, timestep, this.#watchRng);
+      if (!walking(walker, guard.walk)) return;
+      this.#walkOn(index);
+      const body = this.#guardBodies[index]?.body;
+      if (!body?.isKinematic()) return;
+      const [, y, z] = guard.at;
+      body.setNextKinematicTranslation({
+        x: walker.x,
+        y: y + tall / 2 - walker.ducked * moves.duck,
+        z,
+      });
+    });
+  }
+
+  /**
+   * A noise `reach` metres round `at`: guards on watch within it are alerted, sleepers within
+   * `sleepShare` of it wake. Logged when it alerts anyone.
+   */
+  #noise(source: string, at: Vec3, reach: number): void {
+    if (reach <= 0) return;
+    const { sleepShare } = this.rules.noise;
+    const moves = this.rules.guardMoves;
+    const heard: number[] = [];
+    this.guards.forEach((state, index) => {
+      if (state.down) return;
+      const there = this.#guardBodies[index]?.body.translation();
+      if (!there) return;
+      const away = Math.hypot(there.x - at.x, there.y - at.y, there.z - at.z);
+      const asleep = state.walker.mode === 'sleep';
+      if (away > reach * (asleep ? sleepShare : 1)) return;
+      const from: GuardMode = state.walker.mode;
+      if (!alert(state.walker, moves)) return;
+      heard.push(index);
+      this.#hooks.logger.log('siege.guardWake', {
+        fort: this.fort.id,
+        guard: index,
+        from,
+        to: state.walker.mode,
+        by: source,
+        step: this.#steps,
+      });
+      this.#hooks.onEvent({ type: 'alerted', guard: index, woke: asleep });
+    });
+    if (heard.length === 0) return;
+    this.#hooks.logger.log('siege.noise', {
+      fort: this.fort.id,
+      source,
+      radius: round2(reach),
+      at: { x: round2(at.x), y: round2(at.y), z: round2(at.z) },
+      woken: heard,
+      step: this.#steps,
+    });
   }
 
   /** Blocks broken, by the kind of piece they were part of (wall, gate, keep …). */
@@ -1004,6 +1171,7 @@ export class SiegeRound {
       blocksDown,
       blocksBroken: result.blocksBroken,
       piecesBroken: this.#piecesBroken(),
+      merlonsBroken: this.blocks.filter((state) => state.broken && state.block.merlon).length,
       guardsDown,
       damage: result.damage,
       position: this.#position,

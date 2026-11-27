@@ -369,6 +369,9 @@ function checkSiege(data: GameData, issue: (path: Path, message: string) => void
     forts.add(fort.id);
     fort.pieces.forEach((piece, pieceIndex) => {
       const at = [...path, 'pieces', pieceIndex];
+      if ('watch' in piece && piece.watch === 'patrol' && piece.kind !== 'walkway') {
+        issue([...at, 'watch'], 'Only a guard on a walkway can patrol');
+      }
       if ('material' in piece && !materials.has(piece.material)) {
         issue([...at, 'material'], `Unknown material "${piece.material}"`);
       }

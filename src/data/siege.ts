@@ -70,6 +70,8 @@ function throughGate(x: number, z: number): [number, number][] {
  * 20 m on from where the weapon stops inside. The Stronghold is the Outpost mirrored, in stone.
  */
 const SPAN = { from: -14.5, to: 14.5 };
+/** Where a walkway behind a wall at depth `z` stands: just clear of the wall's back. */
+const behind = (z: number) => z - 0.9;
 const OUTER_Z = -20;
 const INNER_Z = -54;
 const COURTYARD_Z = -26;
@@ -89,7 +91,7 @@ export const siege = {
       aimed: { start: 5, everyLevels: 5, add: 1 },
       barrageTimes: 3,
       speed: 90,
-      tilt: { min: -3, max: 5, start: 1 },
+      tilt: { min: -3, max: 10, start: 1 },
       pivotHeight: 1.2,
       muzzle: 1,
       spacing: 0.08,
@@ -111,6 +113,8 @@ export const siege = {
     platformSlab: 0.2,
     gateDepth: 0.3,
     pole: [0.14, 1.4, 0.14],
+    walkway: 2,
+    walkwayWidth: 1,
     // A gate leaf or a thin post under the keep goes at two hits (an aimed volley at it).
     gateHp: 50,
     weakHp: 50,
@@ -118,6 +122,26 @@ export const siege = {
     // thin posts gone the keep tips forward over that wall, and the banner comes down with it.
     keepPostHp: 1000,
     bannerHp: 100000,
+  },
+  // Walking the walkway, a guard crosses a 12 m one in about 15 s; alerted, he dashes from cover
+  // to cover, out of sight a moment and out for a shot a moment.
+  guardMoves: {
+    patrolSpeed: 0.8,
+    patrolPause: 1.2,
+    alertSpeed: 2,
+    alertPause: 1.4,
+    alertLean: 0.9,
+    duck: 0.8,
+    wakeSeconds: 1.2,
+  },
+  // The first shot alerts the guards on the wall in front (20-odd metres off), but not sleepers.
+  // Smashing stone wakes everything near it; a clean hit on a guard is all but silent.
+  noise: {
+    fire: 25,
+    hit: { stone: 12, wood: 8, guard: 3 },
+    break: { stone: 22, wood: 16 },
+    crashShare: 0.5,
+    sleepShare: 0.4,
   },
   // 60 steps a second keeps a phone's frame budget; the spears use continuous collision
   // detection, so even the fastest can't skip through a block between two steps.
@@ -136,6 +160,7 @@ export const siege = {
     restitution: 0.1,
     landedDamping: 0.6,
     landedSpinDamping: 8,
+    afterHit: 0.15,
   },
   settle: { speed: 0.15, spin: 0.3, seconds: 1, winSeconds: 4 },
   down: { drop: 0.25, tilt: 25 },
@@ -166,15 +191,20 @@ export const siege = {
       par: 7,
       rewards: { xpPerBlock: 2, xpPerGuard: 10, winXp: 80 },
       pieces: [
-        // The outer wall, its gate to the left, two guards behind the gate.
+        // The outer wall, its gate to the left: a guard walking the walkway behind the wall to
+        // the right of it.
         ...gatedWall(OUTER_Z, 6, 'fieldstone', SPAN, { at: -5, width: 3 }),
-        { kind: 'post', at: [-5.5, -21.6], guard: 0 },
-        { kind: 'post', at: [-4.5, -21.6], guard: 0 },
-        // The courtyard, over to the right: a guard ducking behind a low wall, one on a watch
-        // platform.
+        {
+          kind: 'walkway',
+          at: [6, behind(OUTER_Z)],
+          segments: 6,
+          height: 2.7,
+          guard: 0,
+          watch: 'patrol',
+        },
+        // The courtyard, over to the right: a low wall, and a guard asleep on a watch platform.
         { kind: 'cover', at: [8, -44], length: 8, material: 'fieldstone' },
-        { kind: 'post', at: [7, -45.2], guard: 1 },
-        { kind: 'platform', at: [12.8, -46], height: 1.4, guard: 1 },
+        { kind: 'platform', at: [12.8, -46], height: 1.4, guard: 1, watch: 'sleep' },
         // The inner wall, its gate to the left: high, so the keep is out of sight from the
         // courtyard.
         ...gatedWall(INNER_Z, 8, 'curtain', SPAN, { at: -9, width: 3 }),
@@ -215,13 +245,28 @@ export const siege = {
       rewards: { xpPerBlock: 3, xpPerGuard: 12, winXp: 160 },
       pieces: [
         ...gatedWall(OUTER_Z, 6, 'stone', SPAN, { at: 5, width: 3 }),
-        { kind: 'post', at: [4.5, -21.6], guard: 0 },
-        { kind: 'post', at: [5.5, -21.6], guard: 0 },
-        // A tower behind the wall: its guard falls when the wall in front and under him goes.
-        { kind: 'tower', at: [-7, -22.4], courses: 3, material: 'stone', guard: 0 },
+        // A guard walking the long walkway to the left of the gate, one asleep on the short one
+        // to the right, and one asleep behind the gate.
+        {
+          kind: 'walkway',
+          at: [-7, behind(OUTER_Z)],
+          segments: 6,
+          height: 2.7,
+          guard: 0,
+          watch: 'patrol',
+        },
+        {
+          kind: 'walkway',
+          at: [10.5, behind(OUTER_Z)],
+          segments: 3,
+          height: 2.7,
+          guard: 0,
+          watch: 'sleep',
+        },
+        { kind: 'post', at: [5, -21.6], guard: 0, watch: 'sleep' },
         { kind: 'cover', at: [-8, -44], length: 8, material: 'stone' },
         { kind: 'post', at: [-6.5, -45.2], guard: 1 },
-        { kind: 'post', at: [-9.5, -45.2], guard: 1 },
+        { kind: 'post', at: [-9.5, -45.2], guard: 1, watch: 'sleep' },
         { kind: 'tower', at: [-12.6, -46.4], courses: 2, material: 'stone', guard: 1 },
         ...gatedWall(INNER_Z, 8, 'curtain', SPAN, { at: 9, width: 3 }),
         { kind: 'cover', at: [-3, -75], length: 6, material: 'stone' },
@@ -279,6 +324,12 @@ export const siege = {
     kickTilt: 1.5,
     kickSeconds: 0.22,
     cameraClearance: 0.5,
+    zzzSize: 1,
+    markSize: 1,
+    markSeconds: 1.6,
+    flyoverSeconds: 7,
+    flyoverHeight: 12,
+    flyoverBack: 14,
     scoutHeight: 90,
     scoutBack: 35,
     scoutSeconds: 0.8,

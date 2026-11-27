@@ -54,6 +54,14 @@ test('Siege: tap the War tent, drag to look, Fire, and the ballista shoots the w
   page.on('pageerror', (error) => errors.push(error.message));
   await openTent(page, 60);
   await expect(page.locator('body')).toHaveAttribute('data-siege', 'aim');
+  // The flyover over the fort first: a tap skips it, back to the sights.
+  const view = page.locator('#screen-siege3d');
+  await expect(view).toHaveAttribute('data-camera', 'flyover');
+  await expect(page.getByRole('button', { name: 'Fire' })).toBeHidden();
+  const canvas = page.locator('#screen-siege3d .sg-canvas');
+  await canvas.tap();
+  await expect(view).toHaveAttribute('data-camera', /sights|kill/);
+  await expect(view).toHaveAttribute('data-camera', 'sights');
   const count = page.locator('#screen-siege3d .warchest-count');
   await expect(count).toHaveText('60');
   await expect(page.getByRole('radio', { name: /Aimed/ })).toContainText(
@@ -70,7 +78,6 @@ test('Siege: tap the War tent, drag to look, Fire, and the ballista shoots the w
 
   // Down the sights: the crosshair sits in the middle. A drag turns the view (right and up
   // here), then Fire.
-  const view = page.locator('#screen-siege3d');
   await expect(page.locator('#screen-siege3d .sg-crosshair')).toBeVisible();
   const aim = async () =>
     ((await view.getAttribute('data-aim')) ?? '0 0').split(' ').map(Number) as [number, number];
@@ -131,6 +138,7 @@ test('Siege: tap the War tent, drag to look, Fire, and the ballista shoots the w
     'siege.throw',
     'siege.scout',
     'siege.ghost',
+    'siege.flyover',
     'siege.quit',
   ]) {
     expect(types).toContain(type);

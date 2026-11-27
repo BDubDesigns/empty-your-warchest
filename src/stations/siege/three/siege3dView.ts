@@ -199,6 +199,31 @@ export class Siege3DView implements ScreenView {
   readonly #ghost: THREE.InstancedMesh;
   /** The kick of the last shot, from 1 (just shot) down to 0 (settled). */
   #kick = 0;
+  /** Over each guard's head: "Z z z" while he sleeps, "!" a moment when he's alerted. */
+  #marks: { zzz: THREE.Sprite; bang: THREE.Sprite; alertedAt: number }[] = [];
+  readonly #zzzMaterial = new THREE.SpriteMaterial({
+    map: textSprite('Z z z', '#eef4ff'),
+    depthTest: false,
+  });
+  readonly #bangMaterial = new THREE.SpriteMaterial({
+    map: textSprite('!', '#ffd23c'),
+    depthTest: false,
+  });
+  /**
+   * The flyover as a fort first opens: when it began, the camera's way through the fort and
+   * where it looks on the way, and the positions' names to show as it passes each.
+   */
+  #fly:
+    | {
+        at: number;
+        path: THREE.CatmullRomCurve3;
+        looks: THREE.CatmullRomCurve3;
+        names: string[];
+        shown: number;
+      }
+    | undefined;
+  /** The next round starts with the flyover (a fort opened, not Again). */
+  #flyNext = true;
   readonly #raycaster = new THREE.Raycaster();
   readonly #puffTexture: THREE.Texture;
   /** Geometry and materials every round uses, which freeing a round's meshes must leave alone. */
@@ -348,6 +373,7 @@ export class Siege3DView implements ScreenView {
     restoreContext(this.#renderer);
     this.#hud.wake();
     this.#resize();
+    this.#flyNext = true;
     this.#startRound();
     this.#timer.reset();
     this.#renderer.setAnimationLoop((time) => {
@@ -426,6 +452,11 @@ export class Siege3DView implements ScreenView {
     this.#title = undefined;
     this.#rolling = 0;
     this.#lastBallista = round.ballista();
+    this.#fly = undefined;
+    if (this.#flyNext) {
+      this.#flyNext = false;
+      this.#startFlyover(round);
+    }
     if (game.inventory.count(rules.item) < 1) this.#showNoSpears();
   }
 
@@ -440,6 +471,12 @@ export class Siege3DView implements ScreenView {
     // card, or every round leaves the last one's there.
     for (const look of this.#blocks) this.#free(look.mesh);
     for (const look of this.#guards) this.#free(look.root);
+    // The marks' look is shared: only out of the scene.
+    for (const mark of this.#marks) {
+      mark.zzz.removeFromParent();
+      mark.bang.removeFromParent();
+    }
+    this.#marks = [];
     for (const spear of this.#spears) this.#free(spear);
     this.#blocks = [];
     this.#guards = [];
@@ -594,6 +631,13 @@ export class Siege3DView implements ScreenView {
       const look = buildGuard(size);
       this.#fortGroup.add(look.root);
       return { ...look, down: false };
+    });
+    this.#marks = round.guards.map(() => {
+      const zzz = new THREE.Sprite(this.#zzzMaterial);
+      const bang = new THREE.Sprite(this.#bangMaterial);
+      zzz.renderOrder = bang.renderOrder = 5;
+      this.#effects.add(zzz, bang);
+      return { zzz, bang, alertedAt: -Infinity };
     });
     this.#drawBodies();
   }
@@ -758,6 +802,12 @@ export class Siege3DView implements ScreenView {
           this.#play('thud-2', 0.45, -200);
           this.#deps.haptics.pulse(feel.buzzGuardMs);
         }
+        break;
+      }
+      case 'alerted': {
+        const mark = this.#marks[event.guard];
+        if (mark) mark.alertedAt = this.#now;
+        this.#play(event.woke ? 'creak' : 'wind', 0.35, event.woke ? 400 : 900);
         break;
       }
       case 'spot':
@@ -979,9 +1029,28 @@ export class Siege3DView implements ScreenView {
         look.mesh.scale.setScalar(stage === 2 ? 0.94 : 1);
       }
     });
+    const feel = this.#deps.feel.values;
+    const [, tall] = this.#deps.game.data.siege.guard.size;
     this.#guards.forEach((look, index) => {
       round.guardPose(index, pose);
       place(look.root);
+      const state = round.guards[index];
+      const mark = this.#marks[index];
+      if (!state || !mark) return;
+      // Asleep: slumped forward on his feet. Woken: looking about.
+      if (state.walker.mode === 'sleep' && !state.down) look.root.rotateX(-0.28);
+      if (state.walker.mode === 'waking' && !state.down) {
+        look.root.rotateY(Math.sin(this.#now * 7) * 0.5);
+      }
+      const head = new THREE.Vector3(pose.position.x, pose.position.y + tall / 2, pose.position.z);
+      mark.zzz.visible = state.walker.mode === 'sleep' && !state.down;
+      mark.zzz.position
+        .copy(head)
+        .add(new THREE.Vector3(0.15, feel.zzzSize * 0.8 + Math.sin(this.#now * 2) * 0.06, 0));
+      mark.zzz.scale.set(feel.zzzSize * 2, feel.zzzSize, 1);
+      mark.bang.visible = !state.down && this.#now - mark.alertedAt < feel.markSeconds;
+      mark.bang.position.copy(head).add(new THREE.Vector3(0, feel.markSize * 0.8, 0));
+      mark.bang.scale.set(feel.markSize, feel.markSize, 1);
     });
     this.#spears.forEach((spear, index) => {
       round.spearPose(index, pose);
@@ -1160,6 +1229,7 @@ export class Siege3DView implements ScreenView {
     const pivot = new THREE.Vector3(at.x, weapon.pivotHeight, at.z);
     const home = pivot.clone().addScaledVector(forward, -feel.sightBack);
     const look = pivot.clone().addScaledVector(forward, LOOK_REACH);
+    this.#updateFlyover();
     this.#updateCine(dt, home, look);
     const eased = (share: number) => share * share * (3 - 2 * share);
     if (this.#cineBlend > 0) {
@@ -1213,6 +1283,8 @@ export class Siege3DView implements ScreenView {
    */
   #updateCine(dt: number, sight: THREE.Vector3, sightLook: THREE.Vector3): void {
     const feel = this.#deps.feel.values;
+    // The flyover has the camera.
+    if (this.#fly) return;
     const cine = this.#cine;
     const round = this.#round;
     if (!cine || !round) {
@@ -1338,6 +1410,88 @@ export class Siege3DView implements ScreenView {
     return middle;
   }
 
+  /**
+   * The flyover: a way over the fort built from its own data, so any fort gets one. From high
+   * behind the weapon, over each position's guards in turn (its name shown as it passes), to the
+   * keep with the banner, and back down to the sights.
+   */
+  #startFlyover(round: SiegeRound): void {
+    const feel = this.#deps.feel.values;
+    const fort = round.fort;
+    const above = (at: THREE.Vector3) =>
+      at.clone().add(new THREE.Vector3(0, feel.flyoverHeight, feel.flyoverBack));
+    const middle = (points: THREE.Vector3[]) =>
+      points
+        .reduce((sum, point) => sum.add(point), new THREE.Vector3())
+        .divideScalar(points.length);
+    const stops = fort.positions.map((position, index) => {
+      const guards = position.guards.map(({ at }) => new THREE.Vector3(at[0], at[1] + 1, at[2]));
+      if (guards.length > 0) return middle(guards);
+      // No guards (the keep): what holds the banner up.
+      if (index === fort.positions.length - 1 && round.bannerIndex >= 0) {
+        const keep = this.#pieceMiddle(round.bannerIndex);
+        return new THREE.Vector3(keep.x, keep.y, keep.z);
+      }
+      const [x, z] = position.spots[0] ?? [0, 0];
+      return new THREE.Vector3(x, 1, z - 20);
+    });
+    const start = this.#lastBallista;
+    const from = new THREE.Vector3(start.x, feel.flyoverHeight * 1.5, start.z + feel.flyoverBack);
+    const first = stops[0] ?? new THREE.Vector3();
+    this.#fly = {
+      at: this.#now,
+      path: new THREE.CatmullRomCurve3([from, ...stops.map(above)]),
+      looks: new THREE.CatmullRomCurve3([first.clone(), ...stops]),
+      names: fort.positions.map((position) => position.name),
+      shown: -1,
+    };
+    this.#cine = undefined;
+    this.#cineBlend = 0;
+  }
+
+  /** The flyover's camera, while it lasts; then back down to the sights, as camera work eases. */
+  #updateFlyover(): void {
+    const fly = this.#fly;
+    if (!fly) return;
+    const feel = this.#deps.feel.values;
+    const share = Math.min((this.#now - fly.at) / Math.max(feel.flyoverSeconds, 0.1), 1);
+    const eased = share * share * (3 - 2 * share);
+    fly.path.getPoint(eased, this.#cinePose.position);
+    fly.looks.getPoint(eased, this.#cinePose.look);
+    this.#cineBlend = 1;
+    // Each position's name as the camera comes over it.
+    const passing = Math.min(Math.floor(eased * fly.names.length), fly.names.length - 1);
+    if (passing !== fly.shown) {
+      fly.shown = passing;
+      const name = fly.names[passing];
+      if (name) this.#title = { text: name, at: this.#now };
+    }
+    if (share >= 1) this.#endFlyover(false);
+  }
+
+  /** The flyover's over (or skipped): the camera eases back down to the sights. */
+  #endFlyover(skipped: boolean): void {
+    const fly = this.#fly;
+    const round = this.#round;
+    if (!fly || !round) return;
+    this.#fly = undefined;
+    this.#cine = {
+      kind: 'kill',
+      target: {
+        point: { x: this.#cinePose.look.x, y: this.#cinePose.look.y, z: this.#cinePose.look.z },
+      },
+      at: this.#now,
+      seconds: 0,
+    };
+    this.#cineOut = true;
+    this.#deps.logger.log('siege.flyover', {
+      fort: round.fort.id,
+      skipped,
+      seconds: Math.round((this.#now - fly.at) * 10) / 10,
+      of: this.#deps.feel.values.flyoverSeconds,
+    });
+  }
+
   /** Where a kill cam's target is now: a guard's chest, a block, a point. */
   #killPoint(target: KillTarget): THREE.Vector3 {
     const round = this.#round;
@@ -1419,7 +1573,10 @@ export class Siege3DView implements ScreenView {
       if (!touch || touch.id !== event.pointerId) return;
       this.#touch = undefined;
       // A tap: back to the sights early.
-      if (!touch.dragging) this.#skipCine();
+      if (!touch.dragging) {
+        if (this.#fly) this.#endFlyover(true);
+        else this.#skipCine();
+      }
     };
     canvas.addEventListener('pointerup', end);
     canvas.addEventListener('pointercancel', (event) => {
@@ -1430,7 +1587,7 @@ export class Siege3DView implements ScreenView {
   /** Fire: the weapon shoots at the crosshair, if it can. */
   #fire(): void {
     const round = this.#round;
-    if (this.#scout.on || !round) return;
+    if (this.#scout.on || this.#fly || !round) return;
     this.#skipCine();
     const rules = this.#deps.game.data.siege;
     const aim = solveAim(
@@ -1625,6 +1782,7 @@ export class Siege3DView implements ScreenView {
         element.addEventListener('click', () => {
           if (fort.id === this.#fortId || this.#round?.used) return;
           this.#fortId = fort.id;
+          this.#flyNext = true;
           this.#startRound();
         });
         return element;
@@ -1661,6 +1819,7 @@ export class Siege3DView implements ScreenView {
         : 'guard' in cine.target
           ? 'kill'
           : 'collapse';
+    if (this.#fly) this.#element.dataset.camera = 'flyover';
     if (round && this.#now - this.#targetsAt > TARGETS_SECONDS) {
       this.#targetsAt = this.#now;
       this.#element.dataset.targets = JSON.stringify(this.#targetsOnScreen(round));
@@ -1671,7 +1830,7 @@ export class Siege3DView implements ScreenView {
       title !== undefined && this.#now >= title.at && this.#now - title.at < TITLE_SECONDS;
     ui.title.hidden = !showing;
     if (title) ui.title.textContent = title.text;
-    const aiming = phase === 'aim' && ui.card.hidden;
+    const aiming = phase === 'aim' && ui.card.hidden && !this.#fly;
     ui.controls.hidden = !aiming;
     ui.fire.disabled = !round.canThrow || this.#scout.on;
     ui.scout.setAttribute('aria-pressed', String(this.#scout.on));
@@ -1822,4 +1981,25 @@ export class Siege3DView implements ScreenView {
 
 function wonKey(fortId: string): string {
   return `siege.won.${fortId}`;
+}
+
+/** A word drawn on a canvas, outlined so it reads against sky and stone, for a sprite. */
+function textSprite(text: string, color: string): THREE.CanvasTexture {
+  const canvas = document.createElement('canvas');
+  canvas.width = 256;
+  canvas.height = 128;
+  const context = canvas.getContext('2d');
+  if (context) {
+    context.font = '900 92px system-ui, sans-serif';
+    context.textAlign = 'center';
+    context.textBaseline = 'middle';
+    context.lineWidth = 12;
+    context.strokeStyle = 'rgba(0, 0, 0, 0.75)';
+    context.strokeText(text, 128, 66);
+    context.fillStyle = color;
+    context.fillText(text, 128, 66);
+  }
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
 }

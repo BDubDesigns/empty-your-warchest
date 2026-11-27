@@ -17,6 +17,8 @@ export interface FortBlock {
   banner: boolean;
   /** A weak point (a thin post holding up something heavy, a gate): drawn so it stands out. */
   weak: boolean;
+  /** A merlon on top of a wall: the cover a guard on the walkway behind ducks behind. */
+  merlon: boolean;
   /** Its own hit points, in place of its material's. */
   hp?: number;
   /** The piece it's part of (its index in the fort's pieces) and what kind that is. */
@@ -28,6 +30,16 @@ export interface FortBlock {
 export interface FortGuard {
   at: Vec3;
   piece: number;
+  /** How he keeps watch until alerted. */
+  watch: 'stand' | 'patrol' | 'sleep';
+  /** On a walkway: how far along x his feet can go (from, to), walking it or pacing it. */
+  walk?: [number, number];
+  /**
+   * On a walkway: where along x the merlons in front of it are (his cover, alerted), and how far
+   * to one side of one the gap is (where he leans out).
+   */
+  cover?: number[];
+  gap?: number;
 }
 
 /** A fort's pieces as blocks, and its guards by the position (index) they guard. */
@@ -49,7 +61,7 @@ export function buildFort(
       material: string,
       size: Vec3,
       at: Vec3,
-      extra: Partial<Pick<FortBlock, 'banner' | 'weak' | 'hp'>> = {},
+      extra: Partial<Pick<FortBlock, 'banner' | 'weak' | 'hp' | 'merlon'>> = {},
     ) => {
       blocks.push({
         material,
@@ -57,14 +69,16 @@ export function buildFort(
         at,
         banner: extra.banner ?? false,
         weak: extra.weak ?? false,
+        merlon: extra.merlon ?? false,
         ...(extra.hp !== undefined && { hp: extra.hp }),
         piece: index,
         pieceKind: piece.kind,
       });
     };
-    const guard = (position: number | undefined, at: Vec3) => {
+    const guard = (position: number | undefined, at: Vec3, walk?: [number, number]) => {
       if (position === undefined) return;
-      guards[position]?.push({ at, piece: index });
+      const watch = 'watch' in piece ? piece.watch : 'stand';
+      guards[position]?.push({ at, piece: index, watch, ...(walk && { walk }) });
     };
     const [x, z] = piece.at;
     switch (piece.kind) {
@@ -125,8 +139,40 @@ export function buildFort(
       case 'post':
         guard(piece.guard, [x, 0, z]);
         break;
+      case 'walkway': {
+        const length = piece.segments * parts.walkway;
+        for (let segment = 0; segment < piece.segments; segment++) {
+          block(
+            'wood',
+            [parts.walkway, piece.height, parts.walkwayWidth],
+            [x - length / 2 + (segment + 0.5) * parts.walkway, piece.height / 2, z],
+          );
+        }
+        // His feet stay on it, a little in from either end.
+        const end = length / 2 - parts.walkwayWidth / 2;
+        guard(piece.guard, [x, piece.height, z], [x - end, x + end]);
+        break;
+      }
     }
   });
+  // A walkway guard's cover: the merlons on the wall just in front of his walk.
+  for (const guard of guards.flat()) {
+    const walk = guard.walk;
+    if (!walk) continue;
+    const [, , z] = guard.at;
+    guard.cover = blocks
+      .filter(
+        (block) =>
+          block.merlon &&
+          block.at[2] > z &&
+          block.at[2] - z <= parts.walkwayWidth + parts.stone[2] &&
+          block.at[0] >= walk[0] &&
+          block.at[0] <= walk[1],
+      )
+      .map((block) => block.at[0])
+      .sort((a, b) => a - b);
+    guard.gap = parts.stone[0] / 2;
+  }
   return { blocks, guards };
 }
 
@@ -134,7 +180,7 @@ type AddBlock = (
   material: string,
   size: Vec3,
   at: Vec3,
-  extra?: Partial<Pick<FortBlock, 'banner' | 'weak' | 'hp'>>,
+  extra?: Partial<Pick<FortBlock, 'banner' | 'weak' | 'hp' | 'merlon'>>,
 ) => void;
 
 /**
@@ -171,7 +217,7 @@ function wall(
   const topStones = courses % 2 === 0 && wide > 1 ? wide - 1 : wide;
   for (let index = 0; index < topStones; index++) {
     const across = x + (index - (topStones - 1) / 2) * parts.stone[0];
-    block(material, parts.merlon, [across, top + parts.merlon[1] / 2, z]);
+    block(material, parts.merlon, [across, top + parts.merlon[1] / 2, z], { merlon: true });
   }
 }
 

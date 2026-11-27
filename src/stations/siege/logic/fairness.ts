@@ -1,4 +1,10 @@
-import { GameDataError, type GameData, type Siege, type SiegeFort } from '../../../data';
+import {
+  GameDataError,
+  type GameData,
+  type Siege,
+  type SiegeFort,
+  type SiegeGuard,
+} from '../../../data';
 import {
   launchFrom,
   muzzleAt,
@@ -45,8 +51,6 @@ const TILT_HALVINGS = 8;
 const GATES = new Set(['gate', 'cover']);
 /** Pieces that are cover to be broken through: a guard behind them counts as in reach. */
 const BREAKABLE = new Set(['wall', 'gate', 'cover']);
-/** Pieces a shot has to get past: its crenels must be higher than any shot can be there. */
-const BLOCKING = new Set(['wall', 'gate']);
 
 /** Every problem with a fort's fairness, for the startup check and for a fort generator. */
 export function fortProblems(siege: Siege, fort: SiegeFort): FortProblem[] {
@@ -91,11 +95,17 @@ export function fortProblems(siege: Siege, fort: SiegeFort): FortProblem[] {
     return aims;
   };
   /** Whether a spear from `spot` can hit `target` at `point` first (passing nothing else). */
-  const reaches = (spot: Spot, point: Vec3, target: Box, ignore: (box: Box) => boolean) =>
+  const reaches = (
+    spot: Spot,
+    point: Vec3,
+    target: Box,
+    ignore: (box: Box) => boolean,
+    set: Box[] = boxes,
+  ) =>
     speeds.some((speed) =>
       aimsThrough(spot, point, speed).some(
         (aim) =>
-          flightHit(launchFrom(spot, aim, speed, 0, weapon), boxes, radius, gravity, ignore) ===
+          flightHit(launchFrom(spot, aim, speed, 0, weapon), set, radius, gravity, ignore) ===
           target,
       ),
     );
@@ -148,11 +158,14 @@ export function fortProblems(siege: Siege, fort: SiegeFort): FortProblem[] {
       (box) => box.kind === 'guard' && guardPosition(fort, box.index) === positionIndex,
     );
     guards.forEach((guard) => {
-      const points = guardPoints(guard);
+      // Anywhere along his walk will do (he'll be there some time).
       const hittable = (ignore: (box: Box) => boolean) =>
-        position.spots.some(([x, z]) =>
-          points.some((point) => reaches({ x, z }, point, guard, ignore)),
-        );
+        posesOf(guard, fort, POSE_STEP).some((pose) => {
+          const set = boxes.map((box) => (box === guard ? pose : box));
+          return position.spots.some(([x, z]) =>
+            guardPoints(pose).some((point) => reaches({ x, z }, point, pose, ignore, set)),
+          );
+        });
       if (
         !hittable(() => false) &&
         !hittable((box) => box.kind === 'block' && BREAKABLE.has(box.piece))
@@ -176,16 +189,20 @@ export function fortProblems(siege: Siege, fort: SiegeFort): FortProblem[] {
     fort.positions.slice(0, positionIndex).forEach((earlier, earlierIndex) => {
       earlier.spots.forEach(([x, z], spotIndex) => {
         const spot = { x, z };
+        // Nowhere along his walk.
         const exposed = guards.filter((guard) =>
-          [() => false, gatesDown].some((ignore) =>
-            guardPoints(guard).some((point) => {
-              const muzzle = muzzleAt(spot, straightAt(spot, point, weapon.pivotHeight), weapon);
-              return (
-                lineHit(muzzle, point, boxes, 0, ignore) === guard ||
-                reaches(spot, point, guard, ignore)
-              );
-            }),
-          ),
+          posesOf(guard, fort, POSE_STEP).some((pose) => {
+            const set = boxes.map((box) => (box === guard ? pose : box));
+            return [() => false, gatesDown].some((ignore) =>
+              guardPoints(pose).some((point) => {
+                const muzzle = muzzleAt(spot, straightAt(spot, point, weapon.pivotHeight), weapon);
+                return (
+                  lineHit(muzzle, point, set, 0, ignore) === pose ||
+                  reaches(spot, point, pose, ignore, set)
+                );
+              }),
+            );
+          }),
         );
         for (const guard of exposed) {
           problems.push({
@@ -197,36 +214,6 @@ export function fortProblems(siege: Siege, fort: SiegeFort): FortProblem[] {
     });
   });
 
-  // Walls block: from every spot, no shot clears the nearest wall in front of it.
-  const [, stoneHeight] = siege.parts.stone;
-  const fronts = fort.pieces.flatMap((piece) => {
-    if (!BLOCKING.has(piece.kind)) return [];
-    const top =
-      piece.kind === 'wall'
-        ? piece.courses * stoneHeight
-        : piece.kind === 'gate'
-          ? piece.height
-          : 0;
-    const depth = piece.kind === 'gate' ? siege.parts.gateDepth : siege.parts.stone[2];
-    return [{ z: piece.at[1] + depth / 2, top }];
-  });
-  fort.positions.forEach((position, positionIndex) => {
-    position.spots.forEach(([, z], spotIndex) => {
-      const ahead = fronts.filter((front) => front.z < z);
-      const nearest = Math.max(...ahead.map((front) => front.z));
-      ahead
-        .filter((front) => front.z >= nearest - 0.5)
-        .forEach((front) => {
-          const highest = highestAt(z - front.z, weapon, speeds, gravity) + radius;
-          if (highest >= front.top) {
-            problems.push({
-              path: ['siege', 'forts', fort.id, 'positions', positionIndex, 'spots', spotIndex],
-              message: `A shot can clear the wall in front (${highest.toFixed(2)} m over a ${front.top.toFixed(2)} m wall)`,
-            });
-          }
-        });
-    });
-  });
   return problems;
 }
 
@@ -263,6 +250,30 @@ function fortBoxes(siege: Siege, fort: SiegeFort): Box[] {
     }),
   );
   return [...blocks, ...guards];
+}
+
+/** How far apart (m) the places along a walkway are that a walking guard is checked at. */
+const POSE_STEP = 0.5;
+
+/** A guard where he stands, or, on a walkway, at every `step` along his walk. */
+function posesOf(guard: Box, fort: SiegeFort, step: number): Box[] {
+  const walk = fortGuard(fort, guard.index)?.walk;
+  if (!walk) return [guard];
+  const middle = (guard.min.x + guard.max.x) / 2;
+  const count = Math.max(Math.round((walk[1] - walk[0]) / step), 1);
+  return Array.from({ length: count + 1 }, (_, index) => {
+    const shift = walk[0] + ((walk[1] - walk[0]) * index) / count - middle;
+    return {
+      ...guard,
+      min: { ...guard.min, x: guard.min.x + shift },
+      max: { ...guard.max, x: guard.max.x + shift },
+    };
+  });
+}
+
+/** Guard `index` (counting through every position's guards in order). */
+function fortGuard(fort: SiegeFort, index: number): SiegeGuard | undefined {
+  return fort.positions.flatMap((position) => position.guards)[index];
 }
 
 /** Points up the front of a guard (legs, chest, head) that shots and sight lines are tried at. */
@@ -302,23 +313,6 @@ function heightAt(launch: Launch, point: Vec3, gravity: number): number {
   const out = Math.hypot(point.x - launch.position.x, point.z - launch.position.z);
   const t = out / across;
   return launch.position.y + launch.velocity.y * t - 0.5 * gravity * t * t;
-}
-
-/** The highest any shot can be `distance` metres out in front of the weapon. */
-function highestAt(
-  distance: number,
-  weapon: ReturnType<typeof siegeWeapon>,
-  speeds: number[],
-  gravity: number,
-): number {
-  let best = -Infinity;
-  for (const speed of speeds) {
-    for (let degrees = weapon.tilt.min; degrees <= weapon.tilt.max; degrees += TILT_STEP / 2) {
-      const launch = launchFrom({ x: 0, z: 0 }, { yaw: 0, tilt: degrees * DEG }, speed, 0, weapon);
-      best = Math.max(best, heightAt(launch, { x: 0, y: 0, z: -distance }, gravity));
-    }
-  }
-  return best;
 }
 
 /** The first box a flight runs into (a spear `radius` thick), or undefined if it hits nothing. */
