@@ -156,9 +156,12 @@ export interface CastleLayout {
   parts: CastlePart[];
   anchors: {
     captainWindows: CaptainWindow[];
-    spearRack: { at: Vec3; turn: number };
+    /** Where the spear rack may stand: each a prop, its foot and turn (radians). */
+    spearRacks: { id: string; at: Vec3; turn: number }[];
     bell: { at: Vec3; turn: number };
     guardPaths: { id: string; loop: boolean; points: WayPoint[] }[];
+    /** A guard's place on a tower's top: where his feet are, and the tower. */
+    lookouts: { id: string; tower: string; at: Vec3 }[];
   };
 }
 
@@ -510,8 +513,20 @@ export function layoutCastle(castle: Castle): CastleLayout {
       out: sideFrame(anchor.side).out,
     };
   });
-  const rack = castle.props.find((prop) => prop.id === castle.anchors.spearRack);
-  if (!rack) throw new Error(`Unknown prop "${castle.anchors.spearRack}"`);
+  const spearRacks = castle.anchors.spearRacks.map((id) => {
+    const rack = castle.props.find((prop) => prop.id === id);
+    if (!rack) throw new Error(`Unknown prop "${id}"`);
+    return { id, at: [rack.at[0], 0, rack.at[1]] as Vec3, turn: rack.turn * DEG };
+  });
+  const lookouts = castle.anchors.lookouts.map((lookout) => {
+    const tower = castle.towers.find((candidate) => candidate.id === lookout.tower);
+    if (!tower) throw new Error(`Unknown tower "${lookout.tower}"`);
+    return {
+      id: lookout.id,
+      tower: tower.id,
+      at: [tower.at[0] + lookout.at[0], tower.height, tower.at[1] + lookout.at[1]] as Vec3,
+    };
+  });
 
   const guardPaths = castle.anchors.guardPaths.map((path) => {
     const points: WayPoint[] = [];
@@ -548,9 +563,10 @@ export function layoutCastle(castle: Castle): CastleLayout {
     parts: layParts(castle, walls, buildings),
     anchors: {
       captainWindows,
-      spearRack: { at: [rack.at[0], 0, rack.at[1]], turn: rack.turn * DEG },
+      spearRacks,
       bell: { at: [castle.bell.at[0], 0, castle.bell.at[1]], turn: castle.bell.turn * DEG },
       guardPaths,
+      lookouts,
     },
   };
 }
@@ -996,9 +1012,36 @@ export function castleProblems(castle: Castle): CastleProblem[] {
       );
     }
   });
-  if (!castle.props.some((prop) => prop.id === castle.anchors.spearRack)) {
-    issue(['anchors', 'spearRack'], `Unknown prop "${castle.anchors.spearRack}"`);
-  }
+  castle.anchors.spearRacks.forEach((rack, index) => {
+    if (!castle.props.some((prop) => prop.id === rack)) {
+      issue(['anchors', 'spearRacks', index], `Unknown prop "${rack}"`);
+    }
+  });
+  castle.anchors.lookouts.forEach((lookout, index) => {
+    unique(['anchors', 'lookouts', index, 'id'], lookout.id);
+    const tower = towers.get(lookout.tower);
+    if (!tower) {
+      issue(['anchors', 'lookouts', index, 'tower'], `Unknown tower "${lookout.tower}"`);
+      return;
+    }
+    if (tower.top !== 'battlements') {
+      issue(
+        ['anchors', 'lookouts', index, 'tower'],
+        'A lookout stands on a tower with battlements',
+      );
+    }
+    // Inside its parapet (the corbels carry the parapet out past the tower's own face).
+    const inner = tower.size + castle.details.corbel.out - castle.wall.parapet.thickness;
+    const [dx, dz] = lookout.at;
+    const inside =
+      tower.shape === 'round'
+        ? Math.hypot(dx, dz) < inner
+        : Math.abs(dx) < inner && Math.abs(dz) < (tower.depth ?? tower.size) + inner - tower.size;
+    if (!inside) issue(['anchors', 'lookouts', index, 'at'], 'Stand inside the tower’s parapet');
+  });
+  castle.anchors.guardPaths.forEach((guardPath, index) => {
+    unique(['anchors', 'guardPaths', index, 'id'], guardPath.id);
+  });
   castle.anchors.guardPaths.forEach((guardPath, index) => {
     guardPath.points.forEach((point, pointIndex) => {
       const here = ['anchors', 'guardPaths', index, 'points', pointIndex];
@@ -1117,6 +1160,9 @@ export function castleProblems(castle: Castle): CastleProblem[] {
   castle.props.forEach((prop, index) => {
     if (!(prop.piece in castle.pieces))
       issue(['props', index, 'piece'], `Unknown piece "${prop.piece}"`);
+    if (!(prop.piece in castle.boxes)) {
+      issue(['props', index, 'piece'], `Piece "${prop.piece}" needs a box (what spears hit)`);
+    }
     if (!inCourtyard(prop.at) || inBuilding(prop.at, 0.5)) {
       issue(
         ['props', index, 'at'],

@@ -1798,8 +1798,11 @@ export const castleSchema = z.object({
     /** How far (m) the roof reaches past the walls, all round. */
     overhang: nonNegative,
   }),
-  /** The tile roof on a round tower: stretched to the tower, reaching `overhang` m past it. */
-  towerRoof: z.object({ piece: castlePieceSchema, overhang: nonNegative }),
+  /**
+   * The tile roof on a round tower: stretched to the tower, reaching `overhang` m past it, its
+   * point `rise` times its width above its foot (the kit piece's own shape, for the siege's body).
+   */
+  towerRoof: z.object({ piece: castlePieceSchema, overhang: nonNegative, rise: positive }),
   /** A stone quoin at each corner of a building, this wide. */
   quoin: positive,
   /**
@@ -1822,6 +1825,11 @@ export const castleSchema = z.object({
   buildings: z.array(castleBuildingSchema).min(1),
   /** Kit pieces that stand about: what each prop id draws. */
   pieces: z.record(id, z.array(castlePieceSchema).min(1)),
+  /**
+   * The box each prop's piece fills (m: its size, and its middle from where the prop stands, before
+   * the prop's turn), from the kit piece's bounds: what the siege's spears hit.
+   */
+  boxes: z.record(id, z.object({ size: castleVec3, middle: castleVec3 })),
   props: z.array(castlePropSchema),
   /** The alarm bell: a timber frame `size` (width, height), its bell `bell` m across. */
   bell: z.object({
@@ -1836,7 +1844,9 @@ export const castleSchema = z.object({
   stairRise: positive,
   /**
    * What the siege plays with: the windows the captain shows at (a building's side, storey and
-   * module, counted from 0 as its facade is), the spear rack (a prop), and the guards' ways round.
+   * module, counted from 0 as its facade is), the places the spear rack may stand (props; a siege
+   * picks one), the guards' ways round, and their lookouts on the towers (standing `at` m from a
+   * tower's middle, on its top).
    */
   anchors: z.object({
     captainWindows: z
@@ -1849,10 +1859,11 @@ export const castleSchema = z.object({
         }),
       )
       .min(1),
-    spearRack: id,
+    spearRacks: z.array(id).min(1),
     guardPaths: z.array(
       z.object({ id, loop: z.boolean(), points: z.array(castleWaypointSchema).min(2) }),
     ),
+    lookouts: z.array(z.object({ id, tower: id, at: castlePoint })).default([]),
   }),
   vantages: z.array(castleVantageSchema).min(1),
   /** The castle's own stonework (drawn in code) in the kit's materials. */
