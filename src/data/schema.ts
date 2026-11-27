@@ -950,8 +950,9 @@ const brewingSchema = z.object({
   /**
    * Saying which way a brew is off (OKLab distances). Lightness or colour (hue and chroma) off by
    * no more than `spotOn` is spot on, and past `much` it's "much too light" or "too red" rather
-   * than "a shade" or "a touch". The map badges the pot "too light" or "too dark" when lightness
-   * is at least `lightShare` of the error (squared, as distances add) and isn't spot on.
+   * than "a shade" or "a touch". The map badges a pot short of 3 stars "too light" or "too dark"
+   * when lightness is at least `lightShare` of the error (squared, as distances add) and isn't
+   * spot on.
    */
   advice: z.object({ spotOn: positive, much: positive, lightShare: fraction }),
   /**

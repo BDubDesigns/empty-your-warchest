@@ -437,9 +437,10 @@ export class Brewing3DView implements ScreenView {
     }
     // The pot: a dot ringed in the colour of the stars it would bottle now (true distance,
     // lightness included), and once stirred, those stars beside it and, when lightness is most of
-    // the miss, which way: a dot dead centre can be a shade too light.
+    // a miss that costs a star, which way: a dot dead centre can be a shade too light.
     const mixed = round.mixed;
-    const off = round.revealed ? round.off : undefined;
+    // Only once it costs a star: nudging a 3-star pot is how Brandon's water drop lost one.
+    const off = round.revealed && round.ring < 3 ? round.off : undefined;
     if (mixed && round.unmixed < 0.5) {
       const dot = at(mixed);
       const band = round.revealed ? (BAND_COLORS[round.ring] ?? '#fff') : '#fff';

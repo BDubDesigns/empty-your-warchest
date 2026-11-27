@@ -51,9 +51,9 @@ export const brewing = {
   // `margin` past the outermost.
   map: { margin: 0.03 },
   // Which way a brew is off: within 0.012 (under the 0.02 the eye notices) is spot on, past 0.04
-  // it's "much too light" / "too red" rather than "a shade" / "a touch". The map badges the pot
-  // too light or too dark once lightness is half the error or more (Brandon's water drop: all of
-  // it was lightness, and the dot sat dead centre).
+  // it's "much too light" / "too red" rather than "a shade" / "a touch". The map badges a pot short
+  // of 3 stars too light or too dark once lightness is half the error or more (Brandon's water
+  // drop: all of it was lightness, and the dot sat dead centre).
   advice: { spotOn: 0.012, much: 0.04, lightShare: 0.5 },
   // Shelf icons drawn 128 px (shown about 52 px across): 6 px of black round the item's shape,
   // then 6 px of white, about 2.5 px each on screen.

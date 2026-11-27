@@ -120,13 +120,21 @@ describe('which way a brew is off', () => {
   });
 
   it('reads Brandon’s brew: dead centre on the map, but a shade too light after the water', () => {
-    // His pot after woad, red cap, woad, water (0.038 from the target, 2 stars): the colour
-    // right, the lightness not.
-    const { round } = brew(5);
-    const pot = { L: target.L + 0.037, a: target.a - 0.001, b: target.b + 0.0005 };
-    const off = offBy(rules, round.shelf, pot, target);
-    expect(starsFor(rules, labDistance(pot, target))).toBe(2);
+    // His brew (seed 495627925): woad, red cap, woad was 3 stars; water made it 2, with the
+    // colour still dead centre on the map. Only the lightness was off.
+    const { round } = brew(495627925);
+    expect(labDistance(round.target, target)).toBeLessThan(0.001);
+    for (const id of ['woad', 'red_cap', 'woad']) round.add(id);
+    // 3 stars, and a shade too dark (the map only badges it once it costs a star).
+    expect(round.ring).toBe(3);
+    expect(round.off).toMatchObject({ lightWay: 'dark', lightBadge: true });
+    round.add(WATER);
+    const pot = round.mixed;
+    const off = round.off;
+    if (!pot || !off) throw new Error('Nothing in the pot');
+    expect(starsFor(rules, labDistance(pot, round.target))).toBe(2);
     expect(off).toMatchObject({ lightWay: 'light', lightMuch: false, tint: undefined });
+    expect(off.colour).toBeLessThan(spotOn);
     expect(off.lightBadge).toBe(true);
     expect(adviceText(off, round.shelf, name)).toBe(
       'Colour spot on, a shade too light. Ash darkens, water lightens.',
