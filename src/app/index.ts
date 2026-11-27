@@ -60,6 +60,7 @@ const brewingView = () => import('../stations/brewing/three/brewing3dView');
 const siegeView = () => import('../stations/siege/three/siege3dView');
 const runnerView = () => import('../runner/view');
 const benchScreen = () => import('../bench/view/benchScreen');
+const castlePreview = () => import('../castle/view/castlePreview');
 
 /** Boots the game core, the debug menu, and the camp. */
 export async function startApp(): Promise<void> {
@@ -97,6 +98,9 @@ export async function startApp(): Promise<void> {
       buildLabel: __BUILD_LABEL__,
       stressTest: () => {
         void openStressTest();
+      },
+      castlePreview: () => {
+        void openCastlePreview();
       },
     });
   } catch (error) {
@@ -354,6 +358,27 @@ export async function startApp(): Promise<void> {
               buildLabel: __BUILD_LABEL__,
               ...(quick ? { quick } : {}),
             });
+          });
+        } finally {
+          if (document.body.dataset.view === 'camp') preloader.resume();
+          resolve();
+        }
+      })();
+    });
+  }
+
+  /**
+   * Debug → Castle preview: over everything like the stress test, its code and models loaded only
+   * now. Resolves once it's closed.
+   */
+  function openCastlePreview(): Promise<void> {
+    preloader.pause();
+    return new Promise((resolve) => {
+      run(async () => {
+        try {
+          await switcher.aside(async () => {
+            const { openCastlePreview: open } = await castlePreview();
+            await open(byId('app'), { castle: game.data.castle, logger, graphics });
           });
         } finally {
           if (document.body.dataset.view === 'camp') preloader.resume();

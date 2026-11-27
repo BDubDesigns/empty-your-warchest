@@ -1,0 +1,79 @@
+/* Debug → Castle preview: over everything, the debug menu included, while it's open. */
+
+.castle-preview {
+  position: fixed;
+  inset: 0;
+  z-index: 11;
+  background: #111;
+  color: var(--fg);
+  font-size: 15px;
+}
+
+.castle-canvas {
+  position: absolute;
+  inset: 0;
+  display: block;
+  touch-action: none;
+}
+
+.castle-top,
+.castle-bottom {
+  position: absolute;
+  left: calc(var(--safe-left) + 8px);
+  right: calc(var(--safe-right) + 8px);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: rgb(0 0 0 / 0.55);
+}
+
+.castle-top {
+  top: calc(var(--safe-top) + 8px);
+  justify-content: space-between;
+}
+
+.castle-bottom {
+  bottom: calc(var(--safe-bottom) + 8px);
+  justify-content: center;
+}
+
+.castle-top h1 {
+  margin: 0;
+  font-size: 17px;
+}
+
+.castle-group {
+  display: flex;
+  gap: 6px;
+}
+
+.castle-preview button {
+  min-height: 40px;
+  padding: 0 10px;
+  border: 1px solid #4a5045;
+  border-radius: 8px;
+  background: #262b24;
+  color: var(--fg);
+  font: inherit;
+  font-size: 14px;
+  touch-action: manipulation;
+}
+
+.castle-preview button[aria-pressed='true'] {
+  border-color: var(--accent);
+  background: #3a2d1e;
+  color: #f0cd5c;
+}
+
+.castle-stats {
+  flex-basis: 100%;
+  margin: 0;
+  font:
+    600 12px system-ui,
+    sans-serif;
+  font-variant-numeric: tabular-nums;
+  color: #d8d0b8;
+}
