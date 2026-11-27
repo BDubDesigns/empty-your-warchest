@@ -158,7 +158,7 @@ export const castle = {
   vantages: [
     { id: 'hill', name: 'Hill', at: [-28, 24, 54], look: [0, 2, -3], fov: 50 },
     { id: 'low', name: 'Low ground', at: [9, 1.7, 40], look: [-2, 5, 8], fov: 55 },
-    { id: 'tower', name: 'Siege tower', at: [40, 16, 4], look: [-4, 2, -6], fov: 50 },
+    { id: 'tower', name: 'Siege tower', at: [40, 24, 8], look: [0, 1, -4], fov: 50 },
   ],
   skins: {
     wall: { material: 'MI_Brick', tile: 3 },
