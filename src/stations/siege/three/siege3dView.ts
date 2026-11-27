@@ -24,6 +24,7 @@ import {
   aimedVolley,
   clampAim,
   siegeWeapon,
+  solveAim,
   spearsShot,
   startAim,
   volleySize,
@@ -86,7 +87,7 @@ const SNAP_SECONDS = 0.18;
 /** Real seconds the position's name shows when the ballista rolls on. */
 const TITLE_SECONDS = 2.4;
 /**
- * The camera's blends (0 to 1) at which the mantlet and crosshair hide (looking elsewhere), and the
+ * The camera's blends (0 to 1) at which the sight on screen hides (looking elsewhere), and the
  * ballista shows (seen from outside, not from its own sights).
  */
 const SIGHT_SHOWS_UNDER = 0.15;
@@ -111,7 +112,6 @@ const COLORS = {
   stone: 0x9b978d,
   wood: 0xc39a66,
   dust: 0xcdbb9c,
-  mantlet: 0x7a5232,
   ghost: 0x7fe8ff,
   spot: 0xffffff,
   spotOn: 0xf0cd5c,
@@ -163,9 +163,9 @@ interface Touch {
 }
 
 /**
- * The siege in 3D, seen down the ballista's sights through the slit in a wooden mantlet: the
- * crosshair in the middle of the screen is where the bolt points, and a drag turns the view and
- * the weapon together. Fire shoots, Aimed or Barrage; the camera rides the middle spear, and a kill
+ * The siege in 3D, seen down the ballista's sights: the sight in the middle of the screen is what
+ * a shot hits (Fire allows for the drop), and a drag turns the view and the weapon together. Fire
+ * shoots, Aimed or Barrage, with a kick; the camera rides the middle spear, and a kill
  * (or a collapse) gets a slow-motion look. The last shot's real path can stay as a solid line, so
  * you learn the drop. Scout looks down on the whole fort. Tap a spot to move. Win a position and it
  * rolls on to the next. The rules (SiegeRound, a Rapier physics world) decide everything; this
@@ -197,8 +197,8 @@ export class Siege3DView implements ScreenView {
   readonly #spearMaterials: { shaft: THREE.Material; tip: THREE.Material };
   readonly #ballista: BallistaLook;
   readonly #ghost: THREE.InstancedMesh;
-  /** The wooden shield framing the view down the sights; it rides with the camera. */
-  readonly #mantlet: THREE.Group;
+  /** The kick of the last shot, from 1 (just shot) down to 0 (settled). */
+  #kick = 0;
   readonly #raycaster = new THREE.Raycaster();
   readonly #puffTexture: THREE.Texture;
   /** Geometry and materials every round uses, which freeing a round's meshes must leave alone. */
@@ -303,8 +303,6 @@ export class Siege3DView implements ScreenView {
     }
     const weapon = siegeWeapon(rules);
     this.#ballista = buildBallista(weapon, () => this.#spearMesh());
-    this.#mantlet = this.#buildMantlet();
-    this.#camera.add(this.#mantlet);
     // The last shot's path: a solid tube of short segments, bright enough for daylight.
     const segment = new THREE.CylinderGeometry(0.5, 0.5, 1, 8, 1, true);
     segment.rotateX(Math.PI / 2);
@@ -529,8 +527,6 @@ export class Siege3DView implements ScreenView {
       this.#spotGroup,
       this.#ballista.root,
       this.#ghost,
-      // The camera carries the mantlet, so it's in the scene.
-      this.#camera,
     );
   }
 
@@ -661,7 +657,10 @@ export class Siege3DView implements ScreenView {
     switch (event.type) {
       case 'throw': {
         this.#deps.haptics.pulse(event.mode === 'barrage' ? feel.buzzBarrageMs : feel.buzzThrowMs);
-        this.#play('release', 0.5, event.mode === 'barrage' ? -300 : 0);
+        // The string snaps and the frame thumps: a kick you feel.
+        this.#play('release', 0.8, event.mode === 'barrage' ? -300 : 0);
+        this.#play('wind', 0.6, 700);
+        this.#kick = 1;
         this.#shotAt = this.#now;
         // The trail follows this shot's middle spear (of its first volley) as it flies, and so
         // does the camera.
@@ -1052,7 +1051,7 @@ export class Siege3DView implements ScreenView {
 
   /**
    * The aim, down the sights: the crosshair sits in the middle of the screen, where the bolt
-   * points, as wide as the shot's spread (a barrage's far wider). The mantlet frames it. The last
+   * points, `reticleSize` across, or as wide as a barrage's spread if that's wider. The last
    * shot's path shows if it's turned on.
    */
   #drawAim(): void {
@@ -1062,51 +1061,18 @@ export class Siege3DView implements ScreenView {
     // Not while riding the spear that's drawing it: from just behind, it'd fill the screen.
     this.#ghost.visible = this.#deps.ghost.value === 'on' && this.#cine?.kind !== 'bolt';
     const sighting = Math.max(this.#cineBlend, this.#scout.blend) < SIGHT_SHOWS_UNDER;
-    this.#mantlet.visible = sighting;
     const showing =
       round !== undefined && round.phase === 'aim' && ui.card.hidden && !this.#scout.on && sighting;
     ui.crosshair.hidden = !showing;
     if (!showing) return;
-    const spread = (this.#mode === 'barrage' ? feel.barrageSpread : feel.aimedSpread) * DEG;
     const half = Math.tan((this.#camera.fov * DEG) / 2);
-    const radius = Math.max(
-      (Math.tan(spread) / half) * (this.#element.clientHeight / 2),
-      CROSSHAIR_PX / 2,
-    );
+    const spread =
+      this.#mode === 'barrage'
+        ? (Math.tan(feel.barrageSpread * DEG) / half) * (this.#element.clientHeight / 2)
+        : 0;
+    const radius = Math.max(spread, feel.reticleSize / 2, CROSSHAIR_PX / 2);
     ui.crosshair.style.width = ui.crosshair.style.height = `${String(radius * 2)}px`;
     ui.crosshair.dataset.mode = this.#mode;
-  }
-
-  /**
-   * The mantlet: a wooden shield of planks with a sight slit through the middle, just in front of
-   * the eye, sized from the data. It frames the view; the slit leaves the crosshair clear.
-   */
-  #buildMantlet(): THREE.Group {
-    const { distance, width, height, thickness, slitWidth, slitHeight } =
-      this.#deps.game.data.siege.mantlet;
-    const group = new THREE.Group();
-    const material = new THREE.MeshBasicMaterial({
-      map: this.#textures.wood[0] ?? null,
-      color: COLORS.mantlet,
-    });
-    const board = (w: number, h: number, x: number, y: number) => {
-      const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, thickness), material);
-      mesh.position.set(x, y, -distance);
-      group.add(mesh);
-    };
-    const above = (height - slitHeight) / 2;
-    const beside = (width - slitWidth) / 2;
-    // Above and below the slit, full width; either side of it, the slit's height.
-    board(width, above, 0, slitHeight / 2 + above / 2);
-    board(width, above, 0, -slitHeight / 2 - above / 2);
-    board(beside, slitHeight, -slitWidth / 2 - beside / 2, 0);
-    board(beside, slitHeight, slitWidth / 2 + beside / 2, 0);
-    // Drawn over everything, as it's nearer than anything else.
-    group.traverse((child) => {
-      child.renderOrder = 10;
-    });
-    material.depthTest = false;
-    return group;
   }
 
   /**
@@ -1227,9 +1193,15 @@ export class Siege3DView implements ScreenView {
         ),
       );
     }
+    // A shot's kick: the view jolts back and up, and settles.
+    this.#kick = Math.max(0, this.#kick - dt / Math.max(feel.kickSeconds, 0.01));
+    const kick = this.#kick * this.#kick;
+    this.#camera.position.addScaledVector(forward, -feel.kickBack * kick);
     this.#camera.lookAt(look);
-    if (this.#camera.fov !== feel.sightFov) {
+    this.#camera.rotateX(feel.kickTilt * DEG * kick);
+    if (this.#camera.fov !== feel.sightFov || this.#camera.near !== feel.sightNear) {
       this.#camera.fov = feel.sightFov;
+      this.#camera.near = feel.sightNear;
       this.#camera.updateProjectionMatrix();
     }
   }
@@ -1457,9 +1429,53 @@ export class Siege3DView implements ScreenView {
 
   /** Fire: the weapon shoots at the crosshair, if it can. */
   #fire(): void {
-    if (this.#scout.on) return;
+    const round = this.#round;
+    if (this.#scout.on || !round) return;
     this.#skipCine();
-    if (this.#round?.throw(this.#mode, this.#aim)) this.#ui.picker.hidden = true;
+    const rules = this.#deps.game.data.siege;
+    const aim = solveAim(
+      round.ballista(),
+      this.#sightTarget(),
+      siegeWeapon(rules),
+      rules.physics.gravity,
+    );
+    if (round.throw(this.#mode, aim)) this.#ui.picker.hidden = true;
+  }
+
+  /**
+   * What the sight is on: the first block, guard or patch of ground along the view down the
+   * sights, or `aimFallback` metres out along it if there's nothing.
+   */
+  #sightTarget(): Vec3 {
+    const feel = this.#deps.feel.values;
+    const weapon = siegeWeapon(this.#deps.game.data.siege);
+    const at = this.#lastBallista;
+    const way = aimDirection(this.#aim);
+    const forward = new THREE.Vector3(way.x, way.y, way.z);
+    const eye = new THREE.Vector3(at.x, weapon.pivotHeight, at.z).addScaledVector(
+      forward,
+      -feel.sightBack,
+    );
+    this.#raycaster.set(eye, forward);
+    this.#raycaster.far = feel.aimFallback;
+    const hits = this.#raycaster.intersectObjects(this.#fortGroup.children, true);
+    this.#raycaster.far = Infinity;
+    const hit = hits.find((entry) => {
+      for (let node: THREE.Object3D | null = entry.object; node; node = node.parent) {
+        if (!node.visible) return false;
+      }
+      return true;
+    });
+    const ground = this.#raycaster.ray.intersectPlane(
+      new THREE.Plane(new THREE.Vector3(0, 1, 0), 0),
+      new THREE.Vector3(),
+    );
+    const point =
+      hit?.point ??
+      (ground && ground.distanceTo(eye) < feel.aimFallback
+        ? ground
+        : eye.clone().addScaledVector(forward, feel.aimFallback));
+    return { x: point.x, y: point.y, z: point.z };
   }
 
   /** Scout: up over the fort to look down on it, or back down to the weapon. */
@@ -1546,6 +1562,10 @@ export class Siege3DView implements ScreenView {
     controls.replaceChildren(spots, shoot);
     // The crosshair, over the scene where the weapon's aimed.
     const crosshair = el('div', 'sg-crosshair');
+    crosshair.innerHTML =
+      '<svg viewBox="0 0 100 100"><circle class="sg-ring" cx="50" cy="50" r="46"/>' +
+      '<path class="sg-ticks" d="M50 4V36M50 64V96M4 50H36M64 50H96M50 14h-6M50 14h6M50 86h-6M50 86h6M14 50v-6M14 50v6M86 50v-6M86 50v6"/>' +
+      '<circle class="sg-dot" cx="50" cy="50" r="2.2"/></svg>';
     crosshair.setAttribute('aria-hidden', 'true');
     crosshair.hidden = true;
     const card = el('div', 'sg-card');

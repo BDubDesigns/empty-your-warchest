@@ -83,6 +83,42 @@ export function clampAim(aim: Aim, weapon: SiegeWeapon, feel: Pick<SiegeFeel, 'm
   };
 }
 
+/** Halvings of the tilt range that `solveAim` narrows its tilt down by (a hair's breadth). */
+const SOLVE_HALVINGS = 30;
+
+/**
+ * The aim that sends a spear from the weapon at `spot` (at `speed`, the weapon's own by default)
+ * through `point`, allowing for the drop: turned straight at it, and tilted so it comes down on
+ * it. Out of the weapon's tilt range, the nearest tilt it has.
+ */
+export function solveAim(
+  spot: Spot,
+  point: Vec3,
+  weapon: SiegeWeapon,
+  gravity: number,
+  speed = weapon.speed,
+): Aim {
+  const yaw = Math.atan2(point.x - spot.x, -(point.z - spot.z));
+  // How far over (+) or under (-) the point the spear passes, at a tilt.
+  const miss = (tilt: number) => {
+    const launch = launchFrom(spot, { yaw, tilt }, speed, 0, weapon);
+    const across = Math.hypot(launch.velocity.x, launch.velocity.z);
+    const out = Math.hypot(point.x - launch.position.x, point.z - launch.position.z);
+    const t = out / across;
+    return launch.position.y + launch.velocity.y * t - 0.5 * gravity * t * t - point.y;
+  };
+  let low = weapon.tilt.min * DEG;
+  let high = weapon.tilt.max * DEG;
+  if (miss(low) >= 0) return { yaw, tilt: low };
+  if (miss(high) <= 0) return { yaw, tilt: high };
+  for (let half = 0; half < SOLVE_HALVINGS; half++) {
+    const middle = (low + high) / 2;
+    if (miss(middle) < 0) low = middle;
+    else high = middle;
+  }
+  return { yaw, tilt: (low + high) / 2 };
+}
+
 /** The bolt's direction for an aim (a unit vector). */
 export function aimDirection(aim: Aim): Vec3 {
   return {

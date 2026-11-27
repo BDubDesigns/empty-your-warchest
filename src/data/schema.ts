@@ -967,6 +967,16 @@ export const siegeFeelSchema = z.object({
   lookTiltPerPx: positive,
   maxAim: z.number().min(0).max(90),
   /**
+   * Fire aims the shot at whatever is under the crosshair (or `aimFallback` metres out, if
+   * nothing is), allowing for the drop: an aimed shot lands its middle spear right there.
+   */
+  aimFallback: positive,
+  /**
+   * The sight on screen: a ring `reticleSize` pixels across with ticks in to the middle (a
+   * barrage's ring is as wide as its spread, if wider).
+   */
+  reticleSize: positive,
+  /**
    * The two volleys. Aimed: tight (each spear strays up to `aimedSpread` degrees sideways,
    * `aimedTiltSpread` up or down, and `aimedSpeedStray` of its speed, at random). Barrage: three
    * times the spears, in waves `barrageStagger` seconds apart, strewn far wider. Within a wave the
@@ -1002,6 +1012,15 @@ export const siegeFeelSchema = z.object({
    */
   sightFov: z.number().min(10).max(100),
   sightBack: nonNegative,
+  /** Nothing nearer the eye than this is drawn (m): a spear or a stone lying at its feet. */
+  sightNear: positive,
+  /**
+   * The kick of a shot: the view jolts back `kickBack` metres and up `kickTilt` degrees, and
+   * settles over `kickSeconds`.
+   */
+  kickBack: nonNegative,
+  kickTilt: nonNegative,
+  kickSeconds: positive,
   /** How far short of a wall a camera looking at something (a kill, a collapse) stops (m). */
   cameraClearance: nonNegative,
   /**
@@ -1123,20 +1142,6 @@ const siegeShape = z.object({
     topple: nonNegative,
   }),
   parts: siegePartsSchema,
-  /**
-   * The wooden shield (a mantlet) just in front of the sights, framing the view: `width` by
-   * `height` of planks `thickness` thick, `distance` in front of the eye, with a sight slit
-   * `slitWidth` by `slitHeight` through its middle (metres). Only how it's drawn: it stops no
-   * spear.
-   */
-  mantlet: z.object({
-    distance: positive,
-    width: positive,
-    height: positive,
-    thickness: positive,
-    slitWidth: positive,
-    slitHeight: positive,
-  }),
   physics: z.object({
     /** Seconds per physics step, whatever the frame rate. */
     timestep: positive,

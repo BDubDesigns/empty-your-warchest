@@ -81,15 +81,15 @@ export const siege = {
     {
       // An aimed volley of 5 at Command 1, one more every 5 levels; a barrage is three times that.
       // A fire pit round (6 to 18 spears) is a volley or three. Fast and flat: a few degrees of
-      // tilt either way is all it has. At 40 m/s a spear drops about 1.1 m over the 19 m to the
-      // first wall, so you aim above what you want to hit.
+      // tilt either way is all it has. At 90 m/s a spear drops about 0.2 m over the 19 m to the
+      // first wall, and Fire allows for that: aimed, it hits what the crosshair is on.
       id: 'ballista',
       name: 'Ballista',
       skill: 'command',
       aimed: { start: 5, everyLevels: 5, add: 1 },
       barrageTimes: 3,
-      speed: 40,
-      tilt: { min: -3, max: 9, start: 3 },
+      speed: 90,
+      tilt: { min: -3, max: 5, start: 1 },
       pivotHeight: 1.2,
       muzzle: 1,
       spacing: 0.08,
@@ -119,15 +119,6 @@ export const siege = {
     keepPostHp: 1000,
     bannerHp: 100000,
   },
-  // Just in front of the sights, so the view is through its slit; the slit takes up most of it.
-  mantlet: {
-    distance: 0.45,
-    width: 1.2,
-    height: 0.9,
-    thickness: 0.05,
-    slitWidth: 0.19,
-    slitHeight: 0.28,
-  },
   // 60 steps a second keeps a phone's frame budget; the spears use continuous collision
   // detection, so even the fastest can't skip through a block between two steps.
   physics: {
@@ -153,9 +144,9 @@ export const siege = {
   stars: { by: 'throws', three: 1, two: 1.5 },
   // The same as woodcutting's, splitting's and firemaking's.
   starBonus: { two: 0.1, three: 0.25 },
-  // A spear at 40 m/s deals about 30: a guard at one hit, a gate leaf or a wooden beam at two, a
-  // thin post or fieldstone at three, dressed stone at four (an aimed volley or two).
-  damage: { spearMinSpeed: 10, spearPerSpeed: 1, crashMinSpeed: 3, crashPerSpeed: 6 },
+  // A spear at 90 m/s deals about 30: a guard at one hit, a gate leaf or a wooden beam at two,
+  // fieldstone at three, dressed stone at four (an aimed volley or two).
+  damage: { spearMinSpeed: 10, spearPerSpeed: 0.375, crashMinSpeed: 3, crashPerSpeed: 6 },
   materials: [
     { id: 'stone', kind: 'stone', density: 1800, friction: 0.8, restitution: 0.05, hp: 120 },
     // Rough, loosely laid stone for the first fort: lighter and quicker to break.
@@ -265,22 +256,28 @@ export const siege = {
     lookYawPerPx: 0.12,
     lookTiltPerPx: 0.05,
     maxAim: 40,
-    aimedSpread: 1,
-    aimedTiltSpread: 0.4,
+    aimFallback: 60,
+    reticleSize: 64,
+    aimedSpread: 0.3,
+    aimedTiltSpread: 0.15,
     aimedSpeedStray: 0.015,
-    barrageSpread: 7,
+    barrageSpread: 10,
     barrageTiltSpread: 2,
     barrageSpeedStray: 0.07,
     barrageStagger: 0.15,
     lineStagger: 0.04,
     ghostWidth: 0.07,
-    spearMass: 14,
+    spearMass: 6,
     reloadSeconds: 0.9,
     spotSeconds: 0.6,
     advanceDelaySeconds: 1.2,
     advanceSeconds: 2.5,
     sightFov: 55,
     sightBack: 0.5,
+    sightNear: 0.8,
+    kickBack: 0.3,
+    kickTilt: 1.5,
+    kickSeconds: 0.22,
     cameraClearance: 0.5,
     scoutHeight: 90,
     scoutBack: 35,
@@ -301,14 +298,14 @@ export const siege = {
     buzzKillMs: 70,
     hitStopMs: 45,
     heavyHitStopMs: 90,
-    heavyHitSpeed: 38,
+    heavyHitSpeed: 85,
     shakeStrength: 1,
     thudSpeed: 2.5,
     thudGapSeconds: 0.25,
     dust: 6,
     slowMo: 0.3,
     slowMoSeconds: 1.6,
-    buzzThrowMs: 15,
+    buzzThrowMs: 30,
     buzzBarrageMs: 35,
     buzzHitMs: 20,
     buzzThudMs: 12,

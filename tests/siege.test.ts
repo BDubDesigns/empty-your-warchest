@@ -22,9 +22,10 @@ import { siegeRewards, siegeStars } from '../src/stations/siege/logic/score';
 import {
   aimedVolley,
   clampAim,
-  muzzleAt,
+  launchFrom,
   shotSpears,
   siegeWeapon,
+  solveAim,
   spearsShot,
   startAim,
   volleySize,
@@ -98,23 +99,9 @@ function reload(round: SiegeRound, steps = 600): void {
   }
 }
 
-/**
- * The aim that sends a spear from the weapon at `spot` through `target`, allowing for the drop:
- * what a good player has learnt. The lowest tilt that gets there.
- */
+/** The aim Fire takes at `target` from `spot`: through it, allowing for the drop. */
 function aimAt(spot: Spot, target: Vec3): Aim {
-  const gravity = data.siege.physics.gravity;
-  const yaw = Math.atan2(target.x - spot.x, -(target.z - spot.z));
-  let best = { tilt: WEAPON.tilt.min * DEG, miss: Infinity };
-  for (let degrees = WEAPON.tilt.min; degrees <= WEAPON.tilt.max; degrees += 0.05) {
-    const aim = { yaw, tilt: degrees * DEG };
-    const muzzle = muzzleAt(spot, aim, WEAPON);
-    const across = Math.hypot(target.x - muzzle.x, target.z - muzzle.z);
-    const time = across / (WEAPON.speed * Math.cos(aim.tilt));
-    const y = muzzle.y + WEAPON.speed * Math.sin(aim.tilt) * time - 0.5 * gravity * time * time;
-    if (Math.abs(y - target.y) < Math.abs(best.miss)) best = { tilt: aim.tilt, miss: y - target.y };
-  }
-  return { yaw, tilt: best.tilt };
+  return solveAim(spot, target, WEAPON, data.siege.physics.gravity);
 }
 
 /** The real data with an extra one-position fort, `test`, of these blocks (unchecked). */
@@ -561,7 +548,7 @@ describe('fort fairness', () => {
     const problems = outpost((raw) => {
       const pieces = raw.siege.forts[0]?.pieces ?? [];
       const post = pieces.find((piece) => piece.kind === 'post' && piece.guard === 1);
-      if (post) post.at = [1.2, -45.2];
+      if (post) post.at = [0, -45.2];
     });
     expect(problems.some((message) => message.includes('can be seen or hit from here'))).toBe(true);
   });
@@ -660,15 +647,24 @@ describe('the weapon', () => {
     expect(clampAim(inside, WEAPON, feel)).toEqual(inside);
   });
 
-  it('drops about a metre (1 to 1.5 m) over the distance to the first wall', () => {
-    const fort = data.siege.forts[0];
-    const wall = fort?.pieces.find((piece) => piece.kind === 'wall');
-    const [, z] = fort?.positions[0]?.spots[1] ?? [0, 0];
-    const out = z - (wall?.at[1] ?? 0) - WEAPON.muzzle;
-    const time = out / WEAPON.speed;
-    const drop = 0.5 * data.siege.physics.gravity * time * time;
-    expect(drop).toBeGreaterThanOrEqual(1);
-    expect(drop).toBeLessThanOrEqual(1.5);
+  it('aims the middle spear through the point under the sight, drop and all', () => {
+    const gravity = data.siege.physics.gravity;
+    for (const target of [
+      { x: -5, y: 1.5, z: -20 },
+      { x: 7, y: 2.4, z: -45 },
+      { x: 0, y: 0.5, z: -12 },
+    ]) {
+      const spot = { x: 0, z: 0 };
+      const aim = aimAt(spot, target);
+      const { position, velocity } = launchFrom(spot, aim, WEAPON.speed, 0, WEAPON);
+      const out = Math.hypot(target.x - position.x, target.z - position.z);
+      const t = out / Math.hypot(velocity.x, velocity.z);
+      expect(position.x + velocity.x * t).toBeCloseTo(target.x, 2);
+      expect(position.z + velocity.z * t).toBeCloseTo(target.z, 2);
+      expect(position.y + velocity.y * t - 0.5 * gravity * t * t).toBeCloseTo(target.y, 2);
+    }
+    // Out of its tilt, the nearest it has.
+    expect(aimAt({ x: 0, z: 0 }, { x: 0, y: 40, z: -10 }).tilt).toBeCloseTo(WEAPON.tilt.max * DEG);
   });
 
   it('takes each shot’s spears from the warchest, as many as it shoots', () => {
@@ -801,9 +797,6 @@ describe('siege data', () => {
       const weapon = raw.siege.weapons[0];
       if (weapon) weapon.tilt.min = 50;
     }, 'Needs min under max');
-    fails((raw) => {
-      raw.siege.mantlet.slitWidth = raw.siege.mantlet.width + 0.1;
-    }, 'The sight slit must be smaller than the shield');
     fails((raw) => {
       raw.siege.weapon = 'trebuchet';
     }, 'Unknown weapon "trebuchet"');

@@ -355,10 +355,6 @@ function checkSiege(data: GameData, issue: (path: Path, message: string) => void
     }
   });
   if (!weapons.has(siege.weapon)) issue(['siege', 'weapon'], `Unknown weapon "${siege.weapon}"`);
-  const { mantlet } = siege;
-  if (mantlet.slitWidth >= mantlet.width || mantlet.slitHeight >= mantlet.height) {
-    issue(['siege', 'mantlet'], 'The sight slit must be smaller than the shield');
-  }
   const materials = new Set<string>();
   siege.materials.forEach((material, index) => {
     if (materials.has(material.id)) {
