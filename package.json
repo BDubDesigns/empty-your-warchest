@@ -16,6 +16,7 @@
     "test:e2e": "playwright test"
   },
   "dependencies": {
+    "@dimforge/rapier3d-deterministic-compat": "0.21.0",
     "cannon-es": "0.20.0",
     "phaser": "4.2.1",
     "three": "0.187.0",

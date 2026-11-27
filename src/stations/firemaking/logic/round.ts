@@ -1,4 +1,4 @@
-import type { EventLogger } from '../../../core';
+import { starBonus, type EventLogger } from '../../../core';
 import type { Firemaking, FiremakingFeel } from '../../../data';
 import {
   bestPull,
@@ -310,8 +310,7 @@ export function starBonusSpears(
   hardened: number,
   stars: number,
 ): number {
-  const share = stars >= 3 ? rules.starBonus.three : stars === 2 ? rules.starBonus.two : 0;
-  return Math.round(hardened * share);
+  return starBonus(hardened, stars, rules.starBonus);
 }
 
 /**

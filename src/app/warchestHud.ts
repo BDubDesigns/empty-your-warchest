@@ -1,11 +1,12 @@
 import * as THREE from 'three';
-import type { Game } from '../core';
-import type { GameData } from '../data';
+import type { EventLogger, Game } from '../core';
+import type { GameData, ItemLook } from '../data';
 import type { Haptics } from './haptics';
 import { loadModel } from './models';
 import { warchestRows } from '../camp/warchestRows';
 import { Sfx } from './sfx';
 import { PANEL_CLOSE_MS, WarchestPanel } from './warchestPanel';
+import { releaseContext, restoreContext } from './trouble';
 import { splitDeposit } from './warchestPour';
 
 const MODELS = { chest: 'models/kenney/chest.glb', log: 'models/kenney/log.glb' };
@@ -28,6 +29,61 @@ async function loadHudModels(): Promise<{ chest: THREE.Object3D; log: THREE.Obje
 /** Chest and flying pieces, in CSS pixels. */
 const CHEST_SIZE = 46;
 const PIECE_LENGTH = 30;
+/** How long each look of piece flies, as a share of `PIECE_LENGTH`: a spear is long and thin. */
+const PIECE_LENGTHS: Record<ItemLook, number> = {
+  round: 1,
+  split: 1.15,
+  pointed: 1.6,
+  bottle: 0.6,
+};
+
+/**
+ * A piece of an item, as it flies into the chest, its length along z: the log model for a round
+ * log, and for a split stave or a pointed spear, a shaft drawn here (no model to load).
+ */
+function pieceModel(look: ItemLook, log: THREE.Object3D): THREE.Object3D {
+  if (look === 'round') return log.clone(true);
+  const piece = new THREE.Group();
+  const wood = new THREE.MeshLambertMaterial({ color: look === 'split' ? 0xd9b07a : 0xa47a4a });
+  if (look === 'bottle') {
+    // A small bottle: a green glass body, a neck, a cork (lying along z).
+    const glass = new THREE.MeshLambertMaterial({
+      color: 0x5fae7a,
+      transparent: true,
+      opacity: 0.85,
+    });
+    const body = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.28, 0.6, 12), glass);
+    const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.12, 0.25, 10), glass);
+    neck.position.y = 0.42;
+    const cork = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.09, 0.09, 0.12, 8),
+      new THREE.MeshLambertMaterial({ color: 0x9a7448 }),
+    );
+    cork.position.y = 0.6;
+    const bottle = new THREE.Group();
+    bottle.add(body, neck, cork);
+    bottle.rotation.x = Math.PI / 2;
+    piece.add(bottle);
+    return piece;
+  }
+  if (look === 'split') {
+    // A split stave: a squared-off length of pale, fresh wood.
+    piece.add(new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.12, 1), wood));
+    return piece;
+  }
+  // A spear: a round shaft with an iron point at the front.
+  const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.86, 8), wood);
+  shaft.rotation.x = Math.PI / 2;
+  shaft.position.z = -0.07;
+  const point = new THREE.Mesh(
+    new THREE.ConeGeometry(0.06, 0.16, 8),
+    new THREE.MeshLambertMaterial({ color: 0x6a7075 }),
+  );
+  point.rotation.x = Math.PI / 2;
+  point.position.z = 0.42;
+  piece.add(shaft, point);
+  return piece;
+}
 /** How far a piece hops up out of where it came from, in pixels. */
 const POP_HEIGHT = 28;
 /** How far the lid swings open, in radians. */
@@ -41,6 +97,7 @@ export interface HudDeps {
   /** The item this station collects, which the chest counts. */
   item: string;
   haptics: Haptics;
+  logger: EventLogger;
 }
 
 /** A point on the screen, in CSS pixels from the HUD's top-left corner. */
@@ -93,7 +150,7 @@ export class WarchestHud {
   readonly #camera = new THREE.OrthographicCamera(0, 1, 0, -1, -500, 500);
   readonly #chest: THREE.Object3D;
   readonly #lid: THREE.Object3D | undefined;
-  readonly #log: THREE.Object3D;
+  readonly #piece: THREE.Object3D;
   readonly #sfx = new Sfx();
   readonly #anchor: HTMLElement;
   readonly #count: HTMLElement;
@@ -119,6 +176,7 @@ export class WarchestHud {
   #bump = 0;
   #last = 0;
   #running = false;
+  readonly #logger: EventLogger;
 
   private constructor(
     element: HTMLElement,
@@ -129,6 +187,7 @@ export class WarchestHud {
     this.#game = deps.game;
     this.#item = deps.item;
     this.#haptics = deps.haptics;
+    this.#logger = deps.logger;
     this.#pour = deps.game.data.warchest.pour;
     this.#sfx.load(SOUNDS);
 
@@ -137,6 +196,10 @@ export class WarchestHud {
     this.#renderer.setClearColor(0x000000, 0);
     this.#renderer.domElement.className = 'warchest-layer';
     element.append(this.#renderer.domElement);
+    // Given back while the station's hidden; once it's back, draw the chest again.
+    this.#renderer.domElement.addEventListener('webglcontextrestored', () => {
+      this.#resize();
+    });
     this.#scene.add(new THREE.HemisphereLight(0xfff4e0, 0x5a4a3a, 2.2));
     const sun = new THREE.DirectionalLight(0xffffff, 1.6);
     sun.position.set(-1, 2, 3);
@@ -159,10 +222,12 @@ export class WarchestHud {
     this.#chest = chest;
     this.#lid = model.getObjectByName('lid');
     this.#scene.add(chest);
-    const log = models.log.clone(true);
-    const logSize = new THREE.Box3().setFromObject(log).getSize(new THREE.Vector3());
-    log.scale.setScalar(PIECE_LENGTH / Math.max(logSize.z, 0.001));
-    this.#log = log;
+    // The station's item, as it flies in: a log, a stave or a spear.
+    const look = deps.game.data.items.find((item) => item.id === deps.item)?.look ?? 'round';
+    const piece = pieceModel(look, models.log);
+    const pieceSize = new THREE.Box3().setFromObject(piece).getSize(new THREE.Vector3());
+    piece.scale.setScalar((PIECE_LENGTH * PIECE_LENGTHS[look]) / Math.max(pieceSize.z, 0.001));
+    this.#piece = piece;
 
     this.#anchor = document.createElement('div');
     this.#anchor.className = 'warchest-hud';
@@ -251,6 +316,17 @@ export class WarchestHud {
     this.#render();
   }
 
+  /** The station's hidden: settle, and give the chest's WebGL context back to the browser. */
+  sleep(): void {
+    this.settle();
+    releaseContext(this.#renderer, this.#logger, 'hud');
+  }
+
+  /** The station's shown again: ask for the context back (the chest draws once it's back). */
+  wake(): void {
+    restoreContext(this.#renderer);
+  }
+
   dispose(): void {
     this.#unsubscribe();
     window.clearTimeout(this.#slamTimer);
@@ -269,7 +345,7 @@ export class WarchestHud {
     const now = performance.now() / 1000;
     for (const piece of pieces) {
       const source = sources[piece.from] ?? this.#chestPoint();
-      const mesh = this.#log.clone(true);
+      const mesh = this.#piece.clone(true);
       mesh.visible = false;
       this.#scene.add(mesh);
       this.#flights.push({
@@ -402,7 +478,7 @@ export class WarchestHud {
         }
       }
       mesh.position.set(x, -y, 50);
-      mesh.scale.setScalar((this.#log.scale.x || 1) * scale);
+      mesh.scale.setScalar((this.#piece.scale.x || 1) * scale);
       mesh.rotation.x += flight.spin.x * dt;
       mesh.rotation.y += flight.spin.y * dt;
       mesh.rotation.z += flight.spin.z * dt;

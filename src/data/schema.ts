@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { buildFort } from './siegePieces';
 
 /** lower_snake_case id used to reference one piece of data from another. */
 const id = z.string().regex(/^[a-z][a-z0-9_]*$/, 'Use a lower_snake_case id');
@@ -13,7 +14,13 @@ const campSpotSchema = z.object({ x: fraction, y: fraction });
 
 export const skillSchema = z.object({ id, name });
 
-export const itemSchema = z.object({ id, name });
+/**
+ * How an item looks as a piece flying into a warchest: a round log, a split stave, a pointed shaft
+ * (a spear).
+ */
+export const itemLooks = ['round', 'split', 'pointed', 'bottle'] as const;
+
+export const itemSchema = z.object({ id, name, look: z.enum(itemLooks) });
 
 export const itemStackSchema = z.object({
   item: id,
@@ -804,6 +811,540 @@ const firemakingSchema = z.object({
   feel: firemakingFeelSchema,
 });
 
+/** What a fort's blocks are made of. `kind` is how a block looks and sounds. */
+const siegeMaterialSchema = z.object({
+  id,
+  kind: z.enum(['stone', 'wood', 'glass']),
+  /** kg per cubic metre. */
+  density: positive,
+  friction: nonNegative,
+  /** Bounce, from 0 (none) to 1. */
+  restitution: fraction,
+  /** Hit points: a block breaks once hits and crashes have dealt this much damage. */
+  hp: positive,
+});
+
+/**
+ * What a position is won by, each checked by one small function in the siege's rules: bring
+ * down every guard at the position, or bring the banner down (its middle below `height` metres,
+ * or the siege's `banner.winHeight`). Later missions add kinds here.
+ */
+const siegeObjectiveSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('guards_down') }),
+  z.object({ kind: z.literal('banner_down'), height: positive.optional() }),
+]);
+
+/** Where a piece stands: its middle on the ground (x across, z toward the ballista). */
+const placeSchema = z.tuple([z.number(), z.number()]);
+/** The position (by index) a guard on a piece guards. */
+const guardForSchema = z.number().int().min(0);
+/**
+ * How a guard keeps watch until something alerts him: standing still, walking up and down (on a
+ * walkway only), or asleep (woken by noise).
+ */
+const watchSchema = z.enum(['stand', 'patrol', 'sleep']).default('stand');
+
+/**
+ * The prebuilt structures forts are assembled from, each placed at its middle: forts are lists of
+ * these (and one day, assembled at random). Every piece faces the ballista (along x). Their parts'
+ * sizes are the siege's `parts`.
+ */
+export const siegePieceSchema = z.discriminatedUnion('kind', [
+  /**
+   * A run of wall `length` stones across and `courses` high, laid like brickwork, with a merlon
+   * on every stone of the top course (unless `merlons` is false).
+   */
+  z.object({
+    kind: z.literal('wall'),
+    at: placeSchema,
+    length: positiveInt,
+    courses: positiveInt,
+    material: id,
+    merlons: z.boolean().default(true),
+    /**
+     * Windows through it: an opening `width` stones across from stone `from` (counting from its
+     * left end), from course `sill` up `courses` courses, glazed with a pane of `glass`, and a
+     * beam of `lintel` across the course above it, resting on the stones either side.
+     */
+    windows: z
+      .array(
+        z.object({
+          from: z.number().int().min(0),
+          width: positiveInt,
+          sill: z.number().int().min(0),
+          courses: positiveInt,
+          glass: id,
+          lintel: id,
+        }),
+      )
+      .default([]),
+  }),
+  /** A gate: two door leaves, `width` across between them and `height` tall, quick to break. */
+  z.object({
+    kind: z.literal('gate'),
+    at: placeSchema,
+    width: positive,
+    height: positive,
+    material: id,
+  }),
+  /** A squat tower: a stack of `courses` square blocks, with a guard on top if `guard` is set. */
+  z.object({
+    kind: z.literal('tower'),
+    at: placeSchema,
+    courses: positiveInt,
+    material: id,
+    guard: guardForSchema.optional(),
+    watch: watchSchema,
+  }),
+  /**
+   * The wooden keep with the banner on top: a storey for each of `storeys` (its posts' height), a
+   * post at every corner of a `width` × `depth` floor and a plank floor on them. Storey `weak`
+   * stands on two thin front posts (the weak point) and a wall of material `back` behind.
+   */
+  z.object({
+    kind: z.literal('keep'),
+    at: placeSchema,
+    storeys: z.array(positive).min(1),
+    weak: z.number().int().min(0),
+    back: id,
+    width: positive,
+    depth: positive,
+  }),
+  /** A watch platform: four posts `height` tall and a floor, a guard on it if `guard` is set. */
+  z.object({
+    kind: z.literal('platform'),
+    at: placeSchema,
+    height: positive,
+    guard: guardForSchema.optional(),
+    watch: watchSchema,
+  }),
+  /** A guard post: a guard standing on the ground. */
+  z.object({
+    kind: z.literal('post'),
+    at: placeSchema,
+    guard: guardForSchema,
+    watch: watchSchema,
+  }),
+  /**
+   * A walkway behind a wall: `segments` timber blocks in a row along x, `height` tall (the guard's
+   * floor), so a guard on it stands behind the battlements, half covered. A guard on watch here
+   * walks up and down it; alerted, any guard on it paces, ducking behind the wall and leaning out.
+   */
+  z.object({
+    kind: z.literal('walkway'),
+    at: placeSchema,
+    segments: positiveInt,
+    height: positive,
+    guard: guardForSchema.optional(),
+    watch: watchSchema,
+  }),
+  /** A low wall `length` stones across, two courses high: cover a guard can duck behind. */
+  z.object({ kind: z.literal('cover'), at: placeSchema, length: positiveInt, material: id }),
+]);
+
+/**
+ * One position of a siege: where the ballista can stand (2 or 3 spots, x and z on the ground; you
+ * tap to move between them) and what wins it. Its guards are the pieces' guards that name it. Win
+ * it and the ballista rolls on to the next.
+ */
+const siegePositionSchema = z.object({
+  name,
+  spots: z
+    .array(z.tuple([z.number(), z.number()]))
+    .min(2)
+    .max(3),
+  /** Points on the ground the weapon rolls through on its way in (through a gate, say). */
+  approach: z.array(z.tuple([z.number(), z.number()])).default([]),
+  objective: siegeObjectiveSchema,
+});
+
+/**
+ * A fort: the pieces it's built from, the positions you take it in, in order (the last one brings
+ * the banner down), the throws a good player takes over all of them (`par`), and the Command XP
+ * it pays. Its blocks must stand on their own, and it must be fair (checked at startup).
+ */
+const siegeFortSchema = z.object({
+  id,
+  name,
+  par: positiveInt,
+  /**
+   * `all`: every guard can be seen from a spot of his position as the round starts (through a
+   * gap or a window), checked at startup; for the first forts. `some`: some may hide.
+   */
+  guardsVisible: z.enum(['all', 'some']).default('some'),
+  /** XP for each block knocked down, each guard brought down, and winning (before stars). */
+  rewards: z.object({ xpPerBlock: nonNegative, xpPerGuard: nonNegative, winXp: nonNegative }),
+  pieces: z.array(siegePieceSchema).min(1),
+  positions: z.array(siegePositionSchema).min(1),
+});
+
+/**
+ * A weapon: what shoots the spears. An aimed volley is `aimed.start` spears, `aimed.add` more
+ * every `aimed.everyLevels` levels of `skill`; a barrage is `barrageTimes` as many. Every spear
+ * leaves at `speed` m/s (one speed: there's no power to set), tilted from `tilt.min` to `tilt.max`
+ * degrees (`tilt.start` to begin with). It turns and tilts about a pivot `pivotHeight` up; spears
+ * leave from its muzzle, `muzzle` along the bolt from the pivot, side by side `spacing` apart.
+ * `size` (width, height, length) is only how big it's drawn. The ballista shoots flat and fast;
+ * arc weapons (a catapult, a trebuchet) come later.
+ */
+const siegeWeaponSchema = z.object({
+  id,
+  name,
+  skill: id,
+  aimed: z.object({ start: positiveInt, everyLevels: positiveInt, add: z.number().int().min(0) }),
+  barrageTimes: z.number().int().min(2),
+  speed: positive,
+  tilt: z.object({ min: z.number(), max: z.number().max(80), start: z.number() }),
+  pivotHeight: positive,
+  muzzle: positive,
+  spacing: nonNegative,
+  size: z.tuple([positive, positive, positive]),
+});
+
+/** Feel numbers for the siege. The debug menu can override them live. */
+export const siegeFeelSchema = z.object({
+  /**
+   * Aiming, looking down the sights: the crosshair stays in the middle of the screen, on the
+   * bolt's line, and a drag turns the view (and the weapon with it) `lookYawPerPx` degrees for
+   * every pixel across and tilts it `lookTiltPerPx` for every pixel up or down. It turns up to
+   * `maxAim` degrees either way, and stops at the weapon's tilt limits, so the crosshair never
+   * points where the bolt can't go.
+   */
+  lookYawPerPx: positive,
+  lookTiltPerPx: positive,
+  maxAim: z.number().min(0).max(90),
+  /**
+   * Fire aims the shot at whatever is under the crosshair (or `aimFallback` metres out, if
+   * nothing is), allowing for the drop: an aimed shot lands its middle spear right there.
+   */
+  aimFallback: positive,
+  /**
+   * The sight on screen: a ring `reticleSize` pixels across with ticks in to the middle (a
+   * barrage's ring is as wide as its spread, if wider).
+   */
+  reticleSize: positive,
+  /**
+   * The two volleys. Aimed: tight (each spear strays up to `aimedSpread` degrees sideways,
+   * `aimedTiltSpread` up or down, and `aimedSpeedStray` of its speed, at random). Barrage: three
+   * times the spears, in waves `barrageStagger` seconds apart, strewn far wider. Within a wave the
+   * spears leave `lineStagger` seconds apart, so it ripples.
+   */
+  aimedSpread: nonNegative,
+  aimedTiltSpread: nonNegative,
+  aimedSpeedStray: fraction,
+  barrageSpread: nonNegative,
+  barrageTiltSpread: nonNegative,
+  barrageSpeedStray: fraction,
+  barrageStagger: nonNegative,
+  lineStagger: nonNegative,
+  /**
+   * After a shot, a solid line `ghostWidth` thick along the middle spear's real path, until the
+   * next shot (it can be turned off): learning the drop is the skill.
+   */
+  ghostWidth: positive,
+  /** The spear's mass (kg): how hard it hits. */
+  spearMass: positive,
+  /** Seconds after a shot before the next, unless all its spears have already hit something. */
+  reloadSeconds: nonNegative,
+  /**
+   * Moving: the weapon takes `spotSeconds` to move to another spot, and once a position is won,
+   * waits `advanceDelaySeconds` (to watch it fall) and rolls on to the next in `advanceSeconds`.
+   */
+  spotSeconds: positive,
+  advanceDelaySeconds: nonNegative,
+  advanceSeconds: positive,
+  /**
+   * The view down the sights: the eye sits on the bolt's line, `sightBack` metres behind the
+   * pivot, with a field of view `sightFov` degrees high.
+   */
+  sightFov: z.number().min(10).max(100),
+  sightBack: nonNegative,
+  /** Nothing nearer the eye than this is drawn (m): a spear or a stone lying at its feet. */
+  sightNear: positive,
+  /**
+   * The kick of a shot: the view jolts back `kickBack` metres and up `kickTilt` degrees, and
+   * settles over `kickSeconds`.
+   */
+  kickBack: nonNegative,
+  kickTilt: nonNegative,
+  kickSeconds: positive,
+  /**
+   * Guards' marks: a sleeper's "Z z z" `zzzSize` metres tall over his head, and an alerted guard's
+   * "!" `markSize` tall for `markSeconds`.
+   */
+  zzzSize: positive,
+  /**
+   * Each Z floats up `zzzRise` metres from a sleeper's head over `zzzSeconds`, drifting `zzzDrift`
+   * either way, fading in and out, one after another.
+   */
+  zzzRise: positive,
+  zzzSeconds: positive,
+  zzzDrift: nonNegative,
+  /** A Sense potion shows every guard in red through walls for `senseSeconds`. */
+  senseSeconds: positive,
+  /** The last shot's line is at least `ghostPx` pixels wide on screen, however far off. */
+  ghostPx: positive,
+  markSize: positive,
+  markSeconds: nonNegative,
+  /**
+   * The flyover as a fort first opens: the camera sweeps over each position in turn and the keep,
+   * `flyoverHeight` metres up and `flyoverBack` short of what it looks at, over `flyoverSeconds`
+   * in all. A tap skips it.
+   */
+  flyoverSeconds: positive,
+  flyoverHeight: positive,
+  flyoverBack: nonNegative,
+  /** How far short of a wall a camera looking at something (a kill, a collapse) stops (m). */
+  cameraClearance: nonNegative,
+  /**
+   * Scouting: the camera rises over `scoutSeconds` to look down on the whole fort from
+   * `scoutHeight` metres up, `scoutBack` metres short of its middle (a high three-quarter view).
+   * No shooting while scouting.
+   */
+  scoutHeight: positive,
+  scoutBack: nonNegative,
+  scoutSeconds: positive,
+  /**
+   * The bolt cam: after a shot the camera cuts over in `boltCamInSeconds` to ride `boltCamBack`
+   * metres behind the middle spear and `boltCamRise` above it until it hits something, holds there
+   * `boltCamHoldSeconds`, then eases back to the sights over `boltCamReturnSeconds`. A tap sends
+   * it back early. A kill cam cuts in as fast.
+   */
+  boltCamBack: nonNegative,
+  boltCamRise: nonNegative,
+  boltCamInSeconds: positive,
+  boltCamHoldSeconds: nonNegative,
+  boltCamReturnSeconds: positive,
+  /**
+   * The kill cam: when a shot brings a guard down (the first of the shot), or a big collapse
+   * (`collapseBlocks` blocks breaking within `collapseWindowSeconds`), time freezes for
+   * `killCamStopMs`, then runs at `killCamSlowMo` while the camera looks at it from
+   * `killCamDistance` metres off and `killCamRise` up, for `killCamSeconds` (real seconds). A tap
+   * skips it, and so does the next shot. `buzzKillMs` is its buzz.
+   */
+  killCamSeconds: nonNegative,
+  killCamSlowMo: z.number().min(0.05).max(1),
+  killCamStopMs: nonNegative,
+  killCamDistance: positive,
+  /** How far off a collapse cam (a big collapse, the keep) looks from (m). */
+  collapseCamDistance: positive,
+  killCamRise: nonNegative,
+  collapseBlocks: positiveInt,
+  collapseWindowSeconds: positive,
+  buzzKillMs: nonNegative,
+  /** A spear hitting: the freeze (ms), and from `heavyHitSpeed` m/s a longer one (and on breaks). */
+  hitStopMs: nonNegative,
+  heavyHitStopMs: nonNegative,
+  heavyHitSpeed: positive,
+  /** Multiplier for every screen shake. 0 turns shake off. */
+  shakeStrength: nonNegative,
+  /**
+   * A block slamming into something: dust and a thud from this sudden a change of speed (m/s), at
+   * most one a block every `thudGapSeconds`, so a block rattling to a stop isn't a drum roll.
+   */
+  thudSpeed: positive,
+  thudGapSeconds: nonNegative,
+  /** Dust puffs for a thud at `thudSpeed`; harder thuds puff more. */
+  dust: nonNegative,
+  /** As the banner falls, time runs at `slowMo` for `slowMoSeconds` (real seconds). */
+  slowMo: z.number().min(0.05).max(1),
+  slowMoSeconds: nonNegative,
+  /**
+   * Vibration (ms): an aimed shot, a barrage, a spear hitting, a block thud, a block breaking, a
+   * guard going down, the banner falling.
+   */
+  buzzThrowMs: nonNegative,
+  buzzBarrageMs: nonNegative,
+  buzzHitMs: nonNegative,
+  buzzThudMs: nonNegative,
+  buzzBreakMs: nonNegative,
+  buzzGuardMs: nonNegative,
+  buzzBannerMs: nonNegative,
+});
+
+/**
+ * The parts pieces are built from, in metres: wall stones (`stone`, the `halfStone` that squares
+ * off every other course, the `merlon` on top), a tower's square block (`towerBlock` across, a
+ * stone's height), a keep's corner `post`, its `thinPost` (the weak point) and its floors
+ * `slab` thick, a watch platform's floor (`platform` across, `platformSlab` thick), a gate's
+ * leaves `gateDepth` thick, the banner's `pole`. And the hit points of the parts that don't take
+ * their material's: a gate leaf, a weak post, the keep's other posts, the banner (which never
+ * breaks: it has to fall).
+ */
+const siegePartsSchema = z.object({
+  stone: z.tuple([positive, positive, positive]),
+  halfStone: z.tuple([positive, positive, positive]),
+  merlon: z.tuple([positive, positive, positive]),
+  towerBlock: positive,
+  post: positive,
+  thinPost: positive,
+  slab: positive,
+  platform: positive,
+  platformSlab: positive,
+  gateDepth: positive,
+  pole: z.tuple([positive, positive, positive]),
+  /** A window's pane of glass: this thick. */
+  pane: positive,
+  /** A walkway segment: `walkway` long (along it) and `walkwayWidth` across. */
+  walkway: positive,
+  walkwayWidth: positive,
+  gateHp: positive,
+  weakHp: positive,
+  keepPostHp: positive,
+  bannerHp: positive,
+});
+
+/**
+ * The siege at the War tent: shoot the warchest's spears at a fort, position by position, until
+ * its banner comes down. The physics world (Rapier) is the rules, stepped at a fixed rate and
+ * seeded, so the same shots always give the same result.
+ */
+const siegeShape = z.object({
+  /** The warchest item shot. */
+  item: id,
+  /** The item a Sense potion is: drunk, every guard shows through walls for a while. */
+  potion: id,
+  /** The weapons, and the one the siege uses (more, arc weapons, come later as unlocks). */
+  weapons: z.array(siegeWeaponSchema).min(1),
+  weapon: id,
+  /**
+   * The guards: each a box `size` (width, height, depth) of `density` kg per cubic metre and
+   * `friction`, with `hp` hit points, damaged by spears and crashes as blocks are. A guard is down
+   * at 0 hit points, or once knocked over past `downTilt` degrees; one still standing is pushed over
+   * (its head sent back at `topple` m/s) and lies there.
+   */
+  guard: z.object({
+    size: z.tuple([positive, positive, positive]),
+    density: positive,
+    friction: nonNegative,
+    hp: positive,
+    downTilt: z.number().positive().max(90),
+    topple: nonNegative,
+  }),
+  parts: siegePartsSchema,
+  /**
+   * How guards move (m/s and s). On watch a guard on a walkway walks it at `patrolSpeed`, pausing
+   * `patrolPause` at each end. Alerted, he paces at `alertSpeed` to a new place, ducks `duck`
+   * metres behind the wall for `alertPause`, then leans out (stands) for `alertLean`, and again. A
+   * woken sleeper stands and looks round for `wakeSeconds` first.
+   */
+  guardMoves: z.object({
+    patrolSpeed: positive,
+    patrolPause: nonNegative,
+    alertSpeed: positive,
+    alertPause: nonNegative,
+    alertLean: positive,
+    duck: nonNegative,
+    wakeSeconds: nonNegative,
+  }),
+  /**
+   * Noise: how far (m) each thing is heard. The ballista firing; a spear hitting stone, wood or a
+   * guard; a stone or wooden block breaking. A crash (a block slamming into something) is heard
+   * `crashShare` as far as a spear hit on its material. A guard on watch who hears it is
+   * alerted; a sleeper wakes only if it's within `sleepShare` of its reach.
+   */
+  noise: z.object({
+    fire: nonNegative,
+    hit: z.object({
+      stone: nonNegative,
+      wood: nonNegative,
+      glass: nonNegative,
+      guard: nonNegative,
+    }),
+    break: z.object({ stone: nonNegative, wood: nonNegative, glass: nonNegative }),
+    crashShare: fraction,
+    sleepShare: fraction,
+  }),
+  physics: z.object({
+    /** Seconds per physics step, whatever the frame rate. */
+    timestep: positive,
+    gravity: positive,
+    solverIterations: positiveInt,
+    /** Steps at most per frame, so a slow frame can't snowball (the game slows instead). */
+    maxStepsPerFrame: positiveInt,
+    /** The field: its friction, and how far it reaches each way from the start (metres). */
+    groundFriction: nonNegative,
+    groundReach: positive,
+  }),
+  /**
+   * The spear as a body: a capsule `length` long (tip to tip) and `radius` thick. It flies nose
+   * first until it first touches something; from then on it tumbles as it will.
+   */
+  projectile: z.object({
+    length: positive,
+    radius: positive,
+    friction: nonNegative,
+    restitution: fraction,
+    /**
+     * Damping once it's down (linear, and turning): a round spear would otherwise roll across
+     * the field for ever, and the round never settle.
+     */
+    landedDamping: nonNegative,
+    landedSpinDamping: nonNegative,
+    /**
+     * The share of its speed a spear keeps after it first hits something: it's spent, so a
+     * glancing one can't fly on across the fort and hit something it was never aimed at.
+     */
+    afterHit: fraction,
+  }),
+  /**
+   * Everything has settled once no body moves faster than `speed` (m/s) or turns faster than
+   * `spin` (radians a second) for `seconds`. After a win the card waits for that, or `winSeconds`
+   * at most, so the fort is seen to fall.
+   */
+  settle: z.object({ speed: positive, spin: positive, seconds: positive, winSeconds: positive }),
+  /** A block counts as knocked down once it has dropped `drop` metres or tipped `tilt` degrees. */
+  down: z.object({ drop: positive, tilt: z.number().positive().max(90) }),
+  /**
+   * Damage. A spear hitting a block or a guard deals `spearPerSpeed` for every m/s it hits at over
+   * `spearMinSpeed` (so a glancing tap does nothing). A body whose speed changes suddenly (it
+   * slams into the ground or another, or one slams into it) takes `crashPerSpeed` for every m/s
+   * of that change over `crashMinSpeed`, so collapses chain. At 0 hit points a block breaks: it's
+   * gone, and whatever it held up falls.
+   */
+  damage: z.object({
+    spearMinSpeed: nonNegative,
+    spearPerSpeed: nonNegative,
+    crashMinSpeed: positive,
+    crashPerSpeed: nonNegative,
+  }),
+  /**
+   * The banner: a `banner_down` position is won once its middle is below `winHeight` metres
+   * (unless the objective says otherwise). It counts as falling, for the slow motion, once it has
+   * tipped `fallTilt` degrees.
+   */
+  banner: z.object({ winHeight: positive, fallTilt: z.number().positive().max(90) }),
+  /**
+   * Stars for a win, measured `by` throws (a throw is one shot, aimed or barrage alike, over every
+   * position) against the fort's par: 3 up to `three` × par, 2 up to `two` × par, else 1. Not by
+   * spears, or thrift would be the best play when the game wants spears spent; not by time, as
+   * stopping to aim on a phone shouldn't cost stars. Only `throws` so far.
+   */
+  stars: z.object({ by: z.enum(['throws']), three: positive, two: positive }),
+  /** Bonus XP and recovered spears for 2 and 3 stars, as a share of each, as at every station. */
+  starBonus: z.object({ two: nonNegative, three: nonNegative }),
+  materials: z.array(siegeMaterialSchema).min(1),
+  /** In order: each one opens once the one before it has been won. */
+  forts: z.array(siegeFortSchema).min(1),
+  feel: siegeFeelSchema,
+});
+
+/** The siege, its forts built: each fort's pieces laid out as blocks, and its guards placed. */
+const siegeSchema = siegeShape.transform((siege) => ({
+  ...siege,
+  forts: siege.forts.map((fort) => {
+    const built = buildFort(fort.pieces, fort.positions.length, siege.parts);
+    return {
+      ...fort,
+      blocks: built.blocks,
+      positions: fort.positions.map((position, index) => ({
+        ...position,
+        guards: built.guards[index] ?? [],
+      })),
+    };
+  }),
+}));
+
 /**
  * Workers: how many you have (`start` at level 1 of `skill`, one more every `everyLevels`), and
  * the job each does at a station: its recipe run `perMinute` times a minute (with `batches` and
@@ -851,6 +1392,7 @@ export const gameDataShape = z.object({
   woodcutting: woodcuttingSchema,
   splitting: splittingSchema,
   firemaking: firemakingSchema,
+  siege: siegeSchema,
   runner: runnerSchema,
   warchest: warchestSchema,
   workers: workersSchema,
@@ -861,6 +1403,7 @@ export type GameDataInput = z.input<typeof gameDataShape>;
 export type GameData = z.output<typeof gameDataShape>;
 export type Skill = GameData['skills'][number];
 export type Item = GameData['items'][number];
+export type ItemLook = Item['look'];
 export type ItemStack = z.output<typeof itemStackSchema>;
 export type Station = GameData['stations'][number];
 export type Recipe = GameData['recipes'][number];
@@ -887,4 +1430,15 @@ export type Roll = z.output<typeof rollSchema>;
 export type GateOp = Gate['op'];
 export type LevelEvent = Level['events'][number];
 export type RunnerData = GameData['runner'];
+export type Siege = GameData['siege'];
+export type SiegeFeel = Siege['feel'];
+export type SiegeFort = Siege['forts'][number];
+export type SiegeBlock = SiegeFort['blocks'][number];
+export type SiegePosition = SiegeFort['positions'][number];
+export type SiegeObjective = SiegePosition['objective'];
+export type SiegeGuard = SiegePosition['guards'][number];
+export type SiegePiece = z.output<typeof siegePieceSchema>;
+export type SiegeParts = z.output<typeof siegePartsSchema>;
+export type SiegeWeapon = Siege['weapons'][number];
+export type SiegeMaterial = Siege['materials'][number];
 export type RunnerFeel = RunnerData['feel'];

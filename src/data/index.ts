@@ -9,6 +9,7 @@ import { recipes } from './recipes';
 import { runner } from './runner';
 import { splitting } from './splitting';
 import type { GameData, GameDataInput } from './schema';
+import { siege } from './siege';
 import { skills } from './skills';
 import { stations } from './stations';
 import { tuning } from './tuning';
@@ -20,6 +21,7 @@ import { parseGameData } from './validate';
 
 export * from './schema';
 export { GameDataError, parseGameData } from './validate';
+export * from './siegePieces';
 
 export const rawGameData: GameDataInput = {
   skills,
@@ -34,6 +36,7 @@ export const rawGameData: GameDataInput = {
   runner,
   splitting,
   firemaking,
+  siege,
   warchest,
   workers,
   tuning,

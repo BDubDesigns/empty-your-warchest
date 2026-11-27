@@ -54,13 +54,13 @@ body {
   top: calc(var(--safe-top) + 12px);
   left: calc(var(--safe-left) + 12px);
   min-height: 48px;
-  padding: 0 20px;
+  padding: 0 14px;
   border: 0;
   border-radius: 12px;
   background: var(--accent);
   color: var(--bg);
   font:
-    700 18px system-ui,
+    700 16px system-ui,
     sans-serif;
   touch-action: manipulation;
 }
@@ -2192,4 +2192,407 @@ body:not([data-view='camp']) #build-label {
 .fm-card-buttons {
   display: flex;
   gap: 12px;
+}
+
+/* Siege (src/stations/siege/three/siege3dView.ts). */
+.sg-canvas {
+  display: block;
+  touch-action: none;
+}
+
+.sg-ui {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  font-family: system-ui, sans-serif;
+  color: var(--fg);
+}
+
+.sg-ui button {
+  pointer-events: auto;
+}
+
+.sg-ui [hidden] {
+  display: none !important;
+}
+
+/* The forts: each one open, and the next locked until the one before is won. */
+.sg-forts {
+  position: absolute;
+  top: calc(var(--safe-top) + 104px);
+  left: 0;
+  right: 0;
+  display: flex;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 12px;
+}
+
+.sg-fort {
+  min-height: 38px;
+  padding: 0 12px;
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: rgb(22 18 14 / 0.62);
+  color: var(--fg);
+  font:
+    700 13px system-ui,
+    sans-serif;
+  touch-action: manipulation;
+}
+
+.sg-fort[aria-checked='true'] {
+  border-color: #f0cd5c;
+  background: rgb(80 50 12 / 0.8);
+}
+
+.sg-fort-locked {
+  opacity: 0.55;
+}
+
+.sg-status {
+  position: absolute;
+  top: calc(var(--safe-top) + 150px);
+  left: 0;
+  right: 0;
+  text-align: center;
+  font:
+    700 13px system-ui,
+    sans-serif;
+  text-shadow: 0 1px 3px rgb(0 0 0 / 0.85);
+}
+
+/* Just over the spot and shot buttons: up top it would cover the fort. */
+.sg-hint {
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  bottom: calc(var(--safe-bottom) + 136px);
+  text-align: center;
+  font-size: 14px;
+  font-weight: 600;
+  text-shadow: 0 1px 4px rgb(0 0 0 / 0.9);
+}
+
+/* What the position asks for, just under the throws and par. */
+.sg-goal {
+  position: absolute;
+  top: calc(var(--safe-top) + 170px);
+  left: 12px;
+  right: 12px;
+  text-align: center;
+  font:
+    800 15px system-ui,
+    sans-serif;
+  color: #f0cd5c;
+  text-shadow: 0 1px 4px rgb(0 0 0 / 0.9);
+}
+
+/* The next position's name, big, as the ballista rolls on to it. */
+.sg-title {
+  position: absolute;
+  top: 30%;
+  left: 12px;
+  right: 12px;
+  text-align: center;
+  white-space: pre-line;
+  font:
+    900 30px/1.25 system-ui,
+    sans-serif;
+  text-shadow: 0 2px 8px rgb(0 0 0 / 0.85);
+  animation: sg-title 2.4s ease-out forwards;
+}
+
+@keyframes sg-title {
+  0% {
+    opacity: 0;
+    transform: translateY(12px) scale(0.96);
+  }
+  15%,
+  75% {
+    opacity: 1;
+    transform: none;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+/* Where the ballista stands, and how it shoots, at the bottom. */
+.sg-controls {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(var(--safe-bottom) + 14px);
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+}
+
+.sg-spots {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 4px 3px 10px;
+  border-radius: 999px;
+  background: rgb(20 16 12 / 0.55);
+}
+
+.sg-spots-label {
+  font:
+    700 12px system-ui,
+    sans-serif;
+  color: var(--muted);
+}
+
+.sg-spot-buttons {
+  display: flex;
+  gap: 4px;
+}
+
+.sg-spot {
+  width: 40px;
+  height: 40px;
+  border: 2px solid rgb(255 255 255 / 0.5);
+  border-radius: 50%;
+  background: transparent;
+  color: var(--fg);
+  font:
+    800 16px system-ui,
+    sans-serif;
+  touch-action: manipulation;
+}
+
+.sg-spot[aria-checked='true'] {
+  border-color: #f0cd5c;
+  background: rgb(240 205 92 / 0.25);
+  color: #f0cd5c;
+}
+
+/* Aimed or Barrage: how the ballista shoots, and what it costs. */
+.sg-modes {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 16px;
+  background: rgb(20 16 12 / 0.62);
+}
+
+.sg-mode {
+  display: grid;
+  justify-items: center;
+  min-width: 86px;
+  min-height: 58px;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--fg);
+  touch-action: manipulation;
+}
+
+.sg-mode[aria-checked='true'] {
+  background: var(--accent);
+  color: var(--bg);
+}
+
+.sg-mode-name {
+  font:
+    800 16px system-ui,
+    sans-serif;
+}
+
+.sg-mode-cost {
+  font:
+    600 12px system-ui,
+    sans-serif;
+  opacity: 0.85;
+}
+
+/* A short line: fewer spears left than the throw takes. */
+.sg-mode[data-short='true'] .sg-mode-cost::before {
+  content: '⚠ ';
+}
+
+/* The sight: fixed in the middle, a ring with ticks in to the point (a barrage's ring is wider). */
+.sg-crosshair {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.sg-crosshair svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  filter: drop-shadow(0 0 1.5px rgb(0 0 0 / 0.85));
+}
+
+.sg-crosshair .sg-ring,
+.sg-crosshair .sg-ticks {
+  fill: none;
+  stroke: rgb(255 238 170 / 0.95);
+  stroke-width: 2px;
+  vector-effect: non-scaling-stroke;
+}
+
+.sg-crosshair .sg-dot {
+  fill: #ff5a3c;
+}
+
+.sg-crosshair[data-mode='barrage'] .sg-ring {
+  stroke: rgb(255 170 80 / 0.95);
+  stroke-dasharray: 6 5;
+}
+
+/* Scout, the shot buttons and Fire, in a row along the bottom. */
+.sg-shoot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.sg-fire {
+  min-width: 92px;
+  min-height: 72px;
+  border: 0;
+  border-radius: 50%;
+  background: radial-gradient(circle at 40% 35%, #f0703c, #b8321a);
+  box-shadow: 0 4px 10px rgb(0 0 0 / 0.45);
+  color: #fff;
+  font:
+    900 20px system-ui,
+    sans-serif;
+  text-shadow: 0 1px 2px rgb(0 0 0 / 0.6);
+  touch-action: manipulation;
+}
+
+.sg-fire:active {
+  transform: scale(0.94);
+}
+
+.sg-fire:disabled {
+  opacity: 0.45;
+}
+
+.sg-scout {
+  min-width: 58px;
+  min-height: 46px;
+  border: 2px solid rgb(255 255 255 / 0.55);
+  border-radius: 12px;
+  background: rgb(20 16 12 / 0.62);
+  color: var(--fg);
+  font:
+    700 14px system-ui,
+    sans-serif;
+  touch-action: manipulation;
+}
+
+/* The last shot's line, on or off. */
+.sg-ghost {
+  min-height: 36px;
+  margin-left: 4px;
+  padding: 0 10px;
+  border: 2px solid rgb(255 255 255 / 0.35);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font:
+    700 12px system-ui,
+    sans-serif;
+  touch-action: manipulation;
+}
+
+.sg-potion {
+  min-height: 36px;
+  margin-left: 4px;
+  padding: 0 10px;
+  border: 2px solid rgb(255 90 90 / 0.6);
+  border-radius: 999px;
+  background: rgb(120 20 20 / 0.45);
+  color: #ffb0a8;
+  font:
+    700 12px system-ui,
+    sans-serif;
+  touch-action: manipulation;
+}
+
+.sg-potion[aria-pressed='true'] {
+  border-color: #ff4a3a;
+  color: #fff;
+}
+
+.sg-ghost[aria-pressed='true'] {
+  border-color: #7fe8ff;
+  color: #7fe8ff;
+}
+
+.sg-scout[aria-pressed='true'] {
+  border-color: #f0cd5c;
+  color: #f0cd5c;
+}
+
+.sg-card {
+  /* Over the warchest layer, so spears pouring into the chest fly from behind it, never across it. */
+  z-index: 5;
+  position: absolute;
+  inset: 22% 16px auto;
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+  padding: 20px;
+  border-radius: 14px;
+  background: rgb(20 24 18 / 0.9);
+  pointer-events: auto;
+}
+
+.sg-card-stars:empty {
+  display: none;
+}
+
+.sg-card-title {
+  font:
+    800 26px system-ui,
+    sans-serif;
+  text-align: center;
+}
+
+.sg-card-text {
+  color: var(--muted);
+  text-align: center;
+  white-space: pre-line;
+  line-height: 1.5;
+}
+
+.sg-card-buttons {
+  display: flex;
+  gap: 12px;
+}
+
+.sg-button {
+  min-width: 64px;
+  min-height: 56px;
+  padding: 0 18px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--accent);
+  color: var(--bg);
+  font:
+    700 20px system-ui,
+    sans-serif;
+  touch-action: manipulation;
+}
+
+.sg-button:active {
+  background: var(--accent-pressed);
+}
+
+.sg-button.sg-secondary {
+  border: 2px solid var(--accent);
+  background: transparent;
+  color: var(--accent);
+  font-size: 18px;
 }

@@ -8,9 +8,10 @@ import type { PhaserView } from './phaserView';
 import { Preloader, whenIdle } from './preloader';
 import { lazyScreen, type LazyScreen } from './screen';
 import { ScreenSwitcher } from './screenSwitcher';
+import { noteContext } from './trouble';
 import { mechanicFor, type ScreenId as StationScreenId } from '../stations/registry';
 
-type ScreenId = 'phaser' | 'three' | 'wood3d' | 'splitting3d' | 'firemaking3d';
+type ScreenId = 'phaser' | 'three' | 'wood3d' | 'splitting3d' | 'firemaking3d' | 'siege3d';
 
 /** The shell screen each station screen runs on. */
 const SCREENS: Record<StationScreenId, ScreenId> = {
@@ -18,6 +19,7 @@ const SCREENS: Record<StationScreenId, ScreenId> = {
   woodcutting3d: 'wood3d',
   splitting3d: 'splitting3d',
   firemaking3d: 'firemaking3d',
+  siege3d: 'siege3d',
 };
 
 function byId(id: string): HTMLElement {
@@ -50,6 +52,7 @@ function nextFrame(): Promise<void> {
 const woodcuttingView = () => import('../stations/woodcutting/three/woodcutting3dView');
 const splittingView = () => import('../stations/splitting/three/splitting3dView');
 const firemakingView = () => import('../stations/firemaking/three/firemaking3dView');
+const siegeView = () => import('../stations/siege/three/siege3dView');
 const runnerView = () => import('../runner/view');
 
 /** Boots the game core, the debug menu, and the camp. */
@@ -65,12 +68,15 @@ export async function startApp(): Promise<void> {
         booted.feel.woodcutting,
         booted.feel.splitting,
         booted.feel.firemaking,
+        booted.feel.siege,
         booted.feel.runner,
       ],
       choices: [
         booted.choices.treeStyle,
         booted.choices.scenery,
         booted.choices.vibration,
+        booted.choices.warTent,
+        booted.choices.siegeGhost,
         booted.choices.runnerSpears,
         booted.choices.runnerLift,
       ],
@@ -107,12 +113,20 @@ export async function startApp(): Promise<void> {
   const wood3dElement = byId('screen-wood3d');
   const splitting3dElement = byId('screen-splitting3d');
   const firemaking3dElement = byId('screen-firemaking3d');
+  const siege3dElement = byId('screen-siege3d');
   const backButton = new BackButton(byId('back-button'), () => {
     run(() => navigation.back())();
   });
   let phaser: PhaserView | undefined;
   const run = (action: () => Promise<void>) => () => {
-    action().catch(showFatal);
+    action().catch((error: unknown) => {
+      logger.log('app.error', {
+        message: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? (error.stack ?? '') : '',
+        screen: document.body.dataset.screen ?? 'none',
+      });
+      showFatal(error);
+    });
   };
 
   const screens: Record<ScreenId, LazyScreen> = {
@@ -127,6 +141,8 @@ export async function startApp(): Promise<void> {
         onChestTap: run(() => navigation.openWarchest()),
         onWarchestClose: run(() => navigation.back()),
       });
+      const gl = phaser.glContext();
+      if (gl) noteContext(gl);
       return phaser;
     }),
     wood3d: lazyScreen(
@@ -180,6 +196,24 @@ export async function startApp(): Promise<void> {
       },
       async () => {
         await (await firemakingView()).Firemaking3DView.preload();
+      },
+    ),
+    siege3d: lazyScreen(
+      siege3dElement,
+      async () => {
+        const { Siege3DView } = await siegeView();
+        return Siege3DView.create(siege3dElement, {
+          game,
+          logger,
+          feel: feel.siege,
+          ghost: choices.siegeGhost,
+          haptics,
+          onLeave: run((): Promise<void> => navigation.back()),
+        });
+      },
+      async () => {
+        // The physics engine's wasm starts here too, so the first throw never waits for it.
+        await (await siegeView()).Siege3DView.preload();
       },
     ),
     three: lazyScreen(
@@ -277,7 +311,12 @@ export async function startApp(): Promise<void> {
       showPhaserStation: async (sceneKey, stationId) => {
         (await phaserView()).showStation(sceneKey, stationId);
       },
-      showScreenStation: (screen, stationId) => showStationScreen(SCREENS[screen], stationId),
+      showScreenStation: (screen, stationId) =>
+        showStationScreen(
+          // Debug → Options → War tent opens: the gate runner the siege replaced, to compare.
+          screen === 'siege3d' && choices.warTent.value === 'runner' ? 'three' : SCREENS[screen],
+          stationId,
+        ),
     },
     (view) => {
       document.body.dataset.view = viewName(view);

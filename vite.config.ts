@@ -22,8 +22,9 @@ export default defineConfig({
   },
   build: {
     target: 'es2022',
-    // Phaser alone is ~1.5 MB minified; that's expected, not a regression.
-    chunkSizeWarningLimit: 2000,
+    // Phaser alone is ~1.5 MB minified, and the siege's physics engine (Rapier, its wasm inlined)
+    // ~4.4 MB, loaded only with the siege: that's expected, not a regression.
+    chunkSizeWarningLimit: 4500,
   },
   test: {
     include: ['tests/**/*.test.ts'],

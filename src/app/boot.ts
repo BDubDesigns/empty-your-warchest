@@ -12,7 +12,14 @@ import {
   type LiveChoice,
   type LiveTuning,
 } from '../core';
-import type { FiremakingFeel, RunnerFeel, SplittingFeel, WoodcuttingFeel } from '../data';
+import { watchForTrouble } from './trouble';
+import type {
+  FiremakingFeel,
+  RunnerFeel,
+  SiegeFeel,
+  SplittingFeel,
+  WoodcuttingFeel,
+} from '../data';
 import { loadGameData } from '../data';
 import {
   liftModeChoice,
@@ -22,7 +29,15 @@ import {
   type SpearSource,
 } from '../runner/feel';
 import { checkMechanics } from '../stations';
+import { checkForts } from '../stations/siege/logic/fairness';
 import { firemakingFeel } from '../stations/firemaking/feel';
+import {
+  ghostChoice,
+  siegeFeel,
+  warTentChoice,
+  type GhostLine,
+  type WarTent,
+} from '../stations/siege/feel';
 import { splittingFeel } from '../stations/splitting/feel';
 import {
   ClearingPicker,
@@ -45,6 +60,7 @@ export interface Booted {
     woodcutting: LiveTuning<WoodcuttingFeel>;
     splitting: LiveTuning<SplittingFeel>;
     firemaking: LiveTuning<FiremakingFeel>;
+    siege: LiveTuning<SiegeFeel>;
     runner: LiveTuning<RunnerFeel>;
   };
   /** Picks kept on this phone, shown in the debug menu. */
@@ -54,6 +70,8 @@ export interface Booted {
     vibration: LiveChoice<Vibration>;
     runnerSpears: LiveChoice<SpearSource>;
     runnerLift: LiveChoice<LiftMode>;
+    warTent: LiveChoice<WarTent>;
+    siegeGhost: LiveChoice<GhostLine>;
   };
   haptics: Haptics;
   /** Which clearing each woodcutting round plays. */
@@ -77,6 +95,8 @@ async function openSink(): Promise<{ sink: EventSink; fallback?: string }> {
 export async function bootGame(buildLabel: string): Promise<Booted> {
   const data = loadGameData();
   checkMechanics(data);
+  // Every siege fort must be fair (walls block, the banner's out of reach until the end).
+  checkForts(data);
   const clock = systemClock;
   const { sink, fallback } = await openSink();
   const logger = new EventLogger(sink, clock, crypto.randomUUID());
@@ -90,6 +110,7 @@ export async function bootGame(buildLabel: string): Promise<Booted> {
     },
   });
   if (fallback) logger.log('logger.memoryFallback', { error: fallback });
+  watchForTrouble(logger);
 
   const saves = new SaveStore(localStorageStore(), data, clock);
   const loaded = saves.load();
@@ -124,6 +145,7 @@ export async function bootGame(buildLabel: string): Promise<Booted> {
     woodcutting: woodcuttingFeel(data.woodcutting.feel, localStorageStore()),
     splitting: splittingFeel(data.splitting.feel, localStorageStore()),
     firemaking: firemakingFeel(data.firemaking.feel, localStorageStore()),
+    siege: siegeFeel(data.siege.feel, localStorageStore()),
     runner: runnerFeel(data.runner.feel, localStorageStore()),
   };
   const choices = {
@@ -132,6 +154,8 @@ export async function bootGame(buildLabel: string): Promise<Booted> {
     vibration: vibrationChoice(localStorageStore()),
     runnerSpears: spearSourceChoice(localStorageStore()),
     runnerLift: liftModeChoice(localStorageStore()),
+    warTent: warTentChoice(localStorageStore()),
+    siegeGhost: ghostChoice(localStorageStore()),
   };
   const haptics = new Haptics(choices.vibration);
   const clearings = new ClearingPicker(game);

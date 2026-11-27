@@ -2,7 +2,8 @@ import { readFile } from 'node:fs/promises';
 import { expect, test, type Page } from '@playwright/test';
 import { stations } from '../src/data/stations';
 
-const tent = stations.find((station) => station.mechanic === 'runner');
+// The War tent opens the siege now; Debug → Options → War tent opens puts the runner back.
+const tent = stations.find((station) => station.mechanic === 'siege');
 
 async function tapCampSpot(page: Page, spot: { x: number; y: number }): Promise<void> {
   const box = await page.locator('#screen-phaser canvas').boundingBox();
@@ -17,11 +18,12 @@ test('Attack Run: steer through gates, clash, break the wall, see results, run a
 }) => {
   // Headless browsers render 3D in software, so a run takes a while.
   test.setTimeout(150_000);
-  if (!tent) throw new Error('No runner station in data');
+  if (!tent) throw new Error('No War tent in data');
   const errors: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));
   // A fast run with plenty of free debug spears, through the debug options and sliders.
   await page.addInitScript(() => {
+    localStorage.setItem('warchest.warTent', 'runner');
     localStorage.setItem('warchest.runner.spears', 'sliders');
     localStorage.setItem('warchest.runner.lift', 'run');
     localStorage.setItem(
@@ -101,7 +103,10 @@ test('Attack Run: steer through gates, clash, break the wall, see results, run a
 test('Attack Run: with an empty warchest, it says your recruits will fight unarmed', async ({
   page,
 }) => {
-  if (!tent) throw new Error('No runner station in data');
+  if (!tent) throw new Error('No War tent in data');
+  await page.addInitScript(() => {
+    localStorage.setItem('warchest.warTent', 'runner');
+  });
   await page.goto('/');
   await tapCampSpot(page, tent.camp);
   await expect(page.locator('.runner-hint')).toContainText('No spears in the warchest');
