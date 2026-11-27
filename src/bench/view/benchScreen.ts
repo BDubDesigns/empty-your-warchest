@@ -1,6 +1,11 @@
 import * as THREE from 'three';
 import type { EventLogger } from '../../core';
-import { loadBenchData, type BenchData, type BenchPixelRatio } from '../../data/bench';
+import {
+  loadBenchData,
+  type BenchData,
+  type BenchPixelRatio,
+  type BenchShadows,
+} from '../../data/bench';
 import { loadPhysics } from '../../stations/siege/logic/physics';
 import { CollapseSim, type BodyPose } from '../logic/collapse';
 import { cameraAt, walkerAt } from '../logic/layout';
@@ -41,7 +46,7 @@ interface DeviceInfo {
 export interface BenchResult {
   pack: string;
   scale: number;
-  shadows: boolean;
+  shadows: BenchShadows;
   physics: boolean;
   matte: boolean;
   pixelRatio: number;
@@ -135,7 +140,7 @@ class Bench {
   readonly #choice: {
     pack: string;
     scale: number;
-    shadows: boolean;
+    shadows: BenchShadows;
     physics: boolean;
     matte: boolean;
     pixelRatio: BenchPixelRatio;
@@ -155,7 +160,7 @@ class Bench {
     this.#choice = {
       pack: first?.id ?? '',
       scale: data.scales[0] ?? 1,
-      shadows: true,
+      shadows: 'on',
       physics: true,
       matte: false,
       pixelRatio: data.pixelRatios[0] ?? 'game',
@@ -290,7 +295,11 @@ class Bench {
       ),
       picker(
         'Shadows',
-        onOff,
+        [
+          { label: 'On', value: 'on' as const },
+          { label: 'Off', value: 'off' as const },
+          { label: 'Blob', value: 'blob' as const },
+        ],
         () => choice.shadows,
         (value) => (choice.shadows = value),
       ),
@@ -360,7 +369,7 @@ class Bench {
     const device = this.#device;
     const canvas = this.#renderer.domElement;
     line.textContent =
-      `${this.#deps.buildLabel} · GPU: ${device.gpu} · devicePixelRatio ${String(device.devicePixelRatio)}` +
+      `${this.#deps.buildLabel} · GPU: ${device.gpu} · devicePixelRatio ${String(Math.round(device.devicePixelRatio * 100) / 100)}` +
       ` · canvas ${String(canvas.width)}×${String(canvas.height)} · ${device.webgl} · ${device.userAgent}`;
   }
 
@@ -447,7 +456,7 @@ class Bench {
     if (!pack) throw new Error(`No pack "${run.pack}"`);
     const renderer = this.#renderer;
     const camera = this.#camera;
-    const title = `${label} · ${pack.name} · ${String(run.scale)}×${run.shadows ? '' : ' · no shadows'}${run.physics ? '' : ' · no physics'}${run.matte ? ' · matte' : ''}`;
+    const title = `${label} · ${pack.name} · ${String(run.scale)}×${run.shadows === 'on' ? '' : ` · ${run.shadows === 'off' ? 'no' : 'blob'} shadows`}${run.physics ? '' : ' · no physics'}${run.matte ? ' · matte' : ''}`;
     this.#hudText.textContent = `${title} · loading…`;
     const pixelRatio = pixelRatioFor(
       run.pixelRatio,
@@ -455,7 +464,7 @@ class Bench {
       data.renderer.maxPixelRatio,
     );
     renderer.setPixelRatio(pixelRatio);
-    renderer.shadowMap.enabled = run.shadows;
+    renderer.shadowMap.enabled = run.shadows === 'on';
     this.#resize();
     // Last run's scene is gone; clear the screen so its last frame doesn't show while loading.
     renderer.setClearColor(0x111111);
@@ -502,6 +511,8 @@ class Bench {
         await nextFrame();
       }
       const warmMs = performance.now() - warmStart;
+      // Measured now the textures have loaded (and been uploaded).
+      const held = built.measure();
 
       const frameMs: number[] = [];
       const cpuMs: number[] = [];
@@ -533,6 +544,7 @@ class Bench {
             }
             character.mixer.update(dt);
           }
+          built.peopleMoved();
           animationMs.push(performance.now() - animating);
           if (sim) {
             const stepping = performance.now();
@@ -540,11 +552,10 @@ class Bench {
               sim.collapse(data.layout.seed);
               sim.step(dt);
               const pose = this.#pose;
-              built.falling.forEach((pivot, index) => {
-                sim.pose(index, pose);
-                pivot.position.set(pose.x, pose.y, pose.z);
-                pivot.quaternion.set(pose.qx, pose.qy, pose.qz, pose.qw);
-              });
+              for (let index = 0; index < sim.count; index++) {
+                built.setFalling(index, sim.pose(index, pose));
+              }
+              built.fallingMoved();
               physicsMs.push(performance.now() - stepping);
             }
           }
@@ -585,8 +596,8 @@ class Bench {
         geometries: info.memory.geometries,
         textures: info.memory.textures,
         programs: info.programs?.length ?? 0,
-        textureMB: built.textureMB,
-        geometryMB: built.geometryMB,
+        textureMB: held.textureMB,
+        geometryMB: held.geometryMB,
         loadMs: Math.round(loadMs),
         warmMs: Math.round(warmMs),
         heapMB: heapMB(),
@@ -608,7 +619,7 @@ class Bench {
       String(index),
       pack?.name ?? result.pack,
       `${String(result.scale)}×`,
-      result.shadows ? 'on' : 'off',
+      result.shadows,
       String(Math.round(result.pixelRatio * 100) / 100),
       [result.note, result.physics ? '' : 'no physics', result.matte && !result.note ? 'matte' : '']
         .filter(Boolean)

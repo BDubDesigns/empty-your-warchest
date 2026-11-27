@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { GLTFLoader, type GLTF } from 'three/addons/loaders/GLTFLoader.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';
 import { groundMesh } from '../../app/ground';
 import { matte } from '../../app/models';
@@ -7,13 +8,21 @@ import { scatter } from '../../app/scatter';
 import { benchRoles, type BenchData, type BenchPack, type BenchRole } from '../../data/bench';
 import { buildGuard } from '../../stations/siege/three/figures';
 import { makeTextures } from '../../stations/siege/three/looks';
-import { layoutScene, type PlacedCharacter, type SceneLayout, type Size } from '../logic/layout';
+import type { BodyPose } from '../logic/collapse';
+import {
+  layoutScene,
+  type Placed,
+  type PlacedCharacter,
+  type SceneLayout,
+  type Size,
+} from '../logic/layout';
 import { textureBytes } from '../logic/stats';
 import type { RunSettings } from '../logic/plan';
 
 // One stress-test scene in three.js: a pack's pieces loaded (fresh every run, so each run pays its
 // own loading and uploading), measured, and put where the layout says. The renderer settings and
-// lights are the siege's.
+// lights are the siege's. A batched pack is drawn the cheap way: what stands merged into a mesh per
+// material per building, what falls drawn as instances that follow their physics bodies.
 
 /** A model laid along x, its outside facing +z, standing on y = 0 about its middle. */
 interface Shape {
@@ -45,16 +54,67 @@ export interface PackScene {
   scene: THREE.Scene;
   sun: THREE.DirectionalLight;
   layout: SceneLayout;
-  /** The pieces that come down, in the layout's collapse order, each turned about its middle. */
-  falling: THREE.Object3D[];
+  /** Puts falling piece `index` (in the layout's collapse order) where its body is. */
+  setFalling(index: number, pose: BodyPose): void;
+  /** Once a frame, after the falling pieces have been moved. */
+  fallingMoved(): void;
+  /** Once a frame, after the people have moved: their blob shadows follow them. */
+  peopleMoved(): void;
   characters: SceneCharacter[];
-  counts: { pieces: number; meshes: number; bodies: number; characters: number; trees: number };
-  /** Rough GPU memory (MB) for the scene's textures (with mipmaps) and geometry. */
-  textureMB: number;
-  geometryMB: number;
-  textureCount: number;
+  counts: {
+    pieces: number;
+    /** Meshes drawn for the pieces (a merged or instanced one counts once). */
+    meshes: number;
+    bodies: number;
+    characters: number;
+    trees: number;
+  };
+  /**
+   * Rough GPU memory (MB) for the scene's textures (with mipmaps) and geometry. Call it once the
+   * textures have loaded.
+   */
+  measure(): { textureMB: number; geometryMB: number; textureCount: number };
   /** Frees everything this scene made (not the ground's shared textures). */
   dispose(): void;
+}
+
+/** A shape's meshes, each with its place in the shape. */
+interface Part {
+  geometry: THREE.BufferGeometry;
+  material: THREE.Material;
+  matrix: THREE.Matrix4;
+}
+
+function partsOf(shape: Shape): Part[] {
+  const parts: Part[] = [];
+  shape.model.updateMatrixWorld(true);
+  shape.model.traverse((child) => {
+    if (!(child instanceof THREE.Mesh)) return;
+    const list = child.material as THREE.Material | THREE.Material[];
+    const material = Array.isArray(list) ? list[0] : list;
+    if (!material) return;
+    parts.push({
+      geometry: child.geometry as THREE.BufferGeometry,
+      material,
+      matrix: child.matrixWorld.clone(),
+    });
+  });
+  return parts;
+}
+
+/** A soft round shadow, for the blobs under people. */
+function blobTexture(): THREE.Texture {
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = 64;
+  const context = canvas.getContext('2d');
+  if (!context) throw new Error('No 2D canvas');
+  const fade = context.createRadialGradient(32, 32, 0, 32, 32, 32);
+  fade.addColorStop(0, 'rgba(0,0,0,1)');
+  fade.addColorStop(0.6, 'rgba(0,0,0,0.6)');
+  fade.addColorStop(1, 'rgba(0,0,0,0)');
+  context.fillStyle = fade;
+  context.fillRect(0, 0, 64, 64);
+  return new THREE.CanvasTexture(canvas);
 }
 
 /** Wraps `parts` turned by `turn` so they stand on y = 0 about their middle, and measures them. */
@@ -317,7 +377,7 @@ export async function buildPackScene(
   const [fx, fz] = places.fort.at;
   sun.position.set(fx + look.sunFrom[0], look.sunFrom[1], fz + look.sunFrom[2]);
   sun.target.position.set(fx, 0, fz);
-  sun.castShadow = run.shadows;
+  sun.castShadow = run.shadows === 'on';
   sun.shadow.mapSize.set(look.shadowMapSize, look.shadowMapSize);
   const shadow = sun.shadow.camera;
   shadow.left = -look.shadowHalfWidth;
@@ -334,30 +394,145 @@ export async function buildPackScene(
   scene.add(ground);
 
   const pieces = new THREE.Group();
-  const falling: THREE.Object3D[] = [];
-  let meshes = 0;
-  for (const placed of layout.pieces) {
+  const shapeFor = (placed: Placed): Shape => {
     const shape =
       'role' in placed.piece ? library.roles[placed.piece.role] : library.props[placed.piece.prop];
     if (!shape) throw new Error(`${pack.name} has nothing to draw for a piece`);
-    const copy = shape.model.clone();
-    if (placed.collapse) {
-      // About its middle, so the physics body's pose is the pivot's.
-      const pivot = new THREE.Group();
-      copy.position.y = -shape.size[1] / 2;
-      pivot.add(copy);
-      pivot.scale.setScalar(placed.scale);
-      pivot.position.set(placed.x, placed.y + placed.size[1] / 2, placed.z);
-      pivot.rotation.y = placed.turn;
-      pieces.add(pivot);
-      falling.push(pivot);
-    } else {
-      copy.scale.setScalar(placed.scale);
-      copy.position.set(placed.x, placed.y, placed.z);
-      copy.rotation.y = placed.turn;
-      pieces.add(copy);
+    return shape;
+  };
+  const up = new THREE.Vector3(0, 1, 0);
+  /** A falling piece's matrix from its body's pose (about its middle). */
+  const middleMatrix = (placed: Placed, pose: BodyPose, out: THREE.Matrix4) =>
+    out
+      .compose(
+        new THREE.Vector3(pose.x, pose.y, pose.z),
+        new THREE.Quaternion(pose.qx, pose.qy, pose.qz, pose.qw),
+        new THREE.Vector3(placed.scale, placed.scale, placed.scale),
+      )
+      .multiply(new THREE.Matrix4().makeTranslation(0, -shapeFor(placed).size[1] / 2, 0));
+  const restingPose = (placed: Placed): BodyPose => {
+    const turn = new THREE.Quaternion().setFromAxisAngle(up, placed.turn);
+    return {
+      x: placed.x,
+      y: placed.y + placed.size[1] / 2,
+      z: placed.z,
+      qx: turn.x,
+      qy: turn.y,
+      qz: turn.z,
+      qw: turn.w,
+    };
+  };
+  const fallingPlaced = layout.pieces.filter((placed) => placed.collapse);
+  let setFalling: (index: number, pose: BodyPose) => void;
+  let fallingMoved: () => void = () => undefined;
+  if (pack.batched) {
+    // Falling pieces: one instanced mesh per part of each shape, every copy of it an instance.
+    const kinds = new Map<Shape, { parts: Part[]; meshes: THREE.InstancedMesh[]; count: number }>();
+    const slots = fallingPlaced.map((placed) => {
+      const shape = shapeFor(placed);
+      let kind = kinds.get(shape);
+      if (!kind) {
+        kind = { parts: partsOf(shape), meshes: [], count: 0 };
+        kinds.set(shape, kind);
+      }
+      return { kind, slot: kind.count++ };
+    });
+    for (const kind of kinds.values()) {
+      kind.meshes = kind.parts.map((part) => {
+        const mesh = new THREE.InstancedMesh(part.geometry, part.material, kind.count);
+        // The instances move about: don't cull by where they started.
+        mesh.frustumCulled = false;
+        pieces.add(mesh);
+        return mesh;
+      });
     }
+    const dirty = new Set<THREE.InstancedMesh>();
+    const middle = new THREE.Matrix4();
+    const each = new THREE.Matrix4();
+    setFalling = (index, pose) => {
+      const placed = fallingPlaced[index];
+      const at = slots[index];
+      if (!placed || !at) return;
+      middleMatrix(placed, pose, middle);
+      at.kind.meshes.forEach((mesh, part) => {
+        const matrix = at.kind.parts[part]?.matrix;
+        if (!matrix) return;
+        mesh.setMatrixAt(at.slot, each.multiplyMatrices(middle, matrix));
+        dirty.add(mesh);
+      });
+    };
+    fallingMoved = () => {
+      for (const mesh of dirty) mesh.instanceMatrix.needsUpdate = true;
+      dirty.clear();
+    };
+    // Standing pieces: merged into one mesh per material for each building of each copy.
+    const buildings = new Map<string, Map<THREE.Material, THREE.BufferGeometry[]>>();
+    const placing = new THREE.Matrix4();
+    for (const placed of layout.pieces) {
+      if (placed.collapse) continue;
+      const key = `${String(placed.copy)}:${placed.group}`;
+      let building = buildings.get(key);
+      if (!building) {
+        building = new Map();
+        buildings.set(key, building);
+      }
+      placing.compose(
+        new THREE.Vector3(placed.x, placed.y, placed.z),
+        new THREE.Quaternion().setFromAxisAngle(up, placed.turn),
+        new THREE.Vector3(placed.scale, placed.scale, placed.scale),
+      );
+      for (const part of partsOf(shapeFor(placed))) {
+        const geometry = part.geometry.clone().applyMatrix4(placing.clone().multiply(part.matrix));
+        const list = building.get(part.material) ?? [];
+        list.push(geometry);
+        building.set(part.material, list);
+      }
+    }
+    for (const building of buildings.values()) {
+      for (const [material, geometries] of building) {
+        // (null if their attributes differ, whatever its types say.)
+        const merged = mergeGeometries(geometries) as THREE.BufferGeometry | null;
+        if (merged) {
+          pieces.add(new THREE.Mesh(merged, material));
+          for (const geometry of geometries) geometry.dispose();
+        } else {
+          // Parts that can't be merged (their attributes differ) are drawn one by one.
+          for (const geometry of geometries) pieces.add(new THREE.Mesh(geometry, material));
+        }
+      }
+    }
+  } else {
+    const pivots: THREE.Object3D[] = [];
+    for (const placed of layout.pieces) {
+      const shape = shapeFor(placed);
+      const copy = shape.model.clone();
+      if (placed.collapse) {
+        // About its middle, so the physics body's pose is the pivot's.
+        const pivot = new THREE.Group();
+        copy.position.y = -shape.size[1] / 2;
+        pivot.add(copy);
+        pivot.scale.setScalar(placed.scale);
+        pieces.add(pivot);
+        pivots.push(pivot);
+      } else {
+        copy.scale.setScalar(placed.scale);
+        copy.position.set(placed.x, placed.y, placed.z);
+        copy.rotation.y = placed.turn;
+        pieces.add(copy);
+      }
+    }
+    setFalling = (index, pose) => {
+      const pivot = pivots[index];
+      if (!pivot) return;
+      pivot.position.set(pose.x, pose.y, pose.z);
+      pivot.quaternion.set(pose.qx, pose.qy, pose.qz, pose.qw);
+    };
   }
+  fallingPlaced.forEach((placed, index) => {
+    setFalling(index, restingPose(placed));
+  });
+  fallingMoved();
+  let meshes = 0;
   pieces.traverse((child) => {
     if (child instanceof THREE.Mesh) {
       child.castShadow = child.receiveShadow = true;
@@ -400,60 +575,102 @@ export async function buildPackScene(
   });
   scene.add(people);
 
-  if (run.matte) makeMatte(scene);
+  // The cheapest shadows: a soft blob under each person, all one instanced mesh.
+  let peopleMoved: () => void = () => undefined;
+  if (run.shadows === 'blob' && characters.length > 0) {
+    const blobs = new THREE.InstancedMesh(
+      new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2),
+      new THREE.MeshBasicMaterial({
+        map: blobTexture(),
+        color: 0x000000,
+        transparent: true,
+        opacity: data.blob.opacity,
+        depthWrite: false,
+      }),
+      characters.length,
+    );
+    blobs.frustumCulled = false;
+    const width = data.blob.width;
+    const place = new THREE.Matrix4();
+    const size = new THREE.Vector3(width, 1, width);
+    const still = new THREE.Quaternion();
+    const at = new THREE.Vector3();
+    peopleMoved = () => {
+      characters.forEach((character, index) => {
+        at.set(character.root.position.x, 0.02, character.root.position.z);
+        blobs.setMatrixAt(index, place.compose(at, still, size));
+      });
+      blobs.instanceMatrix.needsUpdate = true;
+    };
+    peopleMoved();
+    scene.add(blobs);
+  }
+
+  if (run.matte || pack.matte) makeMatte(scene);
 
   // What it holds, for the results and for freeing it after.
-  const geometries = new Set<THREE.BufferGeometry>();
-  const materials = new Set<THREE.Material>();
-  const textures = new Set<THREE.Texture>();
-  const instanced: THREE.InstancedMesh[] = [];
   const groundMaterial = ground.material;
-  scene.traverse((child) => {
-    if (!(child instanceof THREE.Mesh)) return;
-    geometries.add(child.geometry as THREE.BufferGeometry);
-    if (child instanceof THREE.InstancedMesh) instanced.push(child as THREE.InstancedMesh);
-    const list = child.material as THREE.Material | THREE.Material[];
-    for (const material of Array.isArray(list) ? list : [list]) {
-      materials.add(material);
-      for (const texture of texturesOf(material)) textures.add(texture);
-    }
-  });
-  let textureBytesTotal = 0;
-  for (const texture of textures) {
-    const [width, height] = imageSize(texture);
-    const mipmaps = texture.generateMipmaps && texture.minFilter !== THREE.LinearFilter;
-    textureBytesTotal += textureBytes(width, height, { mipmaps });
-  }
-  if (run.shadows) {
-    textureBytesTotal += textureBytes(look.shadowMapSize, look.shadowMapSize, { mipmaps: false });
-  }
-  let geometryBytes = 0;
-  for (const geometry of geometries) {
-    for (const attribute of Object.values(geometry.attributes)) {
-      if ('array' in attribute) geometryBytes += attribute.array.byteLength;
-    }
-    geometryBytes += geometry.index?.array.byteLength ?? 0;
-  }
-  for (const mesh of instanced) geometryBytes += mesh.instanceMatrix.array.byteLength;
+  const holdings = () => {
+    const geometries = new Set<THREE.BufferGeometry>();
+    const materials = new Set<THREE.Material>();
+    const textures = new Set<THREE.Texture>();
+    const instanced: THREE.InstancedMesh[] = [];
+    scene.traverse((child) => {
+      if (!(child instanceof THREE.Mesh)) return;
+      geometries.add(child.geometry as THREE.BufferGeometry);
+      if (child instanceof THREE.InstancedMesh) instanced.push(child as THREE.InstancedMesh);
+      const list = child.material as THREE.Material | THREE.Material[];
+      for (const material of Array.isArray(list) ? list : [list]) {
+        materials.add(material);
+        for (const texture of texturesOf(material)) textures.add(texture);
+      }
+    });
+    return { geometries, materials, textures, instanced };
+  };
   const MB = 1024 * 1024;
 
   return {
     scene,
     sun,
     layout,
-    falling,
+    setFalling,
+    fallingMoved,
+    peopleMoved,
     characters,
     counts: {
       pieces: layout.pieces.length,
       meshes,
-      bodies: falling.length,
+      bodies: fallingPlaced.length,
       characters: characters.length,
       trees: layout.trees.length,
     },
-    textureMB: Math.round((textureBytesTotal / MB) * 10) / 10,
-    geometryMB: Math.round((geometryBytes / MB) * 10) / 10,
-    textureCount: textures.size,
+    measure() {
+      const { geometries, textures, instanced } = holdings();
+      let textureTotal = 0;
+      for (const texture of textures) {
+        const [width, height] = imageSize(texture);
+        const mipmaps = texture.generateMipmaps && texture.minFilter !== THREE.LinearFilter;
+        textureTotal += textureBytes(width, height, { mipmaps });
+      }
+      if (run.shadows === 'on') {
+        textureTotal += textureBytes(look.shadowMapSize, look.shadowMapSize, { mipmaps: false });
+      }
+      let geometryTotal = 0;
+      for (const geometry of geometries) {
+        for (const attribute of Object.values(geometry.attributes)) {
+          if ('array' in attribute) geometryTotal += attribute.array.byteLength;
+        }
+        geometryTotal += geometry.index?.array.byteLength ?? 0;
+      }
+      for (const mesh of instanced) geometryTotal += mesh.instanceMatrix.array.byteLength;
+      return {
+        textureMB: Math.round((textureTotal / MB) * 10) / 10,
+        geometryMB: Math.round((geometryTotal / MB) * 10) / 10,
+        textureCount: textures.size,
+      };
+    },
     dispose() {
+      const { geometries, materials, instanced } = holdings();
       for (const character of characters) character.mixer.stopAllAction();
       for (const mesh of instanced) mesh.dispose();
       for (const geometry of geometries) geometry.dispose();

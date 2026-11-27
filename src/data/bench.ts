@@ -77,6 +77,13 @@ const packSchema = z
     pieces: name.optional(),
     /** Image paths rewritten as the pack loads: the heavy variant's full-size textures. */
     textures: z.object({ from: name, to: name }).optional(),
+    /**
+     * Drawn for speed: the pieces that stand merged into one mesh per material per building, and
+     * the ones that come down drawn as instances (one draw call for every copy of a piece).
+     */
+    batched: z.boolean().default(false),
+    /** Matte (Lambert) materials with only their colour maps, always. */
+    matte: z.boolean().default(false),
     /** A GLB holding the characters' clips, when they're not in each character's own file. */
     animations: name.optional(),
     roles: z.partialRecord(z.enum(benchRoles), pieceSchema).default({}),
@@ -103,11 +110,18 @@ const packSchema = z
     }
   });
 
+/**
+ * The sun's real-time shadows, none, or none but a cheap round blob under each person (the
+ * lowest tier a phone might get).
+ */
+export const benchShadows = ['on', 'off', 'blob'] as const;
+export type BenchShadows = (typeof benchShadows)[number];
+
 /** One run in Run all. */
 const runSchema = z.object({
   pack: name,
   scale: positiveInt,
-  shadows: z.boolean().default(true),
+  shadows: z.enum(benchShadows).default('on'),
   physics: z.boolean().default(true),
   /** Swap every material for a matte (Lambert) one with only its colour map, as the siege uses. */
   matte: z.boolean().default(false),
@@ -221,6 +235,8 @@ export const benchDataShape = z
           }
         });
       }),
+    /** The blob under each person when there are no real shadows: its width (m) and darkness. */
+    blob: z.object({ width: positive, opacity: z.number().min(0).max(1) }),
     /** The boxes pack's looks: the siege's block colours, and sizes (m) before fitting. */
     boxes: z.object({
       stone: z.number().int().nonnegative(),
@@ -293,6 +309,12 @@ const villageProps = [
 const villageCharacters = ['Male_Peasant', 'Female_Peasant', 'Male_Ranger', 'Female_Ranger'].map(
   (outfit) => ({ url: `bench/village/${outfit}.glb`, idle: 'idle', walk: 'walk' }),
 );
+const villageLiteCharacters = [
+  'Male_Peasant',
+  'Female_Peasant',
+  'Male_Ranger',
+  'Female_Ranger',
+].map((outfit) => ({ url: `bench/village-lite/${outfit}.glb`, idle: 'idle', walk: 'walk' }));
 const villageTrees = [
   { url: 'models/quaternius/CommonTree_1.gltf' },
   { url: 'models/quaternius/CommonTree_3.gltf' },
@@ -402,6 +424,7 @@ export const bench = {
     { at: 18, from: [0, 1.8, 16], look: [0, 3, -20] },
     { at: 20, from: [0, 1.8, 16], look: [0, 3, -20] },
   ],
+  blob: { width: 1.1, opacity: 0.45 },
   boxes: {
     stone: 0x9b978d,
     wood: 0xc39a66,
@@ -478,6 +501,48 @@ export const bench = {
       characters: villageCharacters,
     },
     {
+      id: 'village-lite',
+      name: 'Village optimised',
+      about:
+        'The village made cheap: colour maps only at 512 px (an atlas a person), standing pieces merged, falling ones instanced, people and trees simplified',
+      kind: 'models',
+      pieces: 'bench/village-lite/pieces.glb',
+      animations: 'bench/village/animations.glb',
+      batched: true,
+      matte: true,
+      roles: { ...villageRoles, corner: { nodes: ['Corner_Exterior_Wood'] } },
+      fort: { shape: 'ring', storeys: 3 },
+      tower: { shape: 'ring', storeys: 4 },
+      house: { shape: 'ring', storeys: 2 },
+      props: villageProps,
+      trees: [
+        { url: 'bench/village-lite/CommonTree_3.glb' },
+        { url: 'bench/village-lite/Pine_1.glb' },
+      ],
+      characters: villageLiteCharacters,
+    },
+    {
+      id: 'village-lite-1024',
+      name: 'Village optimised 1024',
+      about: 'Village optimised with its colour maps at 1024 px',
+      kind: 'models',
+      pieces: 'bench/village-lite/pieces.glb',
+      textures: { from: '/tex-512/', to: '/tex-1024/' },
+      animations: 'bench/village/animations.glb',
+      batched: true,
+      matte: true,
+      roles: { ...villageRoles, corner: { nodes: ['Corner_Exterior_Wood'] } },
+      fort: { shape: 'ring', storeys: 3 },
+      tower: { shape: 'ring', storeys: 4 },
+      house: { shape: 'ring', storeys: 2 },
+      props: villageProps,
+      trees: [
+        { url: 'bench/village-lite/CommonTree_3.glb' },
+        { url: 'bench/village-lite/Pine_1.glb' },
+      ],
+      characters: villageLiteCharacters,
+    },
+    {
       id: 'village-heavy',
       name: 'Village heavy',
       about: 'The village with its full-size textures (2048 px; the outfits 4096 px)',
@@ -494,23 +559,27 @@ export const bench = {
       characters: villageCharacters,
     },
   ],
-  // Under 8 minutes on a phone: every pack at each scale, then the costs one at a time at 1×. The
-  // boxes again near the end show how much the phone has slowed as it warmed up; the heavy village
-  // goes last, as it may run out of memory.
+  // Under 8 minutes on a phone: each pack at 1× and 4× (the village at 2× too), then the costs one
+  // at a time at 1×, and the optimised village against the plain one. The boxes again near the end
+  // show how much the phone has slowed as it warmed up; the heavy village goes last, as it may run
+  // out of memory.
   runAll: [
     { pack: 'boxes', scale: 1 },
-    { pack: 'boxes', scale: 2 },
     { pack: 'boxes', scale: 4 },
-    { pack: 'boxes', scale: 1, shadows: false, note: 'no shadows' },
+    { pack: 'boxes', scale: 1, shadows: 'off', note: 'no shadows' },
     { pack: 'kenney', scale: 1 },
-    { pack: 'kenney', scale: 2 },
     { pack: 'kenney', scale: 4 },
-    { pack: 'kenney', scale: 1, shadows: false, note: 'no shadows' },
+    { pack: 'kenney', scale: 1, shadows: 'off', note: 'no shadows' },
     { pack: 'village', scale: 1 },
     { pack: 'village', scale: 2 },
     { pack: 'village', scale: 4 },
-    { pack: 'village', scale: 1, shadows: false, note: 'no shadows' },
+    { pack: 'village', scale: 1, shadows: 'off', note: 'no shadows' },
     { pack: 'village', scale: 1, matte: true, note: 'matte materials' },
+    { pack: 'village-lite', scale: 1 },
+    { pack: 'village-lite', scale: 1, shadows: 'off', note: 'no shadows' },
+    { pack: 'village-lite', scale: 1, shadows: 'blob', note: 'blob shadows' },
+    { pack: 'village-lite', scale: 2 },
+    { pack: 'village-lite-1024', scale: 1, note: '1024 px colour maps' },
     { pack: 'boxes', scale: 1, note: 'again: has it slowed as it warmed?' },
     { pack: 'village-heavy', scale: 1, note: 'full-size textures' },
   ],

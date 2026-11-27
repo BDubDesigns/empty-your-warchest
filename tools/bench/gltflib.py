@@ -71,8 +71,10 @@ class Source:
 
 
 class Builder:
-    def __init__(self, image_uri):
-        """`image_uri(basename) -> uri` names each image in the output."""
+    def __init__(self, image_uri, colour_only=False):
+        """`image_uri(basename) -> uri` names each image in the output; `colour_only` drops every
+        map but the colour map (matte materials)."""
+        self.colour_only = colour_only
         self.json = {'asset': {'version': '2.0', 'generator': 'warchest bench builder'},
                      'scenes': [{'nodes': []}], 'scene': 0, 'nodes': [], 'meshes': [],
                      'accessors': [], 'bufferViews': [], 'buffers': [], 'materials': [],
@@ -144,6 +146,13 @@ class Builder:
                     self.ext_used.add(ext)
             return info
 
+        if self.colour_only:
+            for key in ('normalTexture', 'occlusionTexture', 'emissiveTexture'):
+                mat.pop(key, None)
+            pbr = mat.setdefault('pbrMetallicRoughness', {})
+            pbr.pop('metallicRoughnessTexture', None)
+            pbr['metallicFactor'] = 0
+            pbr['roughnessFactor'] = 1
         for key in ('normalTexture', 'occlusionTexture', 'emissiveTexture'):
             if key in mat:
                 fix(mat[key])

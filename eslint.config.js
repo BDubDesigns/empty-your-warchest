@@ -13,7 +13,7 @@ const renderingLibraries = {
 };
 
 export default tseslint.config(
-  { ignores: ['dist', 'playwright-report', 'test-results'] },
+  { ignores: ['dist', 'playwright-report', 'test-results', 'tools'] },
   js.configs.recommended,
   ...tseslint.configs.strictTypeChecked,
   {

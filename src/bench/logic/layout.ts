@@ -26,6 +26,8 @@ export interface Placed {
   size: Size;
   /** Turns into a physics body when the fort comes down. */
   collapse: boolean;
+  /** The building (or the props, or the crates) it's part of, within its copy. */
+  group: string;
 }
 
 export interface PlacedTree {
@@ -115,6 +117,8 @@ export function layoutScene(input: LayoutInput): SceneLayout {
 
   // One copy of the scene, about (0, 0); copies are moved after.
   const pieces: Omit<Placed, 'copy'>[] = [];
+  /** The building being put up: what `add` files its pieces under. */
+  let group = 'fort';
   const blocked: Rect[] = [];
   const add = (
     piece: PieceId,
@@ -125,7 +129,7 @@ export function layoutScene(input: LayoutInput): SceneLayout {
     byHeight = false,
   ) => {
     const fit = fitted(size, length, byHeight);
-    pieces.push({ piece, ...at, scale: fit.scale, size: fit.size, collapse });
+    pieces.push({ piece, ...at, scale: fit.scale, size: fit.size, collapse, group });
     return fit.size;
   };
   const roof = (
@@ -255,6 +259,7 @@ export function layoutScene(input: LayoutInput): SceneLayout {
     corner: 'corner',
     collapse: true,
   });
+  group = 'tower';
   const tower = layout.tower;
   const towerWidth = tower.modules * module;
   const towerHeight =
@@ -282,6 +287,7 @@ export function layoutScene(input: LayoutInput): SceneLayout {
   roof('towerRoof', tower.at[0], tower.at[1], towerWidth * 1.1, towerHeight, 0, true);
   const fortPieces = pieces.length;
 
+  group = 'crates';
   const crates = Math.max(0, input.bodies - fortPieces);
   const { crates: pile } = layout;
   const crateSize = sizeOf('crate');
@@ -310,7 +316,8 @@ export function layoutScene(input: LayoutInput): SceneLayout {
   });
 
   // The houses, each with its roof and chimney.
-  for (const house of layout.houses) {
+  layout.houses.forEach((house, index) => {
+    group = `house-${String(index)}`;
     const [cx, cz] = house.at;
     const width = house.wide * module;
     const height =
@@ -350,7 +357,7 @@ export function layoutScene(input: LayoutInput): SceneLayout {
         true,
       );
     }
-  }
+  });
 
   // Props, scattered clear of the buildings and the sights' lane, sized by their longer side.
   const rng = new Rng(layout.seed);
@@ -372,6 +379,7 @@ export function layoutScene(input: LayoutInput): SceneLayout {
         scale,
         size: [size[0] * scale, size[1] * scale, size[2] * scale],
         collapse: false,
+        group: 'props',
       });
       made++;
     }

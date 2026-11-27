@@ -20,4 +20,10 @@ tint the models with them); textures saved as JPEG so the files stay small (on t
 the same memory as the PNGs). The heads are cut from the base characters (the triangles above the
 neck) and bound to the outfits' skeletons.
 
+village-lite/ ("Village optimised") is made from the same Quaternius packs, plus CommonTree_3 and
+Pine_1 from Quaternius' Stylized Nature MegaKit (as in public/models): colour maps only (at most
+512 px in tex-512/, 1024 px in tex-1024/), a plain timber post for the fort's corners, each person
+one mesh with one atlas texture (the head moved into the outfit's skeleton), and the people's and
+trees' triangles cut with meshoptimizer. tools/bench/ builds all of it.
+
 Kenney: https://kenney.nl · Quaternius: https://quaternius.com

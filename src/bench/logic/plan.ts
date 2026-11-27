@@ -1,10 +1,10 @@
-import type { BenchData, BenchPixelRatio } from '../../data/bench';
+import type { BenchData, BenchPixelRatio, BenchShadows } from '../../data/bench';
 
 /** What one stress-test run draws, and how. */
 export interface RunSettings {
   pack: string;
   scale: number;
-  shadows: boolean;
+  shadows: BenchShadows;
   physics: boolean;
   matte: boolean;
   pixelRatio: BenchPixelRatio;

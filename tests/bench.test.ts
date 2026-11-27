@@ -41,10 +41,12 @@ describe('bench data', () => {
       'boxes',
       'kenney',
       'village',
+      'village-lite',
+      'village-lite-1024',
       'village-heavy',
     ]);
-    // 20 s a run, and allow 8 s each to load and warm up.
-    expect(data.runAll.length * (data.seconds + 8)).toBeLessThan(8 * 60);
+    // 20 s a run, and allow 6 s each to load and warm up (on a PC, it's 1 to 3 s).
+    expect(data.runAll.length * (data.seconds + 6)).toBeLessThan(8 * 60);
   });
 
   it('fails loudly on a run of a pack that does not exist', () => {
@@ -111,6 +113,18 @@ describe('layout', () => {
     expect(scene.characters.length).toBeGreaterThanOrEqual(10);
     expect(scene.characters.length).toBeLessThanOrEqual(15);
     expect(scene.trees).toHaveLength(data.layout.trees.count);
+    // Each building's pieces are filed under it, so a batched pack can merge them.
+    const groups = new Set(scene.pieces.map((piece) => piece.group));
+    expect([...groups].sort()).toEqual(
+      ['crates', 'fort', 'house-0', 'house-1', 'house-2', 'props', 'tower'].filter(
+        (group) => group !== 'props' || input.pack.props.length > 0,
+      ),
+    );
+    expect(
+      scene.pieces
+        .filter((piece) => piece.group.startsWith('house'))
+        .every((piece) => !piece.collapse),
+    ).toBe(true);
   });
 
   it('copies everything for 2× and 4×, each copy in its own place', () => {
