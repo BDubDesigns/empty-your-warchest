@@ -12,6 +12,7 @@ describe('camp layout', () => {
       'tree_line',
       'workbench',
       'fire_pit',
+      'cauldron',
       'war_tent',
     ]);
     expect(spots).toContainEqual({ kind: 'chest', ...data.camp.chest });
@@ -68,6 +69,10 @@ describe('warchest view', () => {
       { item: 'stave', name: 'Stave', detail: '0' },
       { item: 'spear', name: 'Spear', detail: '5' },
       { item: 'sense_potion', name: 'Sense potion', detail: '0' },
+      { item: 'moss', name: 'Moss', detail: '0' },
+      { item: 'red_cap', name: 'Red cap', detail: '0' },
+      { item: 'ash', name: 'Ash', detail: '0' },
+      { item: 'woad', name: 'Woad', detail: '0' },
     ]);
   });
 });

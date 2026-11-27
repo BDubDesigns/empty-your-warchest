@@ -1,5 +1,5 @@
-import { Rng, type EventLogger } from '../../../core';
-import type { Clearing, WoodcuttingFeel } from '../../../data';
+import { Rng, type EventLogger, type Stack } from '../../../core';
+import type { Clearing, WoodcuttingFeel, WoodcuttingForage } from '../../../data';
 import { angleBeforeLift, nudgeAim, type AimSample } from './aim';
 import {
   afterChain,
@@ -12,6 +12,7 @@ import {
   type Point,
 } from './chain';
 import { fallTimeToReach, fallTimeToTilt, rollTime } from './fall';
+import { addDrops, forageChain, seedForage, type ChainForage, type Forage } from './forage';
 import { chainLogs, starBonusLogs, starsFor, type StarBonus, type StarThresholds } from './score';
 import {
   chopDamage,
@@ -103,7 +104,7 @@ export type RoundEvent =
   | { type: 'bounce'; boulder: string; at: Point }
   /** A falling tree (`step`) or a rolling boulder (`boulder`) crashes into the cabin. */
   | { type: 'crash'; step?: FallStep; boulder?: string }
-  | { type: 'banked'; trees: number; logs: number }
+  | { type: 'banked'; trees: number; logs: number; forage: ChainForage }
   /** A chain that crashed into the cabin: its logs never reach the warchest. */
   | { type: 'lost'; trees: number; logs: number }
   | { type: 'cleared' };
@@ -117,6 +118,17 @@ export interface RoundHooks {
    * is worth N^chainExponent of them; `trees` is N). Returns the logs gained.
    */
   bank: (batches: number, trees: number) => number;
+  /**
+   * Foraging (moss, mushrooms): seeded with the round, banked with each chain through `bankDrops`
+   * (into the warchest). Without it, a round forages nothing.
+   */
+  forage?: WoodcuttingForage;
+  /**
+   * The forage's seed: the clearing's, so replaying a clearing's seed shows the same moss,
+   * mushrooms and patches. Defaults to the round's seed (the tutorial has no clearing seed).
+   */
+  forageSeed?: number;
+  bankDrops?: (drops: Stack[]) => void;
   /** Economy: a chain of N trees banks N^chainExponent logs. Defaults to 1 (a log per tree). */
   chainExponent?: number;
   onEvent?: (event: RoundEvent) => void;
@@ -156,6 +168,15 @@ export class WoodcuttingRound {
   #moments: { at: number; event: RoundEvent }[] = [];
   /** Logs lost to the cabin this round. */
   lostLogs = 0;
+  /** What this round can forage, seeded with it. */
+  forage: Forage = { trees: new Map(), boulders: new Map(), patches: [] };
+  /** Foraged this round (banked), and lost with a chain that hit the cabin. */
+  drops: Stack[] = [];
+  lostDrops: Stack[] = [];
+  /** What's been foraged already ('tree:id', 'boulder:id', 'patch:id'): each pays once. */
+  #paid = new Set<string>();
+  /** What the falling chain forages, banked with it. */
+  #chainForage: ChainForage | undefined;
 
   constructor(clearing: Clearing, hooks: RoundHooks, seed: number) {
     this.clearing = clearing;
@@ -167,6 +188,11 @@ export class WoodcuttingRound {
 
   get feel(): WoodcuttingFeel {
     return this.#hooks.feel();
+  }
+
+  /** Whether something has been foraged this round ('tree:id', 'boulder:id', 'patch:id'). */
+  hasForaged(key: string): boolean {
+    return this.#paid.has(key);
   }
 
   /** How boulders roll right now (live tuning applies at once). */
@@ -235,6 +261,13 @@ export class WoodcuttingRound {
     this.felled = 0;
     this.logs = 0;
     this.lostLogs = 0;
+    this.forage = this.#hooks.forage
+      ? seedForage(this.startClearing, this.#hooks.forage, this.#hooks.forageSeed ?? seed)
+      : { trees: new Map(), boulders: new Map(), patches: [] };
+    this.drops = [];
+    this.lostDrops = [];
+    this.#paid = new Set();
+    this.#chainForage = undefined;
     this.#ended = false;
     this.#bonusClaimed = false;
     this.#bonusLogs = 0;
@@ -246,6 +279,18 @@ export class WoodcuttingRound {
       seed,
       par: this.par,
       view: this.#hooks.view,
+      forage: {
+        mossyTrees: [...this.forage.trees].filter(([, drop]) => drop.moss > 0).map(([id]) => id),
+        mushroomTrees: [...this.forage.trees]
+          .filter(([, drop]) => drop.mushrooms > 0)
+          .map(([id]) => id),
+        mossyBoulders: [...this.forage.boulders.keys()],
+        patches: this.forage.patches.map((patch) => ({
+          id: patch.id,
+          x: Math.round(patch.x),
+          y: Math.round(patch.y),
+        })),
+      },
       feel: this.feel,
     });
   }
@@ -520,6 +565,18 @@ export class WoodcuttingRound {
     }
     this.#moments = moments.sort((a, b) => a.at - b.at);
     this.#chain = chain;
+    // What it forages is decided now too (the moss falls off a boulder as it's hit).
+    const rules = this.#hooks.forage;
+    this.#chainForage = rules
+      ? forageChain(this.clearing, chain, this.forage, rules, this.#paid)
+      : undefined;
+    for (const boulder of this.#chainForage?.boulders ?? []) {
+      this.#log('woodcutting.mossShed', {
+        boulder,
+        moss: this.forage.boulders.get(boulder) ?? 0,
+        by: rolls.find((roll) => roll.boulder === boulder)?.hitBy,
+      });
+    }
     for (const step of steps) this.standing.delete(step.tree);
     this.phase = { kind: 'falling' };
     this.#log('woodcutting.fell', {
@@ -585,7 +642,16 @@ export class WoodcuttingRound {
     const logs = chainLogs(trees, this.#hooks.chainExponent ?? 1);
     this.felled += trees;
     this.lostLogs += logs;
-    this.#log('woodcutting.cabinHit', { trees, lostLogs: logs, roundLogs: this.logs });
+    // What the chain foraged is lost with its logs.
+    const lostDrops = this.#chainForage?.drops ?? [];
+    this.#chainForage = undefined;
+    addDrops(this.lostDrops, lostDrops);
+    this.#log('woodcutting.cabinHit', {
+      trees,
+      lostLogs: logs,
+      roundLogs: this.logs,
+      ...(lostDrops.length > 0 && { lostDrops }),
+    });
     this.#hooks.onEvent?.({ type: 'lost', trees, logs });
     this.phase = { kind: 'crashed' };
     this.#end('cabin');
@@ -598,7 +664,20 @@ export class WoodcuttingRound {
     this.felled += trees;
     this.logs += logs;
     this.#log('woodcutting.bank', { trees, logs, roundLogs: this.logs });
-    this.#hooks.onEvent?.({ type: 'banked', trees, logs });
+    const forage = this.#chainForage ?? { trees: [], boulders: [], patches: [], drops: [] };
+    this.#chainForage = undefined;
+    if (forage.drops.length > 0) {
+      this.#hooks.bankDrops?.(forage.drops);
+      addDrops(this.drops, forage.drops);
+      this.#log('woodcutting.forage', {
+        trees: forage.trees,
+        boulders: forage.boulders,
+        patches: forage.patches,
+        drops: forage.drops,
+        roundDrops: this.drops,
+      });
+    }
+    this.#hooks.onEvent?.({ type: 'banked', trees, logs, forage });
     if (this.standing.size === 0) {
       this.phase = { kind: 'cleared' };
       this.#end('cleared');
@@ -617,6 +696,8 @@ export class WoodcuttingRound {
       felled: this.felled,
       logs: this.logs,
       lostLogs: this.lostLogs,
+      drops: this.drops,
+      ...(this.lostDrops.length > 0 && { lostDrops: this.lostDrops }),
       par: this.par,
       stars: this.stars,
       standing: this.standing.size,

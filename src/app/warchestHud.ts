@@ -35,13 +35,18 @@ const PIECE_LENGTHS: Record<ItemLook, number> = {
   split: 1.15,
   pointed: 1.6,
   bottle: 0.6,
+  tuft: 0.55,
+  cap: 0.5,
+  heap: 0.5,
+  leaf: 0.6,
 };
 
 /**
  * A piece of an item, as it flies into the chest, its length along z: the log model for a round
- * log, and for a split stave or a pointed spear, a shaft drawn here (no model to load).
+ * log, and for a split stave or a pointed spear, a shaft drawn here (no model to load). The
+ * cauldron's shelf draws its ingredient icons from these too.
  */
-function pieceModel(look: ItemLook, log: THREE.Object3D): THREE.Object3D {
+export function pieceModel(look: ItemLook, log: THREE.Object3D): THREE.Object3D {
   if (look === 'round') return log.clone(true);
   const piece = new THREE.Group();
   const wood = new THREE.MeshLambertMaterial({ color: look === 'split' ? 0xd9b07a : 0xa47a4a });
@@ -64,6 +69,58 @@ function pieceModel(look: ItemLook, log: THREE.Object3D): THREE.Object3D {
     bottle.add(body, neck, cork);
     bottle.rotation.x = Math.PI / 2;
     piece.add(bottle);
+    return piece;
+  }
+  if (look === 'tuft') {
+    // A tuft of moss: a few soft green lumps.
+    const moss = new THREE.MeshLambertMaterial({ color: 0x7f9e2c, flatShading: true });
+    [
+      [0, 0, 0, 0.3],
+      [0.22, 0.05, 0.12, 0.22],
+      [-0.2, 0.02, -0.1, 0.24],
+    ].forEach(([x, y, z, r]) => {
+      const lump = new THREE.Mesh(new THREE.IcosahedronGeometry(r, 0), moss);
+      lump.position.set(x ?? 0, y ?? 0, z ?? 0);
+      lump.scale.y = 0.6;
+      piece.add(lump);
+    });
+    return piece;
+  }
+  if (look === 'cap') {
+    // A red cap mushroom: a white stalk under a red dome.
+    const stalk = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.09, 0.11, 0.3, 8),
+      new THREE.MeshLambertMaterial({ color: 0xf1e8d6 }),
+    );
+    const cap = new THREE.Mesh(
+      new THREE.SphereGeometry(0.28, 12, 6, 0, Math.PI * 2, 0, Math.PI / 2),
+      new THREE.MeshLambertMaterial({ color: 0xd8301e }),
+    );
+    cap.position.y = 0.12;
+    const mushroom = new THREE.Group();
+    mushroom.add(stalk, cap);
+    mushroom.rotation.x = Math.PI / 2;
+    piece.add(mushroom);
+    return piece;
+  }
+  if (look === 'heap') {
+    // A little grey heap of ash.
+    const heap = new THREE.Mesh(
+      new THREE.ConeGeometry(0.3, 0.26, 9),
+      new THREE.MeshLambertMaterial({ color: 0x8a8682, flatShading: true }),
+    );
+    heap.rotation.x = Math.PI / 2;
+    piece.add(heap);
+    return piece;
+  }
+  if (look === 'leaf') {
+    // A woad leaf: a long, flat, blue-green blade.
+    const leaf = new THREE.Mesh(
+      new THREE.SphereGeometry(0.3, 8, 4),
+      new THREE.MeshLambertMaterial({ color: 0x3a5a9a, flatShading: true }),
+    );
+    leaf.scale.set(0.5, 0.12, 1.4);
+    piece.add(leaf);
     return piece;
   }
   if (look === 'split') {
@@ -120,6 +177,10 @@ interface Flight {
   mesh: THREE.Object3D;
   from: THREE.Vector2;
   share: number;
+  /** The item it is (the station's own, or another it banked, e.g. moss off a tree). */
+  item: string;
+  /** Its size when it's in flight at full scale. */
+  baseScale: number;
   /** Told each piece's share of its deposit as it lands. */
   onArrive: ((share: number) => void) | undefined;
   amount: number;
@@ -150,15 +211,17 @@ export class WarchestHud {
   readonly #camera = new THREE.OrthographicCamera(0, 1, 0, -1, -500, 500);
   readonly #chest: THREE.Object3D;
   readonly #lid: THREE.Object3D | undefined;
-  readonly #piece: THREE.Object3D;
+  /** A piece model for each item poured so far, sized to fly. */
+  readonly #pieces = new Map<string, THREE.Object3D>();
+  readonly #log: THREE.Object3D;
   readonly #sfx = new Sfx();
   readonly #anchor: HTMLElement;
   readonly #count: HTMLElement;
   readonly #gain: HTMLElement;
   readonly #panel: WarchestPanel;
   readonly #unsubscribe: () => void;
-  /** Items in the warchest the count doesn't show yet: they're still on their way in. */
-  #held = 0;
+  /** Items in the warchest the counts don't show yet, by item: they're still on their way in. */
+  #held = new Map<string, number>();
   #flights: Flight[] = [];
   #arrived = 0;
   /** A pour is under way: the lid stays open until it finishes. */
@@ -222,12 +285,7 @@ export class WarchestHud {
     this.#chest = chest;
     this.#lid = model.getObjectByName('lid');
     this.#scene.add(chest);
-    // The station's item, as it flies in: a log, a stave or a spear.
-    const look = deps.game.data.items.find((item) => item.id === deps.item)?.look ?? 'round';
-    const piece = pieceModel(look, models.log);
-    const pieceSize = new THREE.Box3().setFromObject(piece).getSize(new THREE.Vector3());
-    piece.scale.setScalar((PIECE_LENGTH * PIECE_LENGTHS[look]) / Math.max(pieceSize.z, 0.001));
-    this.#piece = piece;
+    this.#log = models.log;
 
     this.#anchor = document.createElement('div');
     this.#anchor.className = 'warchest-hud';
@@ -281,29 +339,49 @@ export class WarchestHud {
    * `pour` sends them in, so the player watches them arrive. `onArrive` hears each piece land,
    * with its share of the deposit (e.g. to tick in the XP the items earned).
    */
-  hold(amount: number, onArrive?: (share: number) => void): Deposit {
-    this.#held += amount;
+  hold(amount: number, onArrive?: (share: number) => void, item = this.#item): Deposit {
+    this.#held.set(item, this.#heldOf(item) + amount);
     this.#showCount();
     let poured = false;
     return {
       pour: (from, onLeave) => {
         if (poured) return;
         poured = true;
-        this.#startPour(amount, from, onArrive, onLeave);
+        this.#startPour(item, amount, from, onArrive, onLeave);
       },
     };
   }
 
   /** Nothing on its way in: every deposit has landed. */
   get settled(): boolean {
-    return this.#held === 0 && this.#flights.length === 0;
+    return this.#heldTotal() === 0 && this.#flights.length === 0;
+  }
+
+  #heldOf(item: string): number {
+    return this.#held.get(item) ?? 0;
+  }
+
+  #heldTotal(): number {
+    return [...this.#held.values()].reduce((sum, count) => sum + count, 0);
+  }
+
+  /** The item as it flies in (a log, a stave, a spear, moss …), sized by its look. */
+  #pieceFor(item: string): THREE.Object3D {
+    let piece = this.#pieces.get(item);
+    if (piece) return piece;
+    const look = this.#game.data.items.find((entry) => entry.id === item)?.look ?? 'round';
+    piece = pieceModel(look, this.#log);
+    const size = new THREE.Box3().setFromObject(piece).getSize(new THREE.Vector3());
+    piece.scale.setScalar((PIECE_LENGTH * PIECE_LENGTHS[look]) / Math.max(size.z, size.x, 0.001));
+    this.#pieces.set(item, piece);
+    return piece;
   }
 
   /** Finishes any pour at once and shuts the panel (e.g. leaving the station). */
   settle(): void {
     for (const flight of this.#flights) this.#scene.remove(flight.mesh);
     this.#flights = [];
-    this.#held = 0;
+    this.#held.clear();
     this.#pouring = this.#open = false;
     this.#panel.hide();
     window.clearTimeout(this.#slamTimer);
@@ -335,6 +413,7 @@ export class WarchestHud {
   }
 
   #startPour(
+    item: string,
     amount: number,
     from: ScreenPoint[],
     onArrive: ((share: number) => void) | undefined,
@@ -345,12 +424,15 @@ export class WarchestHud {
     const now = performance.now() / 1000;
     for (const piece of pieces) {
       const source = sources[piece.from] ?? this.#chestPoint();
-      const mesh = this.#piece.clone(true);
+      const model = this.#pieceFor(item);
+      const mesh = model.clone(true);
       mesh.visible = false;
       this.#scene.add(mesh);
       this.#flights.push({
         mesh,
         from: new THREE.Vector2(source.x, source.y),
+        item,
+        baseScale: model.scale.x || 1,
         share: piece.share,
         onArrive,
         amount,
@@ -364,7 +446,8 @@ export class WarchestHud {
       });
     }
     this.#arrived = 0;
-    this.#poured += amount;
+    // The gain counts the station's own item: the chest's count is of that.
+    if (item === this.#item) this.#poured += amount;
     this.#closeAt = undefined;
     this.#pouring = true;
     this.#updateLid();
@@ -426,7 +509,7 @@ export class WarchestHud {
   #rows() {
     const { inventory } = this.#game;
     return warchestRows(this.#game.data, {
-      count: (item) => Math.max(inventory.count(item) - (item === this.#item ? this.#held : 0), 0),
+      count: (item) => Math.max(inventory.count(item) - this.#heldOf(item), 0),
     });
   }
 
@@ -478,7 +561,7 @@ export class WarchestHud {
         }
       }
       mesh.position.set(x, -y, 50);
-      mesh.scale.setScalar((this.#piece.scale.x || 1) * scale);
+      mesh.scale.setScalar(flight.baseScale * scale);
       mesh.rotation.x += flight.spin.x * dt;
       mesh.rotation.y += flight.spin.y * dt;
       mesh.rotation.z += flight.spin.z * dt;
@@ -517,7 +600,7 @@ export class WarchestHud {
   #land(flight: Flight): void {
     this.#scene.remove(flight.mesh);
     this.#flights = this.#flights.filter((other) => other !== flight);
-    this.#held = Math.max(this.#held - flight.share, 0);
+    this.#held.set(flight.item, Math.max(this.#heldOf(flight.item) - flight.share, 0));
     this.#arrived += 1;
     flight.onArrive?.(flight.share / flight.amount);
     this.#bump = 1;
@@ -536,7 +619,7 @@ export class WarchestHud {
     this.#pouring = false;
     this.#closeAt = undefined;
     this.#updateLid();
-    this.#gain.textContent = `+${this.#poured}`;
+    this.#gain.textContent = this.#poured > 0 ? `+${String(this.#poured)}` : '';
     this.#poured = 0;
     // Restart the gain and glow animations.
     for (const [element, name] of [
@@ -557,10 +640,10 @@ export class WarchestHud {
   }
 
   #showCount(): void {
-    const shown = Math.max(this.#game.inventory.count(this.#item) - this.#held, 0);
+    const shown = Math.max(this.#game.inventory.count(this.#item) - this.#heldOf(this.#item), 0);
     this.#count.textContent = String(shown);
     this.#anchor.dataset.count = String(shown);
-    this.#anchor.dataset.settled = String(this.#held === 0 && this.#flights.length === 0);
+    this.#anchor.dataset.settled = String(this.settled);
     this.#panel.update(this.#rows());
   }
 

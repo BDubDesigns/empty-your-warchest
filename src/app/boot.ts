@@ -14,6 +14,7 @@ import {
 } from '../core';
 import { watchForTrouble } from './trouble';
 import type {
+  BrewingFeel,
   FiremakingFeel,
   RunnerFeel,
   SiegeFeel,
@@ -29,6 +30,8 @@ import {
   type SpearSource,
 } from '../runner/feel';
 import { checkMechanics } from '../stations';
+import { brewingFeel } from '../stations/brewing/feel';
+import { checkBrews } from '../stations/brewing/logic/brew';
 import { checkForts } from '../stations/siege/logic/fairness';
 import { firemakingFeel } from '../stations/firemaking/feel';
 import {
@@ -60,6 +63,7 @@ export interface Booted {
     woodcutting: LiveTuning<WoodcuttingFeel>;
     splitting: LiveTuning<SplittingFeel>;
     firemaking: LiveTuning<FiremakingFeel>;
+    brewing: LiveTuning<BrewingFeel>;
     siege: LiveTuning<SiegeFeel>;
     runner: LiveTuning<RunnerFeel>;
   };
@@ -97,6 +101,8 @@ export async function bootGame(buildLabel: string): Promise<Booted> {
   checkMechanics(data);
   // Every siege fort must be fair (walls block, the banner's out of reach until the end).
   checkForts(data);
+  // Every brew must have a 3-star answer within the fill, wherever its target lands.
+  checkBrews(data);
   const clock = systemClock;
   const { sink, fallback } = await openSink();
   const logger = new EventLogger(sink, clock, crypto.randomUUID());
@@ -145,6 +151,7 @@ export async function bootGame(buildLabel: string): Promise<Booted> {
     woodcutting: woodcuttingFeel(data.woodcutting.feel, localStorageStore()),
     splitting: splittingFeel(data.splitting.feel, localStorageStore()),
     firemaking: firemakingFeel(data.firemaking.feel, localStorageStore()),
+    brewing: brewingFeel(data.brewing.feel, localStorageStore()),
     siege: siegeFeel(data.siege.feel, localStorageStore()),
     runner: runnerFeel(data.runner.feel, localStorageStore()),
   };

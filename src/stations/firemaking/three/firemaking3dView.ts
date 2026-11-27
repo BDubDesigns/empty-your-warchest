@@ -235,6 +235,8 @@ export class Firemaking3DView implements ScreenView {
   #frozenUntil = 0;
   #bankedXp: XpDeposit | undefined;
   #deposit: ReturnType<WarchestHud['hold']> | undefined;
+  /** The rack's ash, poured in from the trench after the spears. */
+  #ashDeposit: ReturnType<WarchestHud['hold']> | undefined;
   /** The finished rack, waiting for the plunge to finish before the card and the pour. */
   #finished: { result: RackResult; at: number } | undefined;
   #lastPhase = '';
@@ -311,6 +313,7 @@ export class Firemaking3DView implements ScreenView {
     this.#skillBar.settle();
     this.#bankedXp = undefined;
     this.#deposit = undefined;
+    this.#ashDeposit = undefined;
     this.#finished = undefined;
     this.#layers = 1;
     delete document.body.dataset.firemaking;
@@ -376,6 +379,9 @@ export class Firemaking3DView implements ScreenView {
           if (charred > 0 && input) game.removeItems(input.item, charred);
           this.#bankedXp = this.#skillBar.hold(game.xp(this.#skill) - before);
           return banked;
+        },
+        bankAsh: (ash) => {
+          game.addItems(rules.ash.item, ash);
         },
         onEvent: (event) => {
           this.#onEvent(event);
@@ -859,14 +865,25 @@ export class Firemaking3DView implements ScreenView {
       xp?.arrive(1);
       this.#deposit = undefined;
     }
+    this.#ashDeposit =
+      result.ash > 0
+        ? this.#hud.hold(result.ash, undefined, this.#deps.game.data.firemaking.ash.item)
+        : undefined;
   }
 
   /** The trough's spears pour into the chest, each leaving the trough as it sets off. */
   #pourSpears(): void {
     const deposit = this.#deposit;
     this.#deposit = undefined;
-    if (!deposit) return;
     const { clientWidth: width, clientHeight: height } = this.#element;
+    // The ash comes up out of the trench.
+    const ash = this.#ashDeposit;
+    this.#ashDeposit = undefined;
+    if (ash) {
+      const trench = new THREE.Vector3(0, 0.1, 0).project(this.#camera);
+      ash.pour([{ x: ((trench.x + 1) / 2) * width, y: ((1 - trench.y) / 2) * height }]);
+    }
+    if (!deposit) return;
     const inTrough = this.#staves.filter((stave) => stave.inTrough);
     const points: ScreenPoint[] = inTrough.map((stave) => {
       const projected = stave.mesh.getWorldPosition(new THREE.Vector3()).project(this.#camera);
@@ -1589,6 +1606,7 @@ export class Firemaking3DView implements ScreenView {
     if (result.under > 0) parts.push(`${String(result.under)} underdone (back to staves)`);
     if (result.charred > 0) parts.push(`${String(result.charred)} charred`);
     lines.push(parts.join(' · '));
+    if (result.ash > 0) lines.push(`+${String(result.ash)} ash for brewing`);
     if (result.bonus > 0) lines.push(`${'★'.repeat(result.stars)} bonus +${String(result.bonus)}`);
     const columns = this.#fireRules.rack.staves;
     if (result.burnt) lines.push('Left on the fire too long');

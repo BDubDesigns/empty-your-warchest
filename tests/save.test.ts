@@ -15,7 +15,7 @@ const state: GameState = {
     { item: 'log', count: 7 },
     { item: 'spear', count: 5 },
   ],
-  skills: { woodcutting: 1_154, splitting: 83, firemaking: 40, command: 0 },
+  skills: { woodcutting: 1_154, splitting: 83, firemaking: 40, command: 0, alchemy: 0 },
   lastSeenAt: 5_000,
   work: {
     crew: { tree_line: 1, workbench: 2, fire_pit: 0 },
@@ -45,8 +45,9 @@ describe('save/load', () => {
     const result = saves.load();
     expect(result.status).toBe('new');
     expect(result.state).toEqual({
-      inventory: [],
-      skills: { woodcutting: 0, splitting: 0, firemaking: 0, command: 0 },
+      // The starting stock in data (a brewing kit).
+      inventory: data.newGame.inventory,
+      skills: { woodcutting: 0, splitting: 0, firemaking: 0, command: 0, alchemy: 0 },
       lastSeenAt: 10_000,
       work: {
         crew: { tree_line: 1, workbench: 1, fire_pit: 1 },
@@ -105,7 +106,7 @@ describe('save/load', () => {
     store.set('warchest.save', '{not json');
     const result = saves.load();
     expect(result.status).toBe('discarded');
-    expect(result.state.inventory).toEqual([]);
+    expect(result.state.inventory).toEqual(data.newGame.inventory);
   });
 
   it('discards a save from another version', () => {

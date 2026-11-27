@@ -630,6 +630,8 @@ body:not([data-view='camp']) #build-label {
 
 .w3d-summary-text {
   color: var(--muted);
+  text-align: center;
+  white-space: pre-line;
 }
 
 .w3d-summary-bonus {
@@ -2201,6 +2203,379 @@ body:not([data-view='camp']) #build-label {
 .fm-card-buttons {
   display: flex;
   gap: 12px;
+}
+
+/* Brewing (src/stations/brewing/three/brewing3dView.ts). Buttons and the end card share the fire
+ * pit's (.fm-button, .fm-card). */
+.br-canvas {
+  display: block;
+  touch-action: none;
+}
+
+.br-ui {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  font-family: system-ui, sans-serif;
+  color: var(--fg);
+}
+
+.br-ui button {
+  pointer-events: auto;
+}
+
+.br-ui [hidden] {
+  display: none !important;
+}
+
+/* The recipe card, under the level bar: the potion and its colour beside the pot's. */
+.br-recipe {
+  position: absolute;
+  top: calc(var(--safe-top) + 64px);
+  left: 50%;
+  transform: translateX(-50%);
+  display: grid;
+  justify-items: center;
+  gap: 4px;
+  padding: 8px 14px 6px;
+  border-radius: 12px;
+  background: #e9dcb8;
+  color: #3a2c1c;
+  box-shadow: 0 3px 10px rgb(0 0 0 / 0.4);
+}
+
+/* The skill bar drops to the second row on narrow screens (see .skill-bar): the card goes below it. */
+@media (max-width: 400px) {
+  .br-recipe {
+    top: calc(var(--safe-top) + 116px);
+    padding-top: 4px;
+  }
+
+  /* A smaller map, so the card clears the pot. */
+  .br-map {
+    width: 100px;
+    height: 100px;
+  }
+
+  .br-map-bar {
+    height: 76px;
+  }
+}
+
+/* Room for the bottle's cork under the name. */
+.br-recipe .br-swatches {
+  padding-top: 12px;
+}
+
+.br-recipe-name {
+  font:
+    800 15px system-ui,
+    sans-serif;
+}
+
+.br-swatches,
+.br-card-swatches {
+  display: flex;
+  gap: 18px;
+  align-items: end;
+}
+
+.br-swatch-box {
+  display: grid;
+  justify-items: center;
+  gap: 2px;
+}
+
+.br-swatch-name {
+  font-size: 11px;
+  opacity: 0.75;
+}
+
+/* A bottle: its label is the target colour. */
+.br-bottle {
+  position: relative;
+  width: 46px;
+  height: 60px;
+  border-radius: 14px 14px 10px 10px;
+  background: rgb(255 255 255 / 0.35);
+  border: 2px solid rgb(58 44 28 / 0.5);
+}
+
+.br-bottle::before {
+  content: '';
+  position: absolute;
+  top: -12px;
+  left: 50%;
+  width: 14px;
+  height: 12px;
+  transform: translateX(-50%);
+  border-radius: 3px 3px 0 0;
+  background: #9a7448;
+}
+
+.br-label {
+  position: absolute;
+  inset: 12px 5px 8px;
+  border-radius: 5px;
+  border: 1px solid rgb(0 0 0 / 0.25);
+}
+
+/* The colour map beside the bottle: hue and chroma, with a lightness bar. */
+.br-map-box {
+  display: grid;
+  justify-items: center;
+  gap: 2px;
+}
+
+.br-map-row {
+  display: flex;
+  gap: 5px;
+}
+
+.br-map {
+  width: 124px;
+  height: 124px;
+  border-radius: 8px;
+  border: 2px solid rgb(58 44 28 / 0.5);
+}
+
+/* The lightness bar, labelled Light at the top and Dark at the bottom. Its left edge is a column
+ * for the pot's pointer (no border there). */
+.br-light {
+  display: grid;
+  justify-items: end;
+  align-content: space-between;
+}
+
+.br-light-end {
+  font:
+    700 9px system-ui,
+    sans-serif;
+  line-height: 12px;
+  opacity: 0.75;
+}
+
+.br-map-bar {
+  width: 30px;
+  height: 100px;
+}
+
+.br-map-ring {
+  min-height: 15px;
+  font-weight: 700;
+  opacity: 1;
+}
+
+.br-map-ring[data-ring='3'] {
+  color: #8a6510;
+}
+
+/* "Best still possible: ★★", the moment a star goes out of reach. Holds its line so the card
+ * doesn't jump. */
+.br-map-best {
+  min-height: 14px;
+  font-weight: 700;
+  color: #8a3a1c;
+  opacity: 1;
+}
+
+.br-pot {
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  border: 3px solid #2b2b2d;
+}
+
+.br-hint {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: calc(var(--safe-bottom) + 196px);
+  text-align: center;
+  font-size: 14px;
+  text-shadow: 0 1px 3px rgb(0 0 0 / 0.8);
+}
+
+/* The shelf: a tile per ingredient, its colour behind its icon. Drag the icon onto the pot. */
+.br-shelf {
+  position: absolute;
+  left: 50%;
+  bottom: calc(var(--safe-bottom) + 96px);
+  transform: translateX(-50%);
+  display: flex;
+  gap: 8px;
+}
+
+.br-jar {
+  position: relative;
+  display: grid;
+  justify-items: center;
+  align-content: start;
+  /* Five tiles fit across a narrow phone with 12 px either side. */
+  width: min(76px, calc((100vw - 56px) / 5));
+  min-height: 86px;
+  padding: 4px 2px 0;
+  border: 2px solid rgb(0 0 0 / 0.45);
+  border-radius: 12px;
+  color: var(--fg);
+  font:
+    600 12px system-ui,
+    sans-serif;
+  box-shadow: 0 2px 6px rgb(0 0 0 / 0.35);
+  /* The finger drags, never scrolls or zooms. */
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
+.br-jar-icon {
+  width: 52px;
+  height: 52px;
+  /* The icon carries its own sticker outline (drawn with it), so it reads on its tile. */
+  pointer-events: none;
+  filter: drop-shadow(0 2px 2px rgb(0 0 0 / 0.45));
+}
+
+/* Lifted off the tile while it's dragged; a fresh one pops back if there are more. */
+.br-jar-lifted .br-jar-icon {
+  visibility: hidden;
+}
+
+.br-jar:not(.br-jar-lifted) .br-jar-icon {
+  animation: br-pop 0.18s ease-out;
+}
+
+@keyframes br-pop {
+  from {
+    transform: scale(0.6);
+  }
+}
+
+.br-jar-name {
+  position: absolute;
+  left: 3px;
+  right: 3px;
+  bottom: 3px;
+  padding: 1px 0;
+  border-radius: 6px;
+  background: rgb(30 22 14 / 0.7);
+  font-size: 11px;
+}
+
+.br-jar-count {
+  position: absolute;
+  top: -7px;
+  right: -7px;
+  min-width: 22px;
+  padding: 1px 4px;
+  border-radius: 9px;
+  background: #3a2c1c;
+  font-weight: 800;
+  font-size: 11px;
+}
+
+/* None left: greyed, empty, its count still showing. */
+.br-jar-empty {
+  filter: grayscale(1);
+  opacity: 0.5;
+}
+
+.br-jar-empty .br-jar-icon {
+  visibility: hidden;
+}
+
+/* An ingredient on the finger. */
+.br-ghost {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 60px;
+  height: 60px;
+  pointer-events: none;
+  filter: drop-shadow(0 6px 6px rgb(0 0 0 / 0.5));
+  z-index: 5;
+}
+
+.br-ghost-over {
+  filter: drop-shadow(0 0 8px rgb(242 193 78 / 0.95));
+}
+
+/* Where it goes in: the pot on screen, while an ingredient is dragged. */
+.br-zone {
+  position: absolute;
+  border: 2px dashed rgb(255 255 255 / 0.55);
+  border-radius: 50%;
+  background: rgb(255 255 255 / 0.06);
+  pointer-events: none;
+}
+
+.br-zone-over {
+  border: 3px solid #f2c14e;
+  background: rgb(242 193 78 / 0.14);
+}
+
+.br-controls {
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  bottom: calc(var(--safe-bottom) + 20px);
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: center;
+}
+
+.br-fill {
+  position: relative;
+  flex: 1;
+  max-width: 160px;
+  height: 30px;
+  overflow: hidden;
+  border-radius: 8px;
+  background: rgb(0 0 0 / 0.45);
+}
+
+.br-fill-bar {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: rgb(200 135 58 / 0.7);
+  transition: width 0.2s;
+}
+
+.br-fill-text {
+  position: relative;
+  display: block;
+  line-height: 30px;
+  text-align: center;
+  font:
+    700 13px system-ui,
+    sans-serif;
+}
+
+.br-bottle-button {
+  min-width: 130px;
+}
+
+.br-ladle-button {
+  padding: 0 10px;
+  font-size: 18px;
+}
+
+.br-ui .br-ladle-button {
+  background: rgb(30 22 14 / 0.6);
+}
+
+.br-ladle-count {
+  font-size: 13px;
+}
+
+.br-ladle-button:disabled {
+  opacity: 0.4;
+}
+
+.br-bottle-button:disabled {
+  opacity: 0.45;
 }
 
 /* Siege (src/stations/siege/three/siege3dView.ts). */

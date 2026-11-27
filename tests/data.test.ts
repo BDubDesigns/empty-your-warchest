@@ -11,11 +11,21 @@ function expectInvalid(edit: (raw: ReturnType<typeof editableRawData>) => void, 
 
 describe('game data', () => {
   it('validates the prototype data', () => {
-    expect(data.items.map((item) => item.id)).toEqual(['log', 'stave', 'spear', 'sense_potion']);
+    expect(data.items.map((item) => item.id)).toEqual([
+      'log',
+      'stave',
+      'spear',
+      'sense_potion',
+      'moss',
+      'red_cap',
+      'ash',
+      'woad',
+    ]);
     expect(data.stations.map((station) => station.id)).toEqual([
       'tree_line',
       'workbench',
       'fire_pit',
+      'cauldron',
       'war_tent',
     ]);
     expect(data.skills.map((skill) => skill.id)).toEqual([
@@ -23,6 +33,7 @@ describe('game data', () => {
       'splitting',
       'firemaking',
       'command',
+      'alchemy',
     ]);
   });
 

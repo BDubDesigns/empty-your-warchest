@@ -37,6 +37,9 @@ export const firemaking = {
     // 3^6 = 729 fuelings to search; 9 spots would be 19,683 every rack.
     searchSpots: 6,
   },
+  // Ash for brewing (M9): a charred stave crumbles to ash rather than being lost, and every two
+  // fuel logs leave one. Guesses.
+  ash: { item: 'ash', perCharred: 1, perLog: 0.5 },
   yard: { radius: 2.6, wear: 0.7 },
   feel: {
     heatPerLog: 2.5,
