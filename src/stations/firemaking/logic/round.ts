@@ -41,6 +41,8 @@ export interface RackResult {
   burnt: boolean;
   /** Spears that went into the warchest. */
   banked: number;
+  /** Ash banked: from the charred staves and the fuel burned. */
+  ash: number;
 }
 
 /** Things a view plays effects for. */
@@ -64,6 +66,8 @@ export interface FiremakingHooks {
    * Returns the spears banked.
    */
   bank: (hardened: number, charred: number, bonus: number) => number;
+  /** Banks the rack's ash (the `ash` item in the rules) into the warchest. */
+  bankAsh?: (ash: number) => void;
   onEvent?: (event: FiremakingEvent) => void;
 }
 
@@ -253,6 +257,8 @@ export class FiremakingRound {
     const bonus = starBonusSpears(this.rules, hardened, stars);
     this.phase = { kind: 'done', seconds };
     const banked = this.#hooks.bank(hardened, charred, bonus);
+    const ash = ashFor(this.rules, charred, this.logsPlaced);
+    if (ash > 0) this.#hooks.bankAsh?.(ash);
     const result: RackResult = {
       finishes,
       hardened,
@@ -265,6 +271,7 @@ export class FiremakingRound {
       best,
       burnt,
       banked,
+      ash,
     };
     this.#log('firemaking.rackEnd', {
       seed: this.fire.seed,
@@ -285,6 +292,7 @@ export class FiremakingRound {
       window: round2(best.window),
       logsUsed: this.logsPlaced,
       banked,
+      ash,
     });
     this.#hooks.onEvent?.({ type: 'pulled', ...result });
   }
@@ -302,6 +310,11 @@ export function starsFor(
 ): number {
   if (missed <= 0) return 3;
   return missed <= columns * rules.stars.twoMissedShare ? 2 : 1;
+}
+
+/** Ash a rack leaves: some for each charred stave, and a share of each fuel log (rounded). */
+export function ashFor(rules: Pick<Firemaking, 'ash'>, charred: number, logs: number): number {
+  return charred * rules.ash.perCharred + Math.round(logs * rules.ash.perLog);
 }
 
 /** Bonus spears for a rack's stars: a share of the spears hardened, none below 2 stars. */

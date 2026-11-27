@@ -122,7 +122,7 @@ export function treesHit(
  * boulder), and where: its canopy within canopy radius of it, or its bare trunk within trunk
  * radius.
  */
-function touch(
+export function touch(
   clearing: Clearing,
   tree: ClearingTree,
   angle: number,
@@ -155,7 +155,7 @@ function touch(
 }
 
 /** Distance from a point to the cabin's footprint (0 inside it). */
-function toCabin(cabin: Cabin, x: number, y: number): number {
+export function toCabin(cabin: Cabin, x: number, y: number): number {
   return Math.hypot(
     Math.max(Math.abs(x - cabin.x) - cabin.width / 2, 0),
     Math.max(Math.abs(y - cabin.y) - cabin.depth / 2, 0),

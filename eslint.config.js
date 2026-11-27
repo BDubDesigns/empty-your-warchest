@@ -13,7 +13,7 @@ const renderingLibraries = {
 };
 
 export default tseslint.config(
-  { ignores: ['dist', 'playwright-report', 'test-results'] },
+  { ignores: ['dist', 'playwright-report', 'test-results', 'tools'] },
   js.configs.recommended,
   ...tseslint.configs.strictTypeChecked,
   {
@@ -36,7 +36,14 @@ export default tseslint.config(
     ...tseslint.configs.disableTypeChecked,
   },
   {
-    files: ['src/runner/sim/**', 'src/core/**', 'src/data/**', 'src/stations/*/logic/**'],
+    files: [
+      'src/runner/sim/**',
+      'src/core/**',
+      'src/data/**',
+      'src/stations/*/logic/**',
+      'src/bench/logic/**',
+      'functions/**',
+    ],
     rules: { 'no-restricted-imports': ['error', renderingLibraries] },
   },
   prettier,

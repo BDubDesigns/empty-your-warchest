@@ -24,6 +24,14 @@ export const stations = [
     camp: { x: 0.73, y: 0.42 },
   },
   {
+    // Top right, across from the Tree line (M9). The camp scrolls one day; it stays in data.
+    id: 'cauldron',
+    name: 'Cauldron',
+    skill: 'alchemy',
+    mechanic: 'brewing',
+    camp: { x: 0.73, y: 0.2 },
+  },
+  {
     id: 'war_tent',
     name: 'War tent',
     skill: 'command',

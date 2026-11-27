@@ -17,7 +17,7 @@ export interface GameState {
 
 export function newGameState(data: GameData, now: number): GameState {
   return {
-    inventory: [],
+    inventory: data.newGame.inventory.map((stack) => ({ ...stack })),
     skills: Object.fromEntries(data.skills.map((skill) => [skill.id, 0])),
     lastSeenAt: now,
     work: { crew: startingCrew(data), carry: {}, minimums: {}, piles: {}, xp: {} },

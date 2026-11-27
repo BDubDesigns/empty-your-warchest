@@ -32,6 +32,24 @@ export class ScreenSwitcher<Id extends string> {
     return next;
   }
 
+  /**
+   * Pauses and hides the screen on show while `run` runs (a tool over everything, like the stress
+   * test), then shows it again. Switches asked for meanwhile wait until it's done.
+   */
+  aside(run: () => Promise<void>): Promise<void> {
+    const next = this.#queue.then(async () => {
+      const current = this.#current;
+      if (current !== undefined) this.#screens[current].leave();
+      try {
+        await run();
+      } finally {
+        if (current !== undefined) this.#screens[current].enter();
+      }
+    });
+    this.#queue = next.catch(() => undefined);
+    return next;
+  }
+
   async #switchTo(id: Id): Promise<void> {
     if (id === this.#current) return;
     const next = this.#screens[id];

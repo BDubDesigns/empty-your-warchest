@@ -132,6 +132,86 @@ function checkReferences(data: GameData, ctx: z.RefinementCtx): void {
   if (firemaking.feel.smokeWisps >= firemaking.feel.smokeThick) {
     issue(['firemaking', 'feel', 'smokeWisps'], 'Wisps must come before thick smoke');
   }
+  if (!itemIds.has(firemaking.ash.item)) {
+    issue(['firemaking', 'ash', 'item'], `Unknown item "${firemaking.ash.item}"`);
+  }
+
+  // Brewing (the answer check, with the colour maths, runs at boot: see checkBrews).
+  const brewing = data.brewing;
+  const shelf = new Set<string>();
+  brewing.ingredients.forEach((ingredient, index) => {
+    if (!itemIds.has(ingredient.item)) {
+      issue(['brewing', 'ingredients', index, 'item'], `Unknown item "${ingredient.item}"`);
+    }
+    if (shelf.has(ingredient.item)) issue(['brewing', 'ingredients', index, 'item'], 'Twice');
+    shelf.add(ingredient.item);
+  });
+  brewing.potions.forEach((potion, index) => {
+    const recipe = data.recipes.find((entry) => entry.id === potion.recipe);
+    if (!recipe)
+      issue(['brewing', 'potions', index, 'recipe'], `Unknown recipe "${potion.recipe}"`);
+    else if (recipe.inputs.length > 0) {
+      issue(['brewing', 'potions', index, 'recipe'], 'A brew takes what went into the pot');
+    }
+  });
+  const span = (range: { min: number; max: number }) => range.min <= range.max;
+  const overlap = (one: { min: number; max: number }, other: { min: number; max: number }) =>
+    one.min <= other.max && other.min <= one.max;
+  brewing.potions.forEach((potion, index) => {
+    for (const key of ['L', 'chroma', 'hue'] as const) {
+      if (!span(potion.region[key])) {
+        issue(['brewing', 'potions', index, 'region', key], 'min must not be more than max');
+      }
+    }
+    if (potion.region.L.max > 1) {
+      issue(['brewing', 'potions', index, 'region', 'L'], 'Lightness runs 0–1');
+    }
+    brewing.potions.slice(0, index).forEach((other, before) => {
+      const hue = (range: { min: number; max: number }, turn: number) => ({
+        min: range.min + turn,
+        max: range.max + turn,
+      });
+      const hues = [-360, 0, 360].some((turn) =>
+        overlap(potion.region.hue, hue(other.region.hue, turn)),
+      );
+      if (
+        hues &&
+        overlap(potion.region.L, other.region.L) &&
+        overlap(potion.region.chroma, other.region.chroma)
+      ) {
+        issue(
+          ['brewing', 'potions', index, 'region'],
+          `Overlaps potion ${String(before)}'s region`,
+        );
+      }
+    });
+  });
+  if (!(brewing.stars.three <= brewing.stars.two && brewing.stars.two <= brewing.stars.one)) {
+    issue(['brewing', 'stars'], 'Bands must widen from three stars to one');
+  }
+  if (brewing.advice.much < brewing.advice.spotOn) {
+    issue(['brewing', 'advice', 'much'], 'Must not be less than spotOn');
+  }
+  if ((brewing.icons.outline + brewing.icons.halo) * 4 > brewing.icons.px) {
+    issue(['brewing', 'icons'], 'The outline would leave no room for the item');
+  }
+  data.newGame.inventory.forEach((stack, index) => {
+    if (!itemIds.has(stack.item)) {
+      issue(['newGame', 'inventory', index, 'item'], `Unknown item "${stack.item}"`);
+    }
+  });
+
+  // Foraging in woodcutting.
+  const forage = data.woodcutting.forage;
+  for (const key of ['mossyTrees', 'mushroomTrees', 'mossyBoulders', 'patches'] as const) {
+    const entry = forage[key];
+    if (!itemIds.has(entry.item)) {
+      issue(['woodcutting', 'forage', key, 'item'], `Unknown item "${entry.item}"`);
+    }
+    if (entry.count.min > entry.count.max) {
+      issue(['woodcutting', 'forage', key, 'count'], 'min must not be more than max');
+    }
+  }
 
   const splitting = data.splitting;
   if (!data.recipes.some((recipe) => recipe.id === splitting.recipe)) {

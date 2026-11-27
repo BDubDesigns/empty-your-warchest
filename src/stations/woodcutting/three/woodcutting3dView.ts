@@ -25,6 +25,7 @@ import {
   type Point,
 } from '../logic/chain';
 import { fallTilt, rollDistance } from '../logic/fall';
+import type { ChainForage, Forage } from '../logic/forage';
 import { WoodcuttingRound, type RoundEvent, type RoundRoller } from '../logic/round';
 import { chainLogs } from '../logic/score';
 import type { ClearingPicker } from '../clearingPicker';
@@ -123,6 +124,10 @@ const COLORS = {
   chimney: 0x8a8378,
   fence: 0x8b6a45,
   boulder: 0x9a968c,
+  moss: 0x6f9a2a,
+  patch: 0x4e3a28,
+  redCap: 0xd8301e,
+  stalk: 0xf1e8d6,
 };
 /** The fence: how tall, and posts about this far apart (clearing units). */
 const FENCE_HEIGHT = 0.42;
@@ -230,7 +235,7 @@ interface Particle {
 }
 
 /** Wood chips, a puff of dust, the cabin's billowing cloud of dust, its window's glass. */
-type ParticleKind = 'chip' | 'dust' | 'cloud' | 'glass';
+type ParticleKind = 'chip' | 'dust' | 'cloud' | 'glass' | 'moss';
 
 /**
  * How each kind of particle looks and moves: colour, opacity (below 1 fades and grows by `grow`
@@ -278,6 +283,16 @@ const PARTICLES: Record<
     life: 2.6,
     gravity: -0.25,
     drag: 1.4,
+  },
+  moss: {
+    color: 0x7f9e2c,
+    opacity: 1,
+    grow: 0,
+    speed: 1.8,
+    speedRange: 1.4,
+    life: 0.8,
+    gravity: 9,
+    drag: 0,
   },
   glass: {
     color: 0xdfeef2,
@@ -338,7 +353,20 @@ export class Woodcutting3DView implements ScreenView {
   /** XP from the last bank, held back until its logs pour in. */
   #bankedXp: XpDeposit | undefined;
   /** A banked chain waiting for the camera to settle on the overview before its logs pour. */
-  #pendingPour: { deposit: Deposit; trees: string[] } | undefined;
+  #pendingPour:
+    | {
+        deposit: Deposit;
+        trees: string[];
+        /** What the chain foraged: each item poured from where it came from. */
+        drops: Deposit[];
+        forage: ChainForage;
+      }
+    | undefined;
+  /**
+   * Forage you can see, by what it is ('tree:id' mushrooms at a tree's foot, 'patch:id', and
+   * 'boulder:id' the moss on a boulder): hidden once foraged.
+   */
+  #forageLooks = new Map<string, THREE.Object3D>();
   /**
    * The summary to show once the last logs are in the chest: the clearing is cleared, or the
    * player tapped End round (and can still keep chopping).
@@ -498,6 +526,11 @@ export class Woodcutting3DView implements ScreenView {
         logger: this.#deps.logger,
         feel: () => this.#feel(),
         chainExponent: this.#deps.game.data.woodcutting.chainExponent,
+        forage: game.data.woodcutting.forage,
+        ...(plan.seed !== undefined && { forageSeed: plan.seed }),
+        bankDrops: (drops) => {
+          for (const stack of drops) game.addItems(stack.item, stack.count);
+        },
         bank: (batches) => {
           const before = game.level(this.#skill);
           const xpBefore = game.xp(this.#skill);
@@ -635,6 +668,9 @@ export class Woodcutting3DView implements ScreenView {
    */
   #buildHazards(): void {
     this.#hazards.clear();
+    for (const key of [...this.#forageLooks.keys()]) {
+      if (!key.startsWith('tree:')) this.#forageLooks.delete(key);
+    }
     this.#boulders.clear();
     this.#rolling = [];
     this.#cabin = undefined;
@@ -650,6 +686,21 @@ export class Woodcutting3DView implements ScreenView {
         treeSeed(boulder.id + String(this.#plan?.seed ?? 0)) % 6,
       );
       spinner.quaternion.copy(turned);
+      // A mossy boulder: a green cap on top, until it's first hit.
+      const moss = this.#roundForage().boulders.get(boulder.id);
+      if (moss !== undefined && !this.#hasForaged(`boulder:${boulder.id}`)) {
+        const radius = boulder.radius * SCALE;
+        const cap = this.#mossLumps(
+          10 + moss * 4,
+          radius * 0.7,
+          radius * 0.3,
+          radius * 0.8,
+          index,
+          1.6,
+        );
+        model.add(cap);
+        this.#forageLooks.set(`boulder:${boulder.id}`, cap);
+      }
       const holder = new THREE.Group();
       holder.add(spinner);
       holder.position.copy(this.#world(boulder));
@@ -672,6 +723,23 @@ export class Woodcutting3DView implements ScreenView {
       this.#hazards.add(ring);
       this.#boulders.set(boulder.id, { holder, spinner, turned, ring });
     });
+    // Mushroom patches: a darker patch of earth thick with red caps.
+    for (const patch of this.#roundForage().patches) {
+      if (this.#hasForaged(`patch:${patch.id}`)) continue;
+      const radius = patch.radius * SCALE;
+      const group = new THREE.Group();
+      const ground = new THREE.Mesh(
+        new THREE.CircleGeometry(radius, 20).rotateX(-Math.PI / 2),
+        new THREE.MeshLambertMaterial({ color: COLORS.patch }),
+      );
+      ground.position.y = 0.012;
+      ground.receiveShadow = true;
+      group.add(ground);
+      group.add(this.#mushrooms(8, radius * 0.75, 0.2, treeSeed(patch.id), true));
+      group.position.copy(this.#world(patch));
+      this.#hazards.add(group);
+      this.#forageLooks.set(`patch:${patch.id}`, group);
+    }
     const cabin = this.#clearing.cabin;
     if (cabin) {
       const model = this.#buildCabin(cabin);
@@ -679,6 +747,84 @@ export class Woodcutting3DView implements ScreenView {
       this.#hazards.add(model.group);
       this.#cabin = { model };
     }
+  }
+
+  /** This round's forage: none until the first round starts (the scene is built before it). */
+  #roundForage(): Forage {
+    const round = this.#round as WoodcuttingRound | undefined;
+    return round?.forage ?? { trees: new Map(), boulders: new Map(), patches: [] };
+  }
+
+  #hasForaged(key: string): boolean {
+    const round = this.#round as WoodcuttingRound | undefined;
+    return round?.hasForaged(key) ?? false;
+  }
+
+  /**
+   * Moss: `count` soft green lumps (`scale` times the usual size) round something `radius` wide,
+   * from `low` to `high` up it (seeded, so it looks the same each rebuild).
+   */
+  #mossLumps(
+    count: number,
+    radius: number,
+    low: number,
+    high: number,
+    seed: number,
+    scale = 1,
+  ): THREE.Group {
+    const rng = new Rng(seed + 7919);
+    const group = new THREE.Group();
+    const material = new THREE.MeshLambertMaterial({ color: COLORS.moss, flatShading: true });
+    for (let index = 0; index < count; index++) {
+      const around = rng.range(0, Math.PI * 2);
+      const size = rng.range(0.07, 0.12) * scale;
+      const lump = new THREE.Mesh(new THREE.IcosahedronGeometry(size, 0), material);
+      lump.position.set(Math.cos(around) * radius, rng.range(low, high), Math.sin(around) * radius);
+      lump.scale.set(1, 0.7, 1);
+      lump.castShadow = true;
+      group.add(lump);
+    }
+    return group;
+  }
+
+  /**
+   * A cluster of `count` red cap mushrooms round a spot, `spread` out (from a trunk, or all over a
+   * patch when `inside`), each about `size` tall.
+   */
+  #mushrooms(
+    count: number,
+    spread: number,
+    size: number,
+    seed: number,
+    inside = false,
+  ): THREE.Group {
+    const rng = new Rng(seed + 104729);
+    const group = new THREE.Group();
+    const stalk = new THREE.MeshLambertMaterial({ color: COLORS.stalk });
+    const cap = new THREE.MeshLambertMaterial({ color: COLORS.redCap });
+    for (let index = 0; index < count; index++) {
+      const around = rng.range(0, Math.PI * 2);
+      const out = inside ? Math.sqrt(rng.next()) * spread : spread + rng.range(0, 0.08);
+      const tall = size * rng.range(0.75, 1.25);
+      const mushroom = new THREE.Group();
+      const stem = new THREE.Mesh(
+        new THREE.CylinderGeometry(tall * 0.18, tall * 0.24, tall, 6),
+        stalk,
+      );
+      stem.position.y = tall / 2;
+      const top = new THREE.Mesh(
+        new THREE.SphereGeometry(tall * 0.55, 10, 5, 0, Math.PI * 2, 0, Math.PI / 2),
+        cap,
+      );
+      top.position.y = tall * 0.85;
+      top.scale.y = 0.8;
+      top.castShadow = true;
+      mushroom.add(stem, top);
+      mushroom.position.set(Math.cos(around) * out, 0, Math.sin(around) * out);
+      mushroom.rotation.z = rng.range(-0.2, 0.2);
+      group.add(mushroom);
+    }
+    return group;
   }
 
   /**
@@ -850,6 +996,9 @@ export class Woodcutting3DView implements ScreenView {
     this.#carvers.clear();
     for (const visual of this.#trees.values()) this.#scene.remove(visual.root);
     this.#trees.clear();
+    for (const key of [...this.#forageLooks.keys()]) {
+      if (key.startsWith('tree:')) this.#forageLooks.delete(key);
+    }
     const sources = this.#models[this.#style];
     for (const tree of this.#clearing.trees) {
       const root = new THREE.Group();
@@ -875,6 +1024,30 @@ export class Woodcutting3DView implements ScreenView {
       const stump = this.#modelOfHeight(this.#models.stump, 0.22);
       stump.visible = false;
       root.add(stump);
+      // What it drops, shown from the start: moss up its trunk, mushrooms at its foot.
+      const drop = this.#roundForage().trees.get(tree.id);
+      if (drop && drop.moss > 0) {
+        trunks.forEach((trunk, index) => {
+          trunk.add(this.#mossLumps(6 + drop.moss * 3, TRUNK_RADIUS, 0.75, 1.6, seed + index, 1.4));
+        });
+        // A mossy skirt round its foot too, so it reads from above, under the canopy.
+        if (!this.#hasForaged(`tree:${tree.id}`)) {
+          const skirt = new THREE.Mesh(
+            new THREE.CircleGeometry(TRUNK_RADIUS + 0.32, 14).rotateX(-Math.PI / 2),
+            new THREE.MeshLambertMaterial({ color: COLORS.moss }),
+          );
+          skirt.position.y = 0.014;
+          skirt.receiveShadow = true;
+          skirt.add(this.#mossLumps(7, TRUNK_RADIUS + 0.16, 0, 0.04, seed, 1.3));
+          root.add(skirt);
+          this.#forageLooks.set(`tree:${tree.id}:moss`, skirt);
+        }
+      }
+      if (drop && drop.mushrooms > 0 && !this.#hasForaged(`tree:${tree.id}`)) {
+        const caps = this.#mushrooms(2 + drop.mushrooms, TRUNK_RADIUS + 0.14, 0.2, seed);
+        root.add(caps);
+        this.#forageLooks.set(`tree:${tree.id}`, caps);
+      }
       this.#scene.add(root);
       const down = fallen.get(tree.id);
       this.#trees.set(tree.id, { tree, root, trunks, stump, ...(down ? { fallen: down } : {}) });
@@ -1687,6 +1860,13 @@ export class Woodcutting3DView implements ScreenView {
       // Knocked rolling: a heavy stone knock, a puff of dust, and a buzz.
       const roller = this.#round.rollers.find((entry) => entry.roll === event.roll);
       if (roller) this.#rolling.push(roller);
+      // A mossy boulder's moss falls off as it's first hit (it's banked with the chain).
+      const moss = this.#forageLooks.get(`boulder:${event.roll.boulder}`);
+      if (moss) {
+        moss.removeFromParent();
+        this.#forageLooks.delete(`boulder:${event.roll.boulder}`);
+        this.#burst('moss', this.#world(event.roll.from, 0.5), 14);
+      }
       this.#burst('dust', this.#world(event.roll.from, 0.2), 10);
       this.#play(`rock-${1 + Math.floor(Math.random() * 2)}`, 0.85, -150);
       this.#deps.haptics.pulse(feel.buzzLandMs);
@@ -1717,6 +1897,10 @@ export class Woodcutting3DView implements ScreenView {
       this.#pendingPour = {
         deposit: this.#hud.hold(event.logs, this.#landChain(event.logs)),
         trees,
+        drops: event.forage.drops.map((stack) =>
+          this.#hud.hold(stack.count, undefined, stack.item),
+        ),
+        forage: event.forage,
       };
       this.#bestChain = Math.max(this.#bestChain, event.trees);
     } else {
@@ -1904,10 +2088,18 @@ export class Woodcutting3DView implements ScreenView {
     this.#clearSummaryTimers();
     const par = `par ${String(round.par ?? '?')}`;
     const lost = round.lostLogs > 0 ? ` · lost ${String(round.lostLogs)} to the cabin` : '';
+    const items = this.#deps.game.data.items;
+    const foraged = round.drops
+      .map((stack) => {
+        const name = items.find((item) => item.id === stack.item)?.name ?? stack.item;
+        return `${name} × ${String(stack.count)}`;
+      })
+      .join(', ');
     ui.summaryText.textContent =
-      round.logs === 0
+      (round.logs === 0
         ? `No logs yet · ${par}${lost}`
-        : `${String(round.logs)} logs · ${par} · best chain ${String(this.#bestChain)}${lost}`;
+        : `${String(round.logs)} logs · ${par} · best chain ${String(this.#bestChain)}${lost}`) +
+      (foraged ? `\nForaged: ${foraged}` : '');
     ui.summarySeed.textContent =
       plan?.seed === undefined ? 'Tutorial clearing' : `Clearing #${String(plan.seed)}`;
     ui.summary.dataset.stars = String(earned);
@@ -2128,11 +2320,13 @@ export class Woodcutting3DView implements ScreenView {
     const look = PARTICLES[kind];
     for (let i = 0; i < count; i++) {
       const object =
-        kind === 'chip' || kind === 'glass'
+        kind === 'chip' || kind === 'glass' || kind === 'moss'
           ? new THREE.Mesh(
               kind === 'chip'
                 ? new THREE.BoxGeometry(0.05, 0.02, 0.035)
-                : new THREE.BoxGeometry(0.06, 0.005, 0.045),
+                : kind === 'moss'
+                  ? new THREE.BoxGeometry(0.06, 0.03, 0.06)
+                  : new THREE.BoxGeometry(0.06, 0.005, 0.045),
               new THREE.MeshLambertMaterial({ color: look.color }),
             )
           : new THREE.Mesh(
@@ -2261,6 +2455,33 @@ export class Woodcutting3DView implements ScreenView {
       this.#burst('chip', this.#world(visual.tree, 0.25), 8);
     }
     pending.deposit.pour(points);
+    // Foraged things pour from where they were: the stumps, the patches, the boulders.
+    const { forage } = pending;
+    if (pending.drops.length === 0) return;
+    const onScreen = (at: THREE.Vector3): ScreenPoint => {
+      const projected = at.project(this.#camera);
+      return { x: ((projected.x + 1) / 2) * width, y: ((1 - projected.y) / 2) * height };
+    };
+    const from: ScreenPoint[] = [];
+    for (const id of forage.trees) {
+      const visual = this.#trees.get(id);
+      if (visual) from.push(onScreen(this.#world(visual.tree, 0.25)));
+      this.#forageLooks.get(`tree:${id}`)?.removeFromParent();
+      this.#forageLooks.get(`tree:${id}:moss`)?.removeFromParent();
+    }
+    for (const id of forage.patches) {
+      const patch = this.#round.forage.patches.find((entry) => entry.id === id);
+      if (patch) {
+        from.push(onScreen(this.#world(patch, 0.1)));
+        this.#burst('dust', this.#world(patch, 0.1), 8);
+      }
+      this.#forageLooks.get(`patch:${id}`)?.removeFromParent();
+    }
+    for (const id of forage.boulders) {
+      const boulder = this.#round.clearing.boulders.find((entry) => entry.id === id);
+      if (boulder) from.push(onScreen(this.#world(boulder, 0.4)));
+    }
+    for (const drop of pending.drops) drop.pour(from);
   }
 
   #enterCloseUp(): void {

@@ -1,10 +1,12 @@
 // Single source of truth: skills, items, recipes, stations, units, levels, tuning.
 // Code reads these; it never repeats them.
 
+import { brewing } from './brewing';
 import { camp } from './camp';
 import { firemaking } from './firemaking';
 import { items } from './items';
 import { levels } from './levels';
+import { newGame } from './newGame';
 import { recipes } from './recipes';
 import { runner } from './runner';
 import { splitting } from './splitting';
@@ -32,10 +34,12 @@ export const rawGameData: GameDataInput = {
   enemies,
   levels,
   camp,
+  newGame,
   woodcutting,
   runner,
   splitting,
   firemaking,
+  brewing,
   siege,
   warchest,
   workers,

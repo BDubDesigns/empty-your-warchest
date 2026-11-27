@@ -11,7 +11,8 @@ import { ScreenSwitcher } from './screenSwitcher';
 import { noteContext } from './trouble';
 import { mechanicFor, type ScreenId as StationScreenId } from '../stations/registry';
 
-type ScreenId = 'phaser' | 'three' | 'wood3d' | 'splitting3d' | 'firemaking3d' | 'siege3d';
+type ScreenId =
+  'phaser' | 'three' | 'wood3d' | 'splitting3d' | 'firemaking3d' | 'brewing3d' | 'siege3d';
 
 /** The shell screen each station screen runs on. */
 const SCREENS: Record<StationScreenId, ScreenId> = {
@@ -19,6 +20,7 @@ const SCREENS: Record<StationScreenId, ScreenId> = {
   woodcutting3d: 'wood3d',
   splitting3d: 'splitting3d',
   firemaking3d: 'firemaking3d',
+  brewing3d: 'brewing3d',
   siege3d: 'siege3d',
 };
 
@@ -52,6 +54,7 @@ function nextFrame(): Promise<void> {
 const woodcuttingView = () => import('../stations/woodcutting/three/woodcutting3dView');
 const splittingView = () => import('../stations/splitting/three/splitting3dView');
 const firemakingView = () => import('../stations/firemaking/three/firemaking3dView');
+const brewingView = () => import('../stations/brewing/three/brewing3dView');
 const siegeView = () => import('../stations/siege/three/siege3dView');
 const runnerView = () => import('../runner/view');
 
@@ -68,6 +71,7 @@ export async function startApp(): Promise<void> {
         booted.feel.woodcutting,
         booted.feel.splitting,
         booted.feel.firemaking,
+        booted.feel.brewing,
         booted.feel.siege,
         booted.feel.runner,
       ],
@@ -82,6 +86,9 @@ export async function startApp(): Promise<void> {
       ],
       clearings: booted.clearings,
       buildLabel: __BUILD_LABEL__,
+      stressTest: () => {
+        openStressTest();
+      },
     });
   } catch (error) {
     // Bad data or a broken save must fail loudly, not leave a half-working game.
@@ -113,6 +120,7 @@ export async function startApp(): Promise<void> {
   const wood3dElement = byId('screen-wood3d');
   const splitting3dElement = byId('screen-splitting3d');
   const firemaking3dElement = byId('screen-firemaking3d');
+  const brewing3dElement = byId('screen-brewing3d');
   const siege3dElement = byId('screen-siege3d');
   const backButton = new BackButton(byId('back-button'), () => {
     run(() => navigation.back())();
@@ -196,6 +204,22 @@ export async function startApp(): Promise<void> {
       },
       async () => {
         await (await firemakingView()).Firemaking3DView.preload();
+      },
+    ),
+    brewing3d: lazyScreen(
+      brewing3dElement,
+      async () => {
+        const { Brewing3DView } = await brewingView();
+        return Brewing3DView.create(brewing3dElement, {
+          game,
+          logger,
+          feel: feel.brewing,
+          haptics,
+          onLeave: run((): Promise<void> => navigation.back()),
+        });
+      },
+      async () => {
+        await (await brewingView()).Brewing3DView.preload();
       },
     ),
     siege3d: lazyScreen(
@@ -296,6 +320,24 @@ export async function startApp(): Promise<void> {
     if (!phaser) throw new Error('Phaser did not start');
     return phaser;
   };
+
+  /**
+   * Debug → Stress test: its own screen over everything, its code and models loaded only now. The
+   * screen on show (and the background loading) pauses while it's open, so it measures alone.
+   */
+  function openStressTest(): void {
+    preloader.pause();
+    run(async () => {
+      try {
+        await switcher.aside(async () => {
+          const { openBench } = await import('../bench/view/benchScreen');
+          await openBench(byId('app'), { logger, buildLabel: __BUILD_LABEL__ });
+        });
+      } finally {
+        if (document.body.dataset.view === 'camp') preloader.resume();
+      }
+    })();
+  }
 
   const navigation = new Navigation(
     game.data,
