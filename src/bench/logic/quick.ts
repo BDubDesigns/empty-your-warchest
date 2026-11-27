@@ -3,8 +3,9 @@ import type { RunSettings } from './plan';
 
 // The quick run: a few short runs, the log sent after each, so a device there's only a minute on
 // (a free BrowserStack trial) still gets its results back, however far it got. `?bench=quick` on
-// the page's address starts it as the page loads, with no taps. The order of things lives here,
-// apart from the screen, so it's tested: a run, its upload, then the next run.
+// the page's address starts it as the page loads, with no taps. Run all sends its log after each
+// run the same way, so a phone that crashes on a heavy run has sent everything before it. The order
+// of things lives here, apart from the screen, so it's tested: a run, its upload, the next run.
 
 /** The quick run's runs, each at `pixelRatio`. */
 export function quickPlan(data: BenchData, pixelRatio: BenchPixelRatio): RunSettings[] {
@@ -61,7 +62,7 @@ export function quickSeconds(data: BenchData, timing: QuickTiming, overhead: num
 /** How a run went: measured to the end, stopped, given up still loading, or broken. */
 export type QuickStatus = 'done' | 'stopped' | 'timedOut' | 'failed';
 
-/** What the quick run asks of the bench. None of them may reject. */
+/** What the quick run (and Run all) asks of the bench. None of them may reject. */
 export interface QuickHooks<Upload> {
   /** Runs `run` (the `index`th) and logs it, resolving with how it went. */
   run(run: RunSettings, index: number): Promise<QuickStatus>;
@@ -77,11 +78,12 @@ export interface QuickHooks<Upload> {
 
 /**
  * Each run in turn, the log sent after every one (stopped, timed out and broken ones too: what
- * they logged is worth having). The next run waits up to `uploadWaitMs` for the upload, so a slow
- * connection can't eat the minute; a late upload is still reported when it comes. Resolves with
- * how each run went, once the last upload is in (or waited for).
+ * they logged is worth having). The next run waits up to `uploadWaitMs` for the upload (Run all:
+ * 0, not at all), so a slow or failing connection can't eat the minute; a late upload is still
+ * reported when it comes. Resolves with how each run went, once the last upload is in (or waited
+ * for).
  */
-export async function runQuick<Upload>(
+export async function runAndSend<Upload>(
   runs: readonly RunSettings[],
   hooks: QuickHooks<Upload>,
   uploadWaitMs: number,

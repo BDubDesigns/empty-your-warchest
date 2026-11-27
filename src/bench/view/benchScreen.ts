@@ -21,7 +21,7 @@ import {
   quickPlan,
   quickSeconds,
   quickTiming,
-  runQuick,
+  runAndSend,
   within,
   type QuickOverrides,
   type QuickStatus,
@@ -36,7 +36,8 @@ import './bench.css';
 // off, and run it (or Run all): each run flies the same 20 s camera path through the scene,
 // the fort comes down at 10 s, and every frame's time is kept. The results are shown (a summary
 // sized for a phone's screenshots, or the full table) and logged as `bench.result`, so they come
-// back with Debug → Share logs. Quick run (or `?bench=quick`, which starts it as the page loads)
+// back with Debug → Share logs. Run all sends the log after every run, so a phone that crashes on a
+// heavy one has sent the rest. Quick run (or `?bench=quick`, which starts it as the page loads)
 // flies a short stretch of the path a run and sends the log after each, for a phone there's only a
 // minute on.
 
@@ -321,7 +322,7 @@ class Bench {
     ];
     const runButton = el('button', { type: 'button', className: 'bench-go', textContent: 'Run' });
     runButton.addEventListener('click', () => {
-      void this.#runSet([{ ...choice, note: '' }], 'single');
+      void this.#runSingle({ ...choice, note: '' });
     });
     const minutes = Math.ceil(planSeconds(data.runAll.length, data, 5) / 60);
     const runAllButton = el('button', {
@@ -330,7 +331,7 @@ class Bench {
       textContent: `Run all (${String(data.runAll.length)} runs, ~${String(minutes)} min)`,
     });
     runAllButton.addEventListener('click', () => {
-      void this.#runSet(runAllPlan(data, choice.pixelRatio), 'all');
+      void this.#runAll();
     });
     const quickAbout = Math.ceil(quickSeconds(data, quickTiming(data), 5) / 10) * 10;
     const quickButton = el('button', {
@@ -351,10 +352,11 @@ class Bench {
         'Phones slow down as they get hot (thermal throttling), so start from a cool phone off the ' +
         'charger, other apps closed, and leave it flat while it runs. Run all does the boxes twice: ' +
         'if the second is slower, the phone has throttled. Frame rates top out at the screen’s ' +
-        'refresh rate (60 or 120 Hz). Results are logged: send them with Debug → Share logs. ' +
-        `Quick run (or ?bench=quick on the address, which starts it as the page loads) measures ` +
-        `${String(data.quick.seconds)} s a run and sends the log after each, for a phone there’s ` +
-        'only a minute on.',
+        'refresh rate (60 or 120 Hz). Results are logged, and Run all and Quick run send the log ' +
+        'after every run (so a crash loses only the run it was on); Send results or Debug → Share ' +
+        'logs send it by hand. Quick run (or ?bench=quick on the address, which starts it as the ' +
+        `page loads) measures ${String(data.quick.seconds)} s a run, for a phone there’s only a ` +
+        'minute on.',
     });
     return el('div', { className: 'bench-panel' }, [
       el('header', { className: 'bench-header' }, [
@@ -468,7 +470,7 @@ class Bench {
     this.#hud.hidden = false;
   }
 
-  /** The controls back, and the results (or the quick run's box) scrolled into view. */
+  /** The controls back, and the results (or the uploads' box) scrolled into view. */
   #end(done: number): void {
     this.#busy = false;
     this.#stop = false;
@@ -477,7 +479,7 @@ class Bench {
     this.#panel.hidden = false;
     this.#root.dataset.benchState = 'done';
     this.#showDevice();
-    if (this.#root.dataset.benchSet === 'quick') {
+    if (this.#root.dataset.benchSet !== 'single') {
       // Its code at the top, the summary under it: one screenshot.
       this.#panel.insertBefore(this.#quick.box, this.#results.element);
       this.#quick.box.scrollIntoView({ block: 'start' });
@@ -503,10 +505,14 @@ class Bench {
     started: number,
     timing: RunTiming,
   ): Promise<BenchResult> {
+    const { logger } = this.#deps;
+    // Stored before it starts, so if it crashes the page (out of memory, say) the log says which.
+    logger.log('bench.runStart', { run: index + 1, of, set, ...run, sinceLoadS: sinceLoadS() });
+    await logger.flush();
     const result = await this.#runOne(run, `${String(index + 1)}/${String(of)}`, timing);
     this.#runCount++;
     this.#addRow(this.#runCount, result);
-    this.#deps.logger.log('bench.result', {
+    logger.log('bench.result', {
       run: index + 1,
       of,
       set,
@@ -516,38 +522,27 @@ class Bench {
       device: { ...this.#device },
     });
     // Stored before the next run, in case a heavier one runs the phone out of memory.
-    await this.#deps.logger.flush();
+    await logger.flush();
     return result;
   }
 
-  async #runSet(runs: RunSettings[], kind: 'single' | 'all'): Promise<void> {
+  /** A whole run: the full camera path, after the data's warm-up frames. */
+  #fullRun(): RunTiming {
+    return { from: 0, seconds: this.#data.seconds, warmup: { frames: this.#data.warmupFrames } };
+  }
+
+  /** One run of what's picked, its result shown and logged. */
+  async #runSingle(run: RunSettings): Promise<void> {
     if (this.#busy) return;
-    this.#begin(kind);
-    const started = performance.now();
-    const timing: RunTiming = {
-      from: 0,
-      seconds: this.#data.seconds,
-      warmup: { frames: this.#data.warmupFrames },
-    };
-    if (kind === 'all') {
-      this.#deps.logger.log('bench.runAll', { runs: runs.length, pixelRatio: runs[0]?.pixelRatio });
-    }
+    this.#begin('single');
     let done = 0;
     try {
-      for (const [index, run] of runs.entries()) {
-        if (this.#stopping()) break;
-        const result = await this.#measure(run, index, runs.length, kind, started, timing);
-        done++;
-        if (result.stopped) break;
-      }
-      const seconds = Math.round((performance.now() - started) / 1000);
+      const result = await this.#measure(run, 0, 1, 'single', performance.now(), this.#fullRun());
+      done++;
       this.#say(
-        `${String(done)} of ${String(runs.length)} run${runs.length === 1 ? '' : 's'} done in ${String(seconds)} s` +
-          (this.#stopping() ? ' (stopped)' : '') +
-          '. Logged as bench.result: send with Debug → Share logs.',
+        `1 of 1 run done${result.stopped ? ' (stopped)' : ''}. Logged as bench.result: send ` +
+          'with Send results or Debug → Share logs.',
       );
-      if (kind === 'all')
-        this.#deps.logger.log('bench.runAllDone', { done, of: runs.length, seconds });
     } catch (error) {
       this.#say(`Run failed: ${errorText(error)}`);
       this.#logError(error);
@@ -557,24 +552,66 @@ class Bench {
   }
 
   /**
-   * The quick run: each run short, logged as bench.result and bench.quick, and the log sent after
-   * each (as Send results does), so whatever got done is back even if the device's minute runs
-   * out. The latest upload's code is shown big throughout.
+   * Run all, the log sent after every run (as the quick run's is), so a phone that crashes on a
+   * heavy run (out of memory: Chrome's "Aw, Snap!") has sent everything before it. It never waits
+   * for an upload: the next run starts straight away, whether it's in or not.
+   */
+  async #runAll(): Promise<void> {
+    if (this.#busy) return;
+    const runs = runAllPlan(this.#data, this.#choice.pixelRatio);
+    this.#deps.logger.log('bench.runAll', { runs: runs.length, pixelRatio: runs[0]?.pixelRatio });
+    const outcome = await this.#runAndSend(runs, 'all', this.#fullRun(), 0);
+    this.#deps.logger.log('bench.runAllDone', outcome);
+  }
+
+  /**
+   * The quick run: each run short, and the log sent after each, so whatever got done is back even
+   * if the device's minute runs out.
    */
   async #runQuick(overrides: QuickOverrides): Promise<void> {
     if (this.#busy) return;
     const data = this.#data;
-    const { logger, buildLabel } = this.#deps;
     const quick = quickTiming(data, overrides);
     const runs = quickPlan(data, this.#choice.pixelRatio);
-    const of = runs.length;
+    this.#deps.logger.log('bench.quickStart', {
+      runs: runs.length,
+      ...quick,
+      sinceLoadS: sinceLoadS(),
+    });
     const timing: RunTiming = {
       from: quick.from,
       seconds: quick.seconds,
       warmup: { seconds: quick.warmupSeconds },
       loadTimeoutMs: data.quick.loadTimeoutS * 1000,
     };
+    const outcome = await this.#runAndSend(runs, 'quick', timing, data.quick.uploadWaitS * 1000);
+    this.#deps.logger.log('bench.quickDone', outcome);
+  }
+
+  /**
+   * Each run in turn, logged as bench.result and then bench.quick (the quick run) or bench.runEnd
+   * (Run all), and the log sent after each (as Send results does), the next run waiting up to
+   * `uploadWaitMs` for it. Which run it's on and the latest upload's code are shown big throughout.
+   */
+  async #runAndSend(
+    runs: RunSettings[],
+    set: 'quick' | 'all',
+    timing: RunTiming,
+    uploadWaitMs: number,
+  ): Promise<{
+    statuses: QuickStatus[];
+    done: number;
+    of: number;
+    uploads: number;
+    seconds: number;
+    lastUploadS: number;
+  }> {
+    const data = this.#data;
+    const { logger, buildLabel } = this.#deps;
+    const of = runs.length;
+    const title = set === 'quick' ? 'Quick run' : 'Run all';
     const box = this.#quick;
+    box.box.ariaLabel = title;
     // In the HUD while the runs go; back in the panel once they're done.
     this.#hud.append(box.box);
     box.box.hidden = false;
@@ -588,15 +625,14 @@ class Bench {
     let latest = -1;
     let uploads = 0;
     let lastUploadS = 0;
-    this.#begin('quick');
+    this.#begin(set);
     const started = performance.now();
-    logger.log('bench.quickStart', { runs: of, ...quick, sinceLoadS: sinceLoadS() });
     const name = (run: RunSettings) =>
       `${data.packs.find((pack) => pack.id === run.pack)?.name ?? run.pack} ${String(run.scale)}×`;
 
     let statuses: QuickStatus[] = [];
     try {
-      statuses = await runQuick<SendResult>(
+      statuses = await runAndSend<SendResult>(
         runs,
         {
           run: async (run, index) => {
@@ -605,14 +641,14 @@ class Bench {
             let result: BenchResult | undefined;
             let error: string | undefined;
             try {
-              result = await this.#measure(run, index, of, 'quick', started, timing);
+              result = await this.#measure(run, index, of, set, started, timing);
               status = result.stopped ? 'stopped' : 'done';
             } catch (caught) {
               status = caught instanceof LoadTimedOut ? 'timedOut' : 'failed';
               error = errorText(caught);
               this.#logError(caught);
             }
-            logger.log('bench.quick', {
+            logger.log(set === 'quick' ? 'bench.quick' : 'bench.runEnd', {
               run: index + 1,
               of,
               pack: run.pack,
@@ -628,7 +664,8 @@ class Bench {
                   }
                 : {}),
               ...(error === undefined ? {} : { error }),
-              ...quick,
+              from: timing.from,
+              seconds: timing.seconds,
               elapsedS: Math.round((performance.now() - started) / 100) / 10,
               sinceLoadS: sinceLoadS(),
             });
@@ -643,7 +680,7 @@ class Bench {
               logger.log('debug.sendLogs', {
                 ...result,
                 events: events.length,
-                from: 'bench.quick',
+                from: `bench.${set}`,
                 run: index + 1,
                 sinceLoadS: sinceLoadS(),
               });
@@ -655,7 +692,7 @@ class Bench {
           uploaded: (index, result, late) => {
             sent[index] = result.ok ? `✓ ${result.code}` : `✗ (${result.error})`;
             showSent();
-            if (late) logger.log('bench.quickLateUpload', { run: index + 1, ok: result.ok });
+            if (late) logger.log('bench.lateUpload', { set, run: index + 1, ok: result.ok });
             if (!result.ok) return;
             uploads++;
             lastUploadS = sinceLoadS();
@@ -665,29 +702,33 @@ class Bench {
               latest = index;
               box.code.textContent = result.code;
             }
+            // Run all doesn't wait for its last upload: the status says once it's in.
+            if (!this.#busy) this.#say(`Sent ✓ code ${box.code.textContent}`);
           },
           wait,
           stopping: () => this.#stopping(),
         },
-        data.quick.uploadWaitS * 1000,
+        uploadWaitMs,
       );
     } catch (error) {
-      this.#say(`Quick run failed: ${errorText(error)}`);
+      this.#say(`${title} failed: ${errorText(error)}`);
       this.#logError(error);
     }
     const done = statuses.filter((status) => status === 'done').length;
     const seconds = Math.round((performance.now() - started) / 1000);
-    logger.log('bench.quickDone', { statuses, uploads, seconds, lastUploadS });
     box.step.textContent =
-      `Quick run: ${String(done)} of ${String(of)} done in ${String(seconds)} s` +
+      `${title}: ${String(done)} of ${String(of)} done in ${String(seconds)} s` +
       (this.#stopping() ? ' (stopped)' : '') +
       (uploads > 0 ? `, last sent ${String(lastUploadS)} s after the page loaded` : '');
     this.#say(
       uploads > 0
         ? `Sent ✓ code ${box.code.textContent}`
-        : "Couldn't send: tap Send results to try again, or Debug → Share logs…",
+        : set === 'all'
+          ? 'Sending… (if it doesn’t get through: Send results, or Debug → Share logs…)'
+          : "Couldn't send: tap Send results to try again, or Debug → Share logs…",
     );
     this.#end(statuses.length);
+    return { statuses, done, of, uploads, seconds, lastUploadS };
   }
 
   async #runOne(run: RunSettings, label: string, timing: RunTiming): Promise<BenchResult> {

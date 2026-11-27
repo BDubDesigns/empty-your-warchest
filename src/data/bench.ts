@@ -622,15 +622,17 @@ export const bench = {
     { pack: 'boxes', scale: 1, note: 'again: has it slowed as it warmed?' },
     { pack: 'village-heavy', scale: 1, note: 'full-size textures' },
   ],
-  // About 40 s from the page loading to the last upload on a slow phone: a free BrowserStack trial
-  // gives a device about a minute. 5 to 13 s of the path takes in the flyover behind the fort, the
-  // drop to the sights and the fort coming down at 10. The optimised village first, as it matters
-  // most; the boxes as the baseline; then the plain village, last as it's the slowest to load
-  // (about 10 MB, its textures at 1024 px), so it can't hold up the other two's uploads.
+  // A free BrowserStack trial gives a device about a minute. With 2 + 8 s a run, the preview took
+  // 41 s from load to the last upload on a fast PC, which is too close on a slow phone (each run
+  // also loads and compiles), so 2 + 6 s: about 45 s on a slow phone. 7 to 13 s of the path takes
+  // in the flyover's side, the drop to the sights and the fort coming down at 10, with 3 s of it
+  // falling. The optimised village first, as it matters most; the boxes as the baseline; then the
+  // plain village, last as it's the slowest to load (about 10 MB, its textures at 1024 px), so it
+  // can't hold up the other two's uploads.
   quick: {
     warmupSeconds: 2,
-    seconds: 8,
-    from: 5,
+    seconds: 6,
+    from: 7,
     loadTimeoutS: 15,
     uploadWaitS: 5,
     runs: [

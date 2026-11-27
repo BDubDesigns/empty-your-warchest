@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import type { RunSettings } from '../src/bench/logic/plan';
+import { runAllPlan, type RunSettings } from '../src/bench/logic/plan';
 import {
   quickFromUrl,
   quickPlan,
   quickSeconds,
   quickTiming,
-  runQuick,
+  runAndSend,
   within,
   type QuickHooks,
   type QuickStatus,
@@ -46,18 +46,18 @@ describe('quick run data', () => {
 
   it('measures a stretch of the path with the fort coming down in it', () => {
     const timing = quickTiming(data);
-    expect(timing).toEqual({ from: 5, warmupSeconds: 2, seconds: 8 });
+    expect(timing).toEqual({ from: 7, warmupSeconds: 2, seconds: 6 });
     expect(data.collapse.at).toBeGreaterThanOrEqual(timing.from);
     expect(data.collapse.at).toBeLessThan(timing.from + timing.seconds);
   });
 
   it('fits a minute on a device, with time to load and send', () => {
-    // 30 s of warm-up and measuring; allow 4 s a run to load, compile and send on a slow phone,
+    // 24 s of warm-up and measuring; allow 5 s a run to load, compile and send on a slow phone,
     // and 5 s for the page itself.
     const timing = quickTiming(data);
-    expect(5 + quickSeconds(data, timing, 4)).toBeLessThan(50);
+    expect(5 + quickSeconds(data, timing, 5)).toBeLessThan(50);
     // Even if the last run's load times out, that's logged and sent within the minute.
-    const firstTwo = (2 / data.quick.runs.length) * quickSeconds(data, timing, 4);
+    const firstTwo = (2 / data.quick.runs.length) * quickSeconds(data, timing, 5);
     expect(5 + firstTwo + data.quick.loadTimeoutS + data.quick.uploadWaitS).toBeLessThan(60);
   });
 
@@ -68,7 +68,7 @@ describe('quick run data', () => {
     expect(() =>
       loadBenchData({ ...bench, quick: { ...bench.quick, runs: [{ pack: 'nope', scale: 1 }] } }),
     ).toThrow(/Unknown pack "nope"/);
-    expect(() => loadBenchData({ ...bench, quick: { ...bench.quick, warmupSeconds: 6 } })).toThrow(
+    expect(() => loadBenchData({ ...bench, quick: { ...bench.quick, warmupSeconds: 8 } })).toThrow(
       /warm-up/,
     );
   });
@@ -89,14 +89,14 @@ describe('quick run from the address', () => {
 
   it('keeps overrides within the camera path', () => {
     expect(quickTiming(data, { warmupSeconds: 0.5, seconds: 1 })).toEqual({
-      from: 5,
+      from: 7,
       warmupSeconds: 0.5,
       seconds: 1,
     });
     expect(quickTiming(data, { warmupSeconds: 60, seconds: 60 })).toEqual({
-      from: 5,
-      warmupSeconds: 5,
-      seconds: data.seconds - 5,
+      from: 7,
+      warmupSeconds: 7,
+      seconds: data.seconds - 7,
     });
   });
 });
@@ -106,7 +106,7 @@ describe('quick run sequence', () => {
 
   it('sends the log after every run, before the next starts', async () => {
     const { steps, hooks } = recorder();
-    expect(await runQuick(plan, hooks, 5000)).toEqual(['done', 'done', 'done']);
+    expect(await runAndSend(plan, hooks, 5000)).toEqual(['done', 'done', 'done']);
     expect(steps).toEqual([
       'run 0 village-lite',
       'upload 0',
@@ -122,7 +122,7 @@ describe('quick run sequence', () => {
 
   it('sends a timed-out or broken run too, and carries on', async () => {
     const { steps, hooks } = recorder(['failed', 'done', 'timedOut']);
-    expect(await runQuick(plan, hooks, 5000)).toEqual(['failed', 'done', 'timedOut']);
+    expect(await runAndSend(plan, hooks, 5000)).toEqual(['failed', 'done', 'timedOut']);
     expect(steps.filter((step) => step.startsWith('uploaded'))).toHaveLength(3);
   });
 
@@ -133,7 +133,7 @@ describe('quick run sequence', () => {
       finish = resolve;
     });
     let waited = 0;
-    const statuses = await runQuick(
+    const statuses = await runAndSend(
       plan,
       {
         ...hooks,
@@ -161,13 +161,13 @@ describe('quick run sequence', () => {
 
   it('stops after a stopped run, its log sent; no run starts once Stop is tapped', async () => {
     const stopped = recorder(['done', 'stopped']);
-    expect(await runQuick(plan, stopped.hooks, 5000)).toEqual(['done', 'stopped']);
+    expect(await runAndSend(plan, stopped.hooks, 5000)).toEqual(['done', 'stopped']);
     expect(stopped.steps.at(-1)).toBe('uploaded 1 code1');
 
     const before = recorder();
     const runs: RunSettings[] = [];
     let tapped = false;
-    const statuses = await runQuick(
+    const statuses = await runAndSend(
       plan,
       {
         ...before.hooks,
@@ -183,6 +183,36 @@ describe('quick run sequence', () => {
     expect(statuses).toEqual(['done']);
     expect(runs).toHaveLength(1);
     expect(before.steps).toEqual(['upload 0', 'uploaded 0 code0']);
+  });
+
+  it("Run all sends after every run but never waits: a hung or failed upload can't hold it", async () => {
+    const all = runAllPlan(data, 'game');
+    const { steps, hooks } = recorder();
+    const statuses = await runAndSend(
+      all,
+      {
+        ...hooks,
+        upload: (index) => {
+          steps.push(`upload ${String(index)}`);
+          // Every other upload hangs for ever; the rest fail (as the hook reports them).
+          return index % 2 === 0 ? new Promise<string>(() => undefined) : Promise.resolve('failed');
+        },
+        wait: (ms) => {
+          expect(ms).toBe(0);
+          return Promise.resolve();
+        },
+      },
+      0,
+    );
+    expect(statuses).toHaveLength(all.length);
+    expect(steps.filter((step) => step.startsWith('upload '))).toHaveLength(all.length);
+    expect(steps.filter((step) => step.startsWith('run '))).toHaveLength(all.length);
+  });
+
+  it('runs the riskiest run, the heavy textures, last in Run all', () => {
+    // A phone that runs out of memory on it ("Aw, Snap!") has sent every other run by then.
+    expect(data.runAll.at(-1)?.pack).toBe('village-heavy');
+    expect(data.runAll.filter((run) => run.pack === 'village-heavy')).toHaveLength(1);
   });
 
   it('gives up waiting on work that takes too long, and not on work in time', async () => {

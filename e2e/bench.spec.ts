@@ -100,6 +100,11 @@ test('?bench=quick runs the quick run from load and sends the log after each run
     expect(events.filter((event) => event.type === 'bench.result')).toHaveLength(
       quickRuns.filter((event) => event.data?.status === 'done').length,
     );
+    // Each run's start is logged (and stored) before it loads, so a crash shows which it was.
+    const starts = events.filter((event) => event.type === 'bench.runStart');
+    expect(starts.slice(0, index + 1).map((event) => event.data?.run)).toEqual(
+      Array.from({ length: index + 1 }, (_, run) => run + 1),
+    );
   });
   const statuses = (posted[2] ?? [])
     .filter((event) => event.type === 'bench.quick')
