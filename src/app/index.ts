@@ -1,3 +1,4 @@
+import { quickFromUrl, type QuickOverrides } from '../bench/logic/quick';
 import { byId as entryById } from '../data';
 import { mountDebugMenu } from '../debug';
 import { BackButton } from './backButton';
@@ -54,10 +55,16 @@ const splittingView = () => import('../stations/splitting/three/splitting3dView'
 const firemakingView = () => import('../stations/firemaking/three/firemaking3dView');
 const siegeView = () => import('../stations/siege/three/siege3dView');
 const runnerView = () => import('../runner/view');
+const benchScreen = () => import('../bench/view/benchScreen');
 
 /** Boots the game core, the debug menu, and the camp. */
 export async function startApp(): Promise<void> {
   byId('build-label').textContent = __BUILD_LABEL__;
+  // ?bench=quick: straight into the stress test's quick run (a device gets about a minute on a
+  // free BrowserStack trial), its code loading alongside the boot. The camp, and the background
+  // loading of the stations' screens, wait until the stress test is closed.
+  const quick = quickFromUrl(window.location.search);
+  if (quick) void benchScreen().catch(() => undefined);
 
   let booted;
   try {
@@ -83,7 +90,7 @@ export async function startApp(): Promise<void> {
       clearings: booted.clearings,
       buildLabel: __BUILD_LABEL__,
       stressTest: () => {
-        openStressTest();
+        void openStressTest();
       },
     });
   } catch (error) {
@@ -303,19 +310,27 @@ export async function startApp(): Promise<void> {
   /**
    * Debug → Stress test: its own screen over everything, its code and models loaded only now. The
    * screen on show (and the background loading) pauses while it's open, so it measures alone.
+   * `quick` starts its quick run straight away. Resolves once it's closed.
    */
-  function openStressTest(): void {
+  function openStressTest(quick?: QuickOverrides): Promise<void> {
     preloader.pause();
-    run(async () => {
-      try {
-        await switcher.aside(async () => {
-          const { openBench } = await import('../bench/view/benchScreen');
-          await openBench(byId('app'), { logger, buildLabel: __BUILD_LABEL__ });
-        });
-      } finally {
-        if (document.body.dataset.view === 'camp') preloader.resume();
-      }
-    })();
+    return new Promise((resolve) => {
+      run(async () => {
+        try {
+          await switcher.aside(async () => {
+            const { openBench } = await benchScreen();
+            await openBench(byId('app'), {
+              logger,
+              buildLabel: __BUILD_LABEL__,
+              ...(quick ? { quick } : {}),
+            });
+          });
+        } finally {
+          if (document.body.dataset.view === 'camp') preloader.resume();
+          resolve();
+        }
+      })();
+    });
   }
 
   const navigation = new Navigation(
@@ -349,5 +364,6 @@ export async function startApp(): Promise<void> {
     },
   );
 
+  if (quick) await openStressTest(quick);
   await navigation.start().catch(showFatal);
 }
