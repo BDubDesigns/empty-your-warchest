@@ -16,6 +16,9 @@ export const brewingTunables: readonly Tunable[] = [
     step: 0.01,
   },
   { key: 'cloudPx', label: 'Map: unstirred blur (px)', min: 0, max: 40, step: 1, more: true },
+  { key: 'dragStartPx', label: 'Drag: lifts after (px)', min: 0, max: 40, step: 1, more: true },
+  { key: 'snapBackSeconds', label: 'Drag: a miss snaps back (s)', min: 0.05, max: 1, step: 0.05 },
+  { key: 'dropPadPx', label: 'Drag: the pot counts past its edge (px)', min: 0, max: 120, step: 2 },
   { key: 'buzzDropMs', label: 'Vibrate: a drop (ms)', min: 0, max: 60, step: 1, more: true },
   {
     key: 'buzzStirMs',

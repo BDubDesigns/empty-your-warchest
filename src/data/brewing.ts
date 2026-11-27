@@ -44,6 +44,9 @@ export const brewing = {
     two: { potions: 1, refunds: 1 },
     three: { potions: 2, refunds: 1 },
   },
+  // The ladle frees fill when a drop has put the best brew out of reach: 3 drops' worth a scoop
+  // (half the pot at most), twice a brew. What it scoops is lost, which is its cost.
+  ladle: { scoop: 3, most: 0.5, uses: 2 },
   // The colour map beside the pot: hue and chroma (OKLab a and b) round every shelf colour,
   // `margin` past the outermost.
   map: { margin: 0.03 },
@@ -59,6 +62,11 @@ export const brewing = {
     revealUnmixed: 0.1,
     // How wide each unstirred drop's blur is on the map (px at full strength).
     cloudPx: 16,
+    // Drag an ingredient onto the pot to add it: 8 px of movement lifts it (a tap does nothing),
+    // a miss snaps back in 0.25 s, and the pot counts 28 px past its edge on screen (thumbs).
+    dragStartPx: 8,
+    snapBackSeconds: 0.25,
+    dropPadPx: 28,
     buzzDropMs: 14,
     buzzStirMs: 5,
     buzzBottleMs: 40,

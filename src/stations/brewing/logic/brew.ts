@@ -9,6 +9,7 @@ import {
   type MapBounds,
   type MapPoint,
 } from './map';
+import { reachFrom, type Reach } from './reach';
 
 /** What water is called among the drops: it's a tool, not an item. */
 export const WATER = 'water';
@@ -169,9 +170,13 @@ export function checkBrews(data: { brewing: Brewing }): void {
   }
 }
 
-/** A drop in the pot: what it was, and how much of it is still unstirred (1 → 0). */
+/**
+ * A drop in the pot: what it was, how much of it is left (1, less once the ladle has scooped
+ * some out) and how much of that is still unstirred (1 → 0).
+ */
 export interface Drop {
   id: string;
+  amount: number;
   unmixed: number;
   /** Round time it went in (views animate it falling). */
   at: number;
@@ -185,7 +190,10 @@ export interface BrewResult {
   /** The ingredient given back, if the stars earned one. */
   refund: string | undefined;
   seconds: number;
+  /** Drops put in, how full the pot was at the end (a fraction after the ladle), and ladles used. */
   drops: number;
+  fill: number;
+  ladles: number;
   /** Potions that went into the warchest. */
   banked: number;
 }
@@ -197,6 +205,10 @@ export type BrewEvent =
   | { type: 'drop'; drop: Drop; fill: number }
   | { type: 'full' }
   | { type: 'empty'; id: string }
+  /** The ladle scooped `scooped` drops' worth out; the pot's left `fill` full. */
+  | { type: 'ladle'; scooped: number; fill: number }
+  /** The best stars still possible changed (down after a drop, back up after a ladle). */
+  | { type: 'reach'; stars: number; was: number }
   | ({ type: 'bottled' } & BrewResult);
 
 export interface BrewHooks {
@@ -216,8 +228,9 @@ export interface BrewHooks {
 }
 
 /**
- * One brew at the cauldron, without any rendering: add drops from the shelf (nothing comes back
- * out), stir to blend them, bottle. The pot's true colour is the mix of every drop; what shows is
+ * One brew at the cauldron, without any rendering: add drops from the shelf, stir to blend them,
+ * bottle. Nothing comes back out but the ladle, which scoops some of everything out (lost) to
+ * free fill. After every change it works out where the pot can still get to (`reach`). The pot's true colour is the mix of every drop; what shows is
  * the stirred part, with the unstirred drops swirling on top in their own colours. A view feeds it
  * taps, stirring and time, and draws it.
  */
@@ -241,6 +254,9 @@ export class BrewRound {
   /** Turns stirred since the last `brewing.stir` log, and in all. */
   #stirred = 0;
   #stirTotal = 0;
+  #ladles = 0;
+  /** Where the pot can still get to: replaced (not changed) on every drop and ladle. */
+  #reach: Reach;
 
   constructor(rules: Brewing, potion: BrewPotion, hooks: BrewHooks, seed: number) {
     this.rules = rules;
@@ -256,6 +272,7 @@ export class BrewRound {
       rules.map.margin,
     );
     const answer = bestAnswer(everyMix(rules), this.target);
+    this.#reach = this.#reachNow();
     this.#log('brewing.start', {
       recipe: potion.recipe,
       seed,
@@ -275,19 +292,48 @@ export class BrewRound {
     return this.#hooks.feel();
   }
 
+  /** How full the pot is, in drops (a fraction once the ladle has been used). */
   get fill(): number {
-    return this.drops.length;
+    let fill = 0;
+    for (const drop of this.drops) fill += drop.amount;
+    return snap(fill);
+  }
+
+  /** Whole drops that can still go in. */
+  get room(): number {
+    return Math.max(Math.floor(snap(this.rules.maxFill - this.fill)), 0);
   }
 
   get full(): boolean {
-    return this.fill >= this.rules.maxFill;
+    return this.room < 1;
   }
 
-  /** Drops of each shelf entry in the pot. */
+  /** How much of each shelf entry is in the pot, in drops (fractions after the ladle). */
   get counts(): Record<string, number> {
     const counts: Record<string, number> = {};
-    for (const drop of this.drops) counts[drop.id] = (counts[drop.id] ?? 0) + 1;
+    for (const drop of this.drops) counts[drop.id] = (counts[drop.id] ?? 0) + drop.amount;
+    for (const id of Object.keys(counts)) counts[id] = snap(counts[id] ?? 0);
     return counts;
+  }
+
+  /** Where the pot can still get to with the room left: every colour, and the best of them. */
+  get reach(): Reach {
+    return this.#reach;
+  }
+
+  /** The most stars still possible without the ladle (0 when even one star is out of reach). */
+  get bestStars(): number {
+    return starsFor(this.rules, this.#reach.best.distance);
+  }
+
+  /** Ladles left this brew. */
+  get ladlesLeft(): number {
+    return Math.max(this.rules.ladle.uses - this.#ladles, 0);
+  }
+
+  /** The ladle needs something in the pot, and a use left. */
+  get canLadle(): boolean {
+    return this.phase === 'brew' && this.ladlesLeft > 0 && this.fill > 0;
   }
 
   /** The pot's true colour: every drop, stirred or not. */
@@ -300,7 +346,7 @@ export class BrewRound {
     return mixLab(
       this.drops.map((drop) => ({
         color: this.entry(drop.id).color,
-        weight: this.entry(drop.id).strength * (1 - drop.unmixed),
+        weight: this.entry(drop.id).strength * drop.amount * (1 - drop.unmixed),
       })),
     );
   }
@@ -310,7 +356,7 @@ export class BrewRound {
     let total = 0;
     let left = 0;
     for (const drop of this.drops) {
-      const strength = this.entry(drop.id).strength;
+      const strength = this.entry(drop.id).strength * drop.amount;
       total += strength;
       left += strength * drop.unmixed;
     }
@@ -325,7 +371,11 @@ export class BrewRound {
       mixed,
       this.drops.map((drop) => {
         const entry = this.entry(drop.id);
-        return { color: entry.color, weight: entry.strength, unmixed: drop.unmixed };
+        return {
+          color: entry.color,
+          weight: entry.strength * drop.amount,
+          unmixed: drop.unmixed,
+        };
       }),
     );
   }
@@ -372,20 +422,79 @@ export class BrewRound {
       }
       this.#hooks.take(id);
     }
-    const drop: Drop = { id, unmixed: 1, at: this.now };
+    const drop: Drop = { id, amount: 1, unmixed: 1, at: this.now };
     this.drops.push(drop);
+    const was = this.bestStars;
+    this.#reach = this.#reachNow();
     const after = this.mixed;
     this.#log('brewing.drop', {
       seed: this.seed,
       ingredient: id,
-      fill: this.fill,
+      fill: round3(this.fill),
       color: after && roundLab(after),
       hex: after && labToHex(after),
       distance: after && round3(labDistance(after, this.target)),
+      ...this.#best(),
       seconds: round2(this.now),
     });
     this.#hooks.onEvent?.({ type: 'drop', drop, fill: this.fill });
+    this.#reachChanged(was);
     return true;
+  }
+
+  /**
+   * The ladle: scoops `ladle.scoop` drops' worth out (no more than `ladle.most` of the pot),
+   * evenly from everything in it, so the colour stays and the fill frees up. What it takes is lost.
+   */
+  ladle(): boolean {
+    if (!this.canLadle) return false;
+    const { ladle } = this.rules;
+    const before = this.fill;
+    const counts = this.counts;
+    const scooped = Math.min(ladle.scoop, before * ladle.most);
+    const keep = 1 - scooped / before;
+    for (const drop of this.drops) drop.amount *= keep;
+    this.#ladles += 1;
+    const was = this.bestStars;
+    const bestBefore = this.#reach.best.distance;
+    this.#reach = this.#reachNow();
+    const after = this.mixed;
+    this.#log('brewing.ladle', {
+      seed: this.seed,
+      scooped: round3(scooped),
+      lost: roundCounts(
+        Object.fromEntries(Object.entries(counts).map(([id, count]) => [id, count * (1 - keep)])),
+      ),
+      fillBefore: round3(before),
+      fill: round3(this.fill),
+      counts: roundCounts(this.counts),
+      ladlesLeft: this.ladlesLeft,
+      hex: after && labToHex(after),
+      distance: after && round3(labDistance(after, this.target)),
+      bestBefore: finite3(bestBefore),
+      bestStarsBefore: was,
+      ...this.#best(),
+      unmixed: round3(this.unmixed),
+      seconds: round2(this.now),
+    });
+    this.#hooks.onEvent?.({ type: 'ladle', scooped, fill: this.fill });
+    this.#reachChanged(was);
+    return true;
+  }
+
+  #reachNow(): Reach {
+    return reachFrom(this.shelf, this.counts, this.room, (id) => this.left(id), this.target);
+  }
+
+  /** The best still possible, for the logs. */
+  #best(): { best: number | null; bestStars: number; bestAdd: Record<string, number> } {
+    const { best } = this.#reach;
+    return { best: finite3(best.distance), bestStars: this.bestStars, bestAdd: best.add };
+  }
+
+  #reachChanged(was: number): void {
+    const stars = this.bestStars;
+    if (stars !== was) this.#hooks.onEvent?.({ type: 'reach', stars, was });
   }
 
   /** The spoon swept `radians` round the pot (either way); it blends in as time allows. */
@@ -447,7 +556,9 @@ export class BrewRound {
       potions: reward.potions,
       refund,
       seconds: this.now,
-      drops: this.fill,
+      drops: this.drops.length,
+      fill: round3(this.fill),
+      ladles: this.#ladles,
       banked,
     };
     this.result = result;
@@ -464,7 +575,10 @@ export class BrewRound {
       potions: reward.potions,
       banked,
       refund: refund ?? null,
-      counts: this.counts,
+      counts: roundCounts(this.counts),
+      drops: this.drops.length,
+      fill: round3(this.fill),
+      ladles: this.#ladles,
       unmixed: round3(this.unmixed),
       stirTurns: round2(this.#stirTotal),
       seconds: round2(this.now),
@@ -485,8 +599,9 @@ export class BrewRound {
     this.#log('brewing.end', {
       seed: this.seed,
       reason,
-      fill: this.fill,
-      counts: this.counts,
+      fill: round3(this.fill),
+      counts: roundCounts(this.counts),
+      ladles: this.#ladles,
       stars: this.result?.stars ?? null,
       seconds: round2(this.now),
     });
@@ -503,6 +618,19 @@ function round2(value: number): number {
 
 function round3(value: number): number {
   return Math.round(value * 1000) / 1000;
+}
+
+/** Rounds away float dust (a ladled pot's drops add up to 6.9999999…). */
+function snap(value: number): number {
+  return Math.round(value * 1e9) / 1e9;
+}
+
+function finite3(value: number): number | null {
+  return Number.isFinite(value) ? round3(value) : null;
+}
+
+function roundCounts(counts: Record<string, number>): Record<string, number> {
+  return Object.fromEntries(Object.entries(counts).map(([id, count]) => [id, round3(count)]));
 }
 
 function roundMap(point: MapPoint): MapPoint {

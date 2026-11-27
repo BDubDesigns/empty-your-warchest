@@ -74,7 +74,37 @@ async function stir(page: Page, turns: number) {
   await client.detach();
 }
 
-test('brews a Sense potion: add, stir, bottle, and it pours into the chest', async ({ page }) => {
+/**
+ * Drags an ingredient off its shelf tile and lets go `to` a point (the pot by default), as a
+ * finger would.
+ */
+async function drag(page: Page, id: string, to?: { x: number; y: number }) {
+  const tile = await page.locator(`.br-jar[data-ingredient="${id}"]`).boundingBox();
+  if (!tile) throw new Error(`No tile for ${id}`);
+  const screen = page.locator('#screen-brewing3d');
+  const end = to ?? {
+    x: Number(await screen.getAttribute('data-pot-x')),
+    y: Number(await screen.getAttribute('data-pot-y')),
+  };
+  const start = { x: tile.x + tile.width / 2, y: tile.y + tile.height / 2 };
+  const client = await page.context().newCDPSession(page);
+  await client.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [start] });
+  const steps = 8;
+  for (let step = 1; step <= steps; step++) {
+    await page.waitForTimeout(16);
+    const t = step / steps;
+    await client.send('Input.dispatchTouchEvent', {
+      type: 'touchMove',
+      touchPoints: [{ x: start.x + (end.x - start.x) * t, y: start.y + (end.y - start.y) * t }],
+    });
+  }
+  await client.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  await client.detach();
+}
+
+test('brews a Sense potion: drag in, stir, bottle, and it pours into the chest', async ({
+  page,
+}) => {
   test.setTimeout(120_000);
   const errors: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));
@@ -84,21 +114,27 @@ test('brews a Sense potion: add, stir, bottle, and it pours into the chest', asy
   const target = await screen.getAttribute('data-target');
   if (!target) throw new Error('No target colour');
   const answer = bestAnswer(everyMix(loadGameData().brewing), hexToLab(target));
-  const names: Record<string, string> = {
-    red_cap: 'Add red cap',
-    moss: 'Add moss',
-    woad: 'Add woad',
-    ash: 'Add ash',
-    water: `Add ${brewing.water.name.toLowerCase()}`,
-  };
+  // A tap does nothing (it has to be dragged), and nor does a drag let go off the pot.
+  await page.locator('.br-jar[data-ingredient="red_cap"]').tap();
+  await drag(page, 'red_cap', { x: 10, y: 150 });
+  await expect(screen).toHaveAttribute('data-fill', '0');
+  await expect(page.locator('.br-jar[data-ingredient="red_cap"]')).toHaveAttribute(
+    'data-left',
+    '20',
+  );
   let fill = 0;
   for (const [id, count] of Object.entries(answer.counts)) {
     for (let i = 0; i < count; i++) {
-      await page.getByRole('button', { name: names[id] ?? id }).tap();
+      await drag(page, id);
       fill += 1;
       await expect(screen).toHaveAttribute('data-fill', String(fill));
     }
   }
+  // Water never runs out; the rest count down.
+  await expect(page.locator('.br-jar[data-ingredient="water"]')).toHaveAttribute(
+    'data-left',
+    'free',
+  );
   // Unstirred, then stirred in: the map only shows the ring once it's stirred.
   await expect(screen).toHaveAttribute('data-unmixed', '1.00');
   await expect(screen).toHaveAttribute('data-ring', '');
@@ -126,5 +162,29 @@ test('brews a Sense potion: add, stir, bottle, and it pours into the chest', asy
     return save.state?.inventory?.find((stack) => stack.item === 'sense_potion')?.count ?? 0;
   });
   expect(potions).toBeGreaterThanOrEqual(1);
+  expect(errors).toEqual([]);
+});
+
+test('says when 3 stars goes out of reach, and the ladle frees room', async ({ page }) => {
+  test.setTimeout(120_000);
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  await openCauldron(page);
+  const screen = page.locator('#screen-brewing3d');
+  await expect(screen).toHaveAttribute('data-best', '3');
+  await expect(page.locator('.br-map-best')).toHaveText('');
+  // Moss is green, the far side of the map from a violet: enough of it puts 3 stars out of reach.
+  for (let i = 0; i < 6 && (await screen.getAttribute('data-best')) === '3'; i++) {
+    await drag(page, 'moss');
+  }
+  await expect(screen).not.toHaveAttribute('data-best', '3');
+  await expect(page.locator('.br-map-best')).toHaveText(/Best still possible: ★★?|out of reach/);
+  const fill = Number(await screen.getAttribute('data-fill'));
+  const ladles = brewing.ladle.uses;
+  await expect(screen).toHaveAttribute('data-ladles', String(ladles));
+  await page.getByRole('button', { name: 'Ladle some out' }).tap();
+  const scooped = Math.min(brewing.ladle.scoop, fill * brewing.ladle.most);
+  await expect(screen).toHaveAttribute('data-ladles', String(ladles - 1));
+  expect(Number(await screen.getAttribute('data-fill'))).toBeCloseTo(fill - scooped, 1);
   expect(errors).toEqual([]);
 });

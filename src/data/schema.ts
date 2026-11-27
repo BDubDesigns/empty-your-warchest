@@ -877,6 +877,14 @@ export const brewingFeelSchema = z.object({
   revealUnmixed: fraction,
   /** How wide an unstirred drop's blur is on the colour map (px, at full strength). */
   cloudPx: nonNegative,
+  /**
+   * Dragging an ingredient off the shelf: how far the finger moves before it lifts (less is a
+   * tap, which does nothing), how long a miss takes to snap back to its tile (s), and how far past
+   * the cauldron on screen still counts as dropping it in (px).
+   */
+  dragStartPx: nonNegative,
+  snapBackSeconds: positive,
+  dropPadPx: nonNegative,
   /** Vibration (ms): a drop going in, each quarter turn of stirring, bottling. */
   buzzDropMs: nonNegative,
   buzzStirMs: nonNegative,
@@ -888,8 +896,9 @@ const brewReward = z.object({ potions: positiveInt, refunds: z.number().int().mi
 /**
  * Brewing at the cauldron: tap ingredients off the shelf into the pot, stir to see the true
  * colour, and bottle it when it matches the recipe card's target. Each drop adds its colour
- * weighted by its strength (mixed in OKLab, see src/stations/brewing/logic/color.ts); you can't
- * take anything out, so water lightens and ash darkens and dulls, both using fill.
+ * weighted by its strength (mixed in OKLab, see src/stations/brewing/logic/color.ts). Water
+ * lightens and ash darkens and dulls, both using fill; nothing comes back out but the ladle, which
+ * scoops some of everything out (lost) to free fill.
  */
 const brewingSchema = z.object({
   /** The most drops the pot holds, water included. */
@@ -921,6 +930,15 @@ const brewingSchema = z.object({
   stars: z.object({ three: positive, two: positive, one: positive }),
   /** What each star count bottles: potions, and ingredients given back (picked from those put in). */
   rewards: z.object({ one: brewReward, two: brewReward, three: brewReward }),
+  /**
+   * The ladle: each use scoops `scoop` drops' worth out, evenly from everything in the pot (so its
+   * colour stays), but never more than `most` of the pot (so something's left). `uses` a brew.
+   */
+  ladle: z.object({
+    scoop: positive,
+    most: z.number().positive().lt(1),
+    uses: z.number().int().min(0),
+  }),
   /** The colour map: OKLab a and b round every shelf colour, `margin` past the outermost. */
   map: z.object({ margin: nonNegative }),
   /** Grass round the cauldron, trodden bare round its fire. */

@@ -43,9 +43,10 @@ const PIECE_LENGTHS: Record<ItemLook, number> = {
 
 /**
  * A piece of an item, as it flies into the chest, its length along z: the log model for a round
- * log, and for a split stave or a pointed spear, a shaft drawn here (no model to load).
+ * log, and for a split stave or a pointed spear, a shaft drawn here (no model to load). The
+ * cauldron's shelf draws its ingredient icons from these too.
  */
-function pieceModel(look: ItemLook, log: THREE.Object3D): THREE.Object3D {
+export function pieceModel(look: ItemLook, log: THREE.Object3D): THREE.Object3D {
   if (look === 'round') return log.clone(true);
   const piece = new THREE.Group();
   const wood = new THREE.MeshLambertMaterial({ color: look === 'split' ? 0xd9b07a : 0xa47a4a });
