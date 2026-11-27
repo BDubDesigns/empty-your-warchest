@@ -120,7 +120,7 @@ export const archery = {
     },
     {
       item: 'bare_arrow',
-      speed: 36,
+      speed: 38,
       drag: 0.2,
       drift: 3,
       wobble: 10,
