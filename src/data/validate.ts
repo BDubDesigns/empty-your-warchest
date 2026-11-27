@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { castleProblems } from './castleLayout';
 import { gameDataShape, type GameData, type SiegeObjective, type SiegePosition } from './schema';
 
 type Path = (string | number)[];
@@ -285,6 +286,8 @@ function checkReferences(data: GameData, ctx: z.RefinementCtx): void {
 
   checkSiege(data, issue);
   checkArchery(data, itemIds, issue);
+  // The castle holds together: its wall closes round the courtyard, its anchors are where they say.
+  for (const problem of castleProblems(data.castle)) issue(problem.path, problem.message);
 
   const runner = data.runner;
   if (!data.levels.some((level) => level.id === runner.level)) {

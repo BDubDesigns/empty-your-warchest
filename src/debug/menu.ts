@@ -27,6 +27,8 @@ export interface DebugDeps {
   buildLabel: string;
   /** Opens the graphics stress test (its own screen). */
   stressTest?: () => void;
+  /** Opens Debug → Castle preview (the siege's castle on its own, to orbit and judge). */
+  castlePreview?: () => void;
 }
 
 const MINUTE = 60_000;
@@ -463,6 +465,15 @@ export function mountDebugMenu(root: HTMLElement, deps: DebugDeps): void {
     closeButton.click();
     stressTest?.();
   });
+  const castlePreview = deps.castlePreview;
+  const castleButton = castlePreview
+    ? el('button', { type: 'button', textContent: 'Castle preview' })
+    : undefined;
+  castleButton?.addEventListener('click', () => {
+    logger.log('debug.castlePreview');
+    closeButton.click();
+    castlePreview?.();
+  });
   const panel = el(
     'div',
     { className: 'debug-panel', hidden: true, role: 'dialog', ariaLabel: 'Debug menu' },
@@ -504,6 +515,19 @@ export function mountDebugMenu(root: HTMLElement, deps: DebugDeps): void {
                   'Flies through the same siege scene built from each art pack and measures the frame rate.',
               }),
               stressTestButton,
+            ),
+          ]
+        : []),
+      ...(castleButton
+        ? [
+            section(
+              'Castle',
+              el('p', {
+                className: 'debug-note',
+                textContent:
+                  'The castle the siege moves onto next, on its own: drag to look round it, or jump to the siege’s vantage points.',
+              }),
+              castleButton,
             ),
           ]
         : []),
