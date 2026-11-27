@@ -14,7 +14,14 @@ import { windTime } from '../../../app/scatter';
 import { Sfx } from '../../../app/sfx';
 import { SkillBar, type XpDeposit } from '../../../app/skillBar';
 import { WarchestHud, type Deposit, type ScreenPoint } from '../../../app/warchestHud';
-import { Rng, type EventLogger, type Game, type LiveChoice, type LiveTuning } from '../../../core';
+import {
+  Rng,
+  type EventLogger,
+  type Game,
+  type GraphicsSettings,
+  type LiveChoice,
+  type LiveTuning,
+} from '../../../core';
 import type { Clearing, ClearingTree, SceneryPlantKind, WoodcuttingFeel } from '../../../data';
 import {
   cabinSagTilt,
@@ -32,14 +39,22 @@ import type { ClearingPicker } from '../clearingPicker';
 import type { FastFall } from '../fastFall';
 import { fastFallUnlocked, unlocksBetween, woodcuttingSkill } from '../logic/unlocks';
 import type { ClearingPlan } from '../logic/generate';
-import type { SceneryDetail, TreeStyle } from '../treeStyle';
+import {
+  treeStyleFor,
+  type SceneryDetail,
+  type TreeStyle,
+  type TreeStyleSetting,
+} from '../treeStyle';
+import { capturePointer } from '../../../app/pointer';
 
 export interface Woodcutting3DDeps {
   game: Game;
   logger: EventLogger;
   feel: LiveTuning<WoodcuttingFeel>;
-  /** Which trees to draw; picked in the debug menu. */
-  treeStyle: LiveChoice<TreeStyle>;
+  /** Which trees to draw; picked in the debug menu (Auto: by the graphics tier). */
+  treeStyle: LiveChoice<TreeStyleSetting>;
+  /** The graphics tier; this screen's calm frames feed its pick. */
+  graphics: GraphicsSettings;
   /** Whether to draw the grass, plants and forest outside the fence. */
   scenery: LiveChoice<SceneryDetail>;
   haptics: Haptics;
@@ -63,9 +78,6 @@ interface Models {
 
 /** World units per clearing unit: the 360×640 clearing becomes 12×21 units. */
 const SCALE = 1 / 30;
-/** Frames (while aiming) to judge the detailed trees by, and the median frame time that's too slow. */
-const FALLBACK_FRAMES = 90;
-const FALLBACK_MS = 25;
 /** When the summary's first star pops in, and the gap before each of the others (ms). */
 const STAR_DELAY_MS = 450;
 const STAR_STAGGER_MS = 380;
@@ -400,10 +412,6 @@ export class Woodcutting3DView implements ScreenView {
   #shake = 0;
   #frozenUntil = 0;
   #frameTimes: number[] = [];
-  /** Frame times while aiming, for the older-phone fallback. */
-  #aimFrames: number[] = [];
-  /** The player picked a tree style (or the fallback already decided), so leave it alone. */
-  #styleChosen = false;
   #pointer: { id: number; startX: number; startY: number } | undefined;
   #tether: THREE.Vector3 | undefined;
   #lastPhase = '';
@@ -466,8 +474,7 @@ export class Woodcutting3DView implements ScreenView {
     );
     if (!clearing) throw new Error('No woodcutting tutorial clearing in data');
     this.#clearing = clearing;
-    this.#style = deps.treeStyle.value;
-    this.#styleChosen = deps.treeStyle.picked;
+    this.#style = treeStyleFor(deps.treeStyle.value, deps.graphics.tier);
 
     this.#renderer = new THREE.WebGLRenderer({ antialias: true });
     this.#renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -483,8 +490,14 @@ export class Woodcutting3DView implements ScreenView {
     this.#buildTrees({ keepFallen: false });
     this.#sfx.load(SOUNDS);
     this.#listen();
-    deps.treeStyle.onChange((style) => {
-      this.#styleChosen = true;
+    deps.treeStyle.onChange((setting) => {
+      this.#applyStyle(treeStyleFor(setting, deps.graphics.tier));
+    });
+    // On Auto the trees follow the tier: simpler ones once a phone turns out slow.
+    deps.graphics.onTier(({ tier, reason }) => {
+      const style = treeStyleFor(deps.treeStyle.value, tier);
+      if (style === this.#style) return;
+      deps.logger.log('woodcutting3d.style', { style, auto: true, tier, reason });
       this.#applyStyle(style);
     });
     new ResizeObserver(() => {
@@ -1695,7 +1708,7 @@ export class Woodcutting3DView implements ScreenView {
       this.#sfx.unlock();
       // The round waits while its summary is up (or about to be).
       if (!this.#ui.summary.hidden || this.#summaryPending) return;
-      canvas.setPointerCapture(event.pointerId);
+      if (!capturePointer(canvas, event.pointerId)) return;
       this.#pointer = { id: event.pointerId, startX: event.clientX, startY: event.clientY };
       const phase = this.#round.phase;
       if (phase.kind === 'pick' || phase.kind === 'aim') {
@@ -2389,7 +2402,7 @@ export class Woodcutting3DView implements ScreenView {
     this.#timer.update(time);
     const realDt = Math.min(this.#timer.getDelta(), 0.05);
     this.#frameTimes.push(realDt * 1000);
-    this.#checkFallback(realDt * 1000);
+    this.#sampleFrame(realDt * 1000);
     const now = performance.now();
     // Frozen for a hit-stop; slowed for a crash.
     const dt =
@@ -2948,22 +2961,12 @@ export class Woodcutting3DView implements ScreenView {
   // Tree style and logs
 
   /**
-   * Older phones: if the detailed trees run slowly while aiming (when nothing heavy is happening),
-   * switch to the simpler trees for good. Only when the player hasn't picked a style themselves.
+   * Frames while aiming (when nothing heavy is happening) tell the graphics tier how this phone
+   * copes; on Auto, too slow and it goes to low (and the trees with it).
    */
-  #checkFallback(frameMs: number): void {
+  #sampleFrame(frameMs: number): void {
     const kind = this.#round.phase.kind;
-    if (this.#styleChosen || this.#style !== 'quaternius') return;
-    if (kind !== 'pick' && kind !== 'aim') return;
-    this.#aimFrames.push(frameMs);
-    if (this.#aimFrames.length < FALLBACK_FRAMES) return;
-    const sorted = [...this.#aimFrames].sort((a, b) => a - b);
-    const median = sorted[Math.floor(sorted.length / 2)] ?? 0;
-    this.#styleChosen = true;
-    if (median > FALLBACK_MS) {
-      this.#deps.logger.log('woodcutting3d.style', { style: 'kenney', auto: true, p50: median });
-      this.#deps.treeStyle.set('kenney');
-    }
+    if (kind === 'pick' || kind === 'aim') this.#deps.graphics.sample(frameMs);
   }
 
   /** Redraws the clearing with the other trees (picked in the debug menu, or by the fallback). */

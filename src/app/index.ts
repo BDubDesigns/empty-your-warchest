@@ -3,6 +3,7 @@ import { byId as entryById } from '../data';
 import { mountDebugMenu } from '../debug';
 import { BackButton } from './backButton';
 import { bootGame } from './boot';
+import { gpuOf } from './deviceHints';
 import { LoadingCard, noticeIfSlow } from './loadingCard';
 import { Navigation, type View } from './navigation';
 import type { PhaserView } from './phaserView';
@@ -83,6 +84,7 @@ export async function startApp(): Promise<void> {
         booted.feel.runner,
       ],
       choices: [
+        booted.graphics,
         booted.choices.treeStyle,
         booted.choices.scenery,
         booted.choices.vibration,
@@ -102,7 +104,8 @@ export async function startApp(): Promise<void> {
     showFatal(error);
     return;
   }
-  const { game, logger, clock, feel, choices, haptics, clearings, fastFall, work } = booted;
+  const { game, logger, clock, feel, choices, haptics, graphics, clearings, fastFall, work } =
+    booted;
 
   // The workers' work is done at the camp only, so they never use what a station has out. What
   // they make waits on their stations' piles until it's collected.
@@ -157,7 +160,11 @@ export async function startApp(): Promise<void> {
         onWarchestClose: run(() => navigation.back()),
       });
       const gl = phaser.glContext();
-      if (gl) noteContext(gl);
+      if (gl) {
+        noteContext(gl);
+        // The first WebGL context: the GPU's name, for the graphics tier.
+        graphics.noteGpu(gpuOf(gl).gpu);
+      }
       return phaser;
     }),
     wood3d: lazyScreen(
@@ -169,6 +176,7 @@ export async function startApp(): Promise<void> {
           logger,
           feel: feel.woodcutting,
           treeStyle: choices.treeStyle,
+          graphics,
           scenery: choices.scenery,
           haptics,
           clearings,
@@ -238,6 +246,7 @@ export async function startApp(): Promise<void> {
           logger,
           feel: feel.siege,
           ghost: choices.siegeGhost,
+          graphics,
           haptics,
           onLeave: run((): Promise<void> => navigation.back()),
         });

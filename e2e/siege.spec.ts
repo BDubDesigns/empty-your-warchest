@@ -57,6 +57,8 @@ test('Siege: tap the War tent, drag to look, Fire, and the ballista shoots the w
   // The flyover over the fort first: a tap skips it, back to the sights.
   const view = page.locator('#screen-siege3d');
   await expect(view).toHaveAttribute('data-camera', 'flyover');
+  // Drawn at the phone's graphics tier (CI draws in software, which Auto puts on low).
+  await expect(view).toHaveAttribute('data-graphics', /^(high|low)$/);
   await expect(page.getByRole('button', { name: 'Fire' })).toBeHidden();
   const canvas = page.locator('#screen-siege3d .sg-canvas');
   await canvas.tap();
@@ -140,6 +142,7 @@ test('Siege: tap the War tent, drag to look, Fire, and the ballista shoots the w
     'siege.ghost',
     'siege.flyover',
     'siege.quit',
+    'graphics.tier',
   ]) {
     expect(types).toContain(type);
   }

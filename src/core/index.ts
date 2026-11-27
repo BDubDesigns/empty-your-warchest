@@ -3,6 +3,7 @@
 
 export * from './clock';
 export * from './game';
+export * from './graphics';
 export * from './indexedDbSink';
 export * from './inventory';
 export * from './liveChoice';

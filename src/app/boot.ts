@@ -1,6 +1,7 @@
 import {
   EventLogger,
   Game,
+  GraphicsSettings,
   MemorySink,
   openIndexedDbSink,
   SaveStore,
@@ -12,6 +13,7 @@ import {
   type LiveChoice,
   type LiveTuning,
 } from '../core';
+import { deviceHints } from './deviceHints';
 import { watchForTrouble } from './trouble';
 import type {
   BrewingFeel,
@@ -50,7 +52,7 @@ import {
   woodcuttingFeel,
   type FastFall,
   type SceneryDetail,
-  type TreeStyle,
+  type TreeStyleSetting,
 } from '../stations/woodcutting';
 import { Haptics, vibrationChoice, type Vibration } from './haptics';
 
@@ -69,7 +71,7 @@ export interface Booted {
   };
   /** Picks kept on this phone, shown in the debug menu. */
   choices: {
-    treeStyle: LiveChoice<TreeStyle>;
+    treeStyle: LiveChoice<TreeStyleSetting>;
     scenery: LiveChoice<SceneryDetail>;
     vibration: LiveChoice<Vibration>;
     runnerSpears: LiveChoice<SpearSource>;
@@ -78,6 +80,8 @@ export interface Booted {
     siegeGhost: LiveChoice<GhostLine>;
   };
   haptics: Haptics;
+  /** The graphics tier (high or low) every 3D screen draws at; Debug → Graphics. */
+  graphics: GraphicsSettings;
   /** Which clearing each woodcutting round plays. */
   clearings: ClearingPicker;
   /** Woodcutting's fast-fall switch, shown once its level is reached. */
@@ -165,8 +169,21 @@ export async function bootGame(buildLabel: string): Promise<Booted> {
     siegeGhost: ghostChoice(localStorageStore()),
   };
   const haptics = new Haptics(choices.vibration);
+  const graphics = new GraphicsSettings(data.graphics, localStorageStore(), logger, deviceHints());
   const clearings = new ClearingPicker(game);
   const fastFall = fastFallChoice(localStorageStore());
 
-  return { game, clock, logger, saves, feel, choices, haptics, clearings, fastFall, work };
+  return {
+    game,
+    clock,
+    logger,
+    saves,
+    feel,
+    choices,
+    haptics,
+    graphics,
+    clearings,
+    fastFall,
+    work,
+  };
 }

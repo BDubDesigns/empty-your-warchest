@@ -1367,6 +1367,21 @@ const siegePartsSchema = z.object({
  * its banner comes down. The physics world (Rapier) is the rules, stepped at a fixed rate and
  * seeded, so the same shots always give the same result.
  */
+/**
+ * The siege's looks on one graphics tier. `shadows`: the sun's real-time shadow map, or a blob
+ * under each thing. A broken block bursts into `debrisPieces` chunks that fly `debrisSeconds`,
+ * with at most `maxDebris` alive at once; dust puffs are `dustShare` of the feel's `dust`, at most
+ * `maxPuffs` at once. Debris and dust are only looks: the rules never see them.
+ */
+const siegeTierLookSchema = z.object({
+  shadows: z.enum(['map', 'blob']),
+  debrisPieces: z.number().int().nonnegative(),
+  maxDebris: z.number().int().nonnegative(),
+  debrisSeconds: positive,
+  dustShare: fraction,
+  maxPuffs: z.number().int().nonnegative(),
+});
+
 const siegeShape = z.object({
   /** The warchest item shot. */
   item: id,
@@ -1415,6 +1430,35 @@ const siegeShape = z.object({
         down: name,
       }),
     }),
+  }),
+  /**
+   * How the siege draws on each graphics tier (see `graphics`). Only looks: the rules (blocks,
+   * guards, spears, hits, the fairness checks) are the same on both.
+   */
+  looks: z.object({
+    /**
+     * The sun's real-time shadows: the shadow map's size (px), and the box it covers round the
+     * field ahead of the weapon (m): half its width, half its height, and its depth.
+     */
+    shadowMap: z.object({
+      size: positiveInt,
+      halfWidth: positive,
+      halfHeight: positive,
+      far: positive,
+      bias: z.number(),
+    }),
+    /**
+     * Blob shadows, the cheap kind: a soft dark patch on the ground under each block, guard and
+     * the ballista, `spread` times its footprint, `opacity` dark, raised `lift` m off the ground
+     * (over the trodden earth). It shrinks away as its thing rises, gone `fadeHeight` m up.
+     */
+    blobShadows: z.object({
+      opacity: fraction,
+      spread: positive,
+      lift: positive,
+      fadeHeight: positive,
+    }),
+    tiers: z.object({ high: siegeTierLookSchema, low: siegeTierLookSchema }),
   }),
   /**
    * How guards move (m/s and s). On watch a guard on a walkway walks it at `patrolSpeed`, pausing
@@ -1574,6 +1618,33 @@ const workersSchema = z.object({
     .min(1),
 });
 
+/** A regular expression's source, checked to compile. */
+const pattern = z.string().refine(
+  (source) => {
+    try {
+      new RegExp(source);
+      return true;
+    } catch {
+      return false;
+    }
+  },
+  { message: 'Not a valid regular expression' },
+);
+
+/**
+ * The graphics tier, high or low, picked for this phone (Debug → Graphics can force either). On
+ * Auto a phone starts on low if its GPU's name matches one of `lowGpus` (budget phone GPUs, and
+ * software rendering), or if it says it has `lowMemoryGb` of memory or less. Otherwise it starts
+ * on high and is watched in play: after `sampleFrames` calm frames (aiming, nothing falling), a
+ * median frame time over `slowFrameMs` moves it to low for good.
+ */
+export const graphicsSchema = z.object({
+  lowGpus: z.array(pattern),
+  lowMemoryGb: positive,
+  sampleFrames: positiveInt,
+  slowFrameMs: positive,
+});
+
 export const gameDataShape = z.object({
   skills: z.array(skillSchema).min(1),
   items: z.array(itemSchema).min(1),
@@ -1593,6 +1664,7 @@ export const gameDataShape = z.object({
   warchest: warchestSchema,
   workers: workersSchema,
   tuning: tuningSchema,
+  graphics: graphicsSchema,
 });
 
 export type GameDataInput = z.input<typeof gameDataShape>;
@@ -1607,6 +1679,7 @@ export type Unit = GameData['units'][number];
 export type Enemy = GameData['enemies'][number];
 export type Level = GameData['levels'][number];
 export type Tuning = GameData['tuning'];
+export type Graphics = GameData['graphics'];
 export type Camp = GameData['camp'];
 export type CampSpot = Camp['chest'];
 export type Clearing = GameData['woodcutting']['clearings'][number];

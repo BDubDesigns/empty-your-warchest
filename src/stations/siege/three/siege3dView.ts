@@ -1,4 +1,6 @@
 import * as THREE from 'three';
+import { BlobShadows, blobTexture } from '../../../app/blobShadows';
+import { gpuOf } from '../../../app/deviceHints';
 import { releaseContext, restoreContext } from '../../../app/trouble';
 import { groundMesh, wornGround } from '../../../app/ground';
 import type { Haptics } from '../../../app/haptics';
@@ -9,7 +11,15 @@ import type { ScreenView } from '../../../app/screen';
 import { Sfx } from '../../../app/sfx';
 import { SkillBar, type XpDeposit } from '../../../app/skillBar';
 import { WarchestHud, type ScreenPoint } from '../../../app/warchestHud';
-import { Rng, type EventLogger, type Game, type LiveChoice, type LiveTuning } from '../../../core';
+import {
+  Rng,
+  type EventLogger,
+  type Game,
+  type GraphicsSettings,
+  type GraphicsTier,
+  type LiveChoice,
+  type LiveTuning,
+} from '../../../core';
 import type { Siege, SiegeFeel, SiegeFort } from '../../../data';
 import type { GhostLine } from '../feel';
 import { loadPhysics, type Physics } from '../logic/physics';
@@ -35,6 +45,7 @@ import {
 } from '../logic/throw';
 import { buildBallista, type BallistaLook } from './figures';
 import { makeTextures, puffTexture, stageTint, whooshUrl } from './looks';
+import { capturePointer } from '../../../app/pointer';
 
 export interface Siege3DDeps {
   game: Game;
@@ -42,6 +53,8 @@ export interface Siege3DDeps {
   feel: LiveTuning<SiegeFeel>;
   /** Whether the last shot's path stays drawn, kept on this phone. */
   ghost: LiveChoice<GhostLine>;
+  /** The graphics tier: what the siege draws (shadows, debris, dust). Calm frames feed its pick. */
+  graphics: GraphicsSettings;
   haptics: Haptics;
   /** Leaves the station (the card's Back to camp). */
   onLeave: () => void;
@@ -77,12 +90,6 @@ const LOOK_REACH = 50;
 const BOLT_LOOK = 8;
 /** The longest a bolt cam rides one spear (s), in case it never comes down. */
 const BOLT_MOST_SECONDS = 3;
-/** Most particles (dust, debris) alive at once, so a collapsing fort stays smooth. */
-const MAX_PUFFS = 160;
-const MAX_DEBRIS = 60;
-/** Debris pieces a broken block bursts into, and how long they last (s). */
-const DEBRIS_PIECES = 4;
-const DEBRIS_SECONDS = 1.3;
 /** How long the bow's arms take to snap forward when it shoots (s). */
 const SNAP_SECONDS = 0.18;
 /** Real seconds the position's name shows when the ballista rolls on. */
@@ -230,8 +237,24 @@ export class Siege3DView implements ScreenView {
   readonly #spearMaterials: { shaft: THREE.Material; tip: THREE.Material };
   readonly #ballista: BallistaLook;
   readonly #ghost: THREE.InstancedMesh;
-  /** Frames drawn this round, to log how smoothly: all, and while watching a collapse. */
-  #perf = { frames: 0, seconds: 0, worst: 0, collapseFrames: 0, collapseSeconds: 0, calls: 0 };
+  /**
+   * Frames drawn this round, to log how smoothly: all, and while watching a collapse; and the
+   * rules' physics time each frame (ms), to tell physics from drawing.
+   */
+  #perf = newPerf();
+  /** The graphics tier drawn at, and its looks (shadows, debris, dust). */
+  #tier: GraphicsTier;
+  #look: Siege['looks']['tiers']['high'];
+  /** Blob shadows (low tier): one per block, one per guard, and the ballista's. */
+  #blobs: BlobShadows | undefined;
+  readonly #blobTexture = blobTexture();
+  /** Every debris chunk is this box, scaled. */
+  readonly #debrisBox = new THREE.BoxGeometry(1, 1, 1);
+  /** Scratch for the blob shadows' footprints. */
+  readonly #footprint = {
+    turn: new THREE.Quaternion(),
+    axes: [new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()],
+  };
   /** The kick of the last shot, from 1 (just shot) down to 0 (settled). */
   #kick = 0;
   /** Over each guard's head: "Z z z" while he sleeps, "!" a moment when he's alerted. */
@@ -345,9 +368,13 @@ export class Siege3DView implements ScreenView {
     this.#skillBar = new SkillBar(element, { game: deps.game, skill: this.#skill });
     this.#renderer = new THREE.WebGLRenderer({ antialias: true });
     this.#renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    this.#renderer.shadowMap.enabled = true;
+    deps.graphics.noteGpu(gpuOf(this.#renderer.getContext()).gpu);
+    this.#tier = deps.graphics.tier;
+    this.#look = rules.looks.tiers[this.#tier];
+    this.#renderer.shadowMap.enabled = this.#look.shadows === 'map';
     this.#renderer.shadowMap.type = THREE.PCFShadowMap;
     this.#renderer.domElement.className = 'sg-canvas';
+    element.dataset.graphics = this.#tier;
     element.append(this.#renderer.domElement);
     this.#textures = makeTextures();
     this.#materials = {
@@ -387,6 +414,7 @@ export class Siege3DView implements ScreenView {
     };
     for (const shared of [
       ...Object.values(this.#materials).flat(),
+      this.#debrisBox,
       shaft,
       tip,
       this.#spearMaterials.shaft,
@@ -417,6 +445,9 @@ export class Siege3DView implements ScreenView {
     this.#ui = this.buildUi();
     this.#sfx.load({ ...SOUNDS, whoosh: whooshUrl() });
     this.#listen();
+    deps.graphics.onTier(({ tier }) => {
+      this.#applyTier(tier);
+    });
     new ResizeObserver(() => {
       this.#resize();
     }).observe(element);
@@ -532,14 +563,7 @@ export class Siege3DView implements ScreenView {
     this.#title = undefined;
     this.#rolling = 0;
     this.#lastBallista = round.ballista();
-    this.#perf = {
-      frames: 0,
-      seconds: 0,
-      worst: 0,
-      collapseFrames: 0,
-      collapseSeconds: 0,
-      calls: 0,
-    };
+    this.#perf = newPerf();
     this.#fly = undefined;
     if (this.#flyNext) {
       this.#flyNext = false;
@@ -564,6 +588,8 @@ export class Siege3DView implements ScreenView {
       mesh.dispose();
     }
     this.#batches = [];
+    this.#blobs?.dispose(true);
+    this.#blobs = undefined;
     for (const look of this.#guards) {
       look.mixer.stopAllAction();
       look.mixer.uncacheRoot(look.model);
@@ -628,6 +654,9 @@ export class Siege3DView implements ScreenView {
           ? Math.round(perf.collapseFrames / Math.max(perf.collapseSeconds, 0.001))
           : undefined,
       drawCalls: perf.calls,
+      tier: this.#tier,
+      physicsP95Ms: round1(quantile(perf.physicsMs, 0.95)),
+      physicsWorstMs: round1(perf.physicsMs.reduce((most, ms) => Math.max(most, ms), 0)),
     });
     const { game } = this.#deps;
     const rules = game.data.siege;
@@ -645,6 +674,29 @@ export class Siege3DView implements ScreenView {
     this.#finished = { result, at: this.#now + (result.won ? 0.6 : 0.2) };
   }
 
+  /**
+   * Draws at `tier` from now on: the sun's shadow map or blob shadows, and the debris and dust
+   * from here on. Only looks; the round goes on as it was.
+   */
+  #applyTier(tier: GraphicsTier): void {
+    if (tier === this.#tier) return;
+    this.#tier = tier;
+    this.#look = this.#deps.game.data.siege.looks.tiers[tier];
+    this.#element.dataset.graphics = tier;
+    const map = this.#look.shadows === 'map';
+    this.#renderer.shadowMap.enabled = map;
+    this.#sun.castShadow = map;
+    if (this.#blobs) this.#blobs.mesh.visible = !map;
+    // Every look is built again, with or without the shadows.
+    this.#scene.traverse((child) => {
+      if (!(child instanceof THREE.Mesh)) return;
+      for (const material of [child.material as THREE.Material | THREE.Material[]].flat()) {
+        material.needsUpdate = true;
+      }
+    });
+    this.#deps.logger.log('siege.graphics', { tier });
+  }
+
   // World
 
   #buildWorld(tree: THREE.Object3D): void {
@@ -652,16 +704,17 @@ export class Siege3DView implements ScreenView {
     this.#scene.fog = new THREE.Fog(COLORS.sky, FOG.near, FOG.far);
     this.#scene.add(new THREE.HemisphereLight(0xeef4ff, 0x4a5a32, 1.35));
     const sun = this.#sun;
-    sun.castShadow = true;
-    sun.shadow.mapSize.set(1024, 1024);
+    const map = this.#deps.game.data.siege.looks.shadowMap;
+    sun.castShadow = this.#look.shadows === 'map';
+    sun.shadow.mapSize.set(map.size, map.size);
     const shadow = sun.shadow.camera;
-    shadow.left = -20;
-    shadow.right = 20;
-    shadow.top = 30;
-    shadow.bottom = -30;
+    shadow.left = -map.halfWidth;
+    shadow.right = map.halfWidth;
+    shadow.top = map.halfHeight;
+    shadow.bottom = -map.halfHeight;
     shadow.near = 1;
-    shadow.far = 70;
-    sun.shadow.bias = -0.0005;
+    shadow.far = map.far;
+    sun.shadow.bias = map.bias;
     this.#scene.add(sun, sun.target);
     const ground = groundMesh('meadowGrass', FIELD, FIELD);
     ground.position.z = -FIELD / 4;
@@ -812,6 +865,14 @@ export class Siege3DView implements ScreenView {
       this.#effects.add(bang, sense);
       return { zs, bang, alertedAt: -Infinity, sense };
     });
+    // A blob under each block and guard, and one under the ballista (shown on the low tier).
+    this.#blobs = new BlobShadows(
+      round.blocks.length + round.guards.length + 1,
+      rules.looks.blobShadows.opacity,
+      this.#blobTexture,
+    );
+    this.#blobs.mesh.visible = this.#look.shadows === 'blob';
+    this.#effects.add(this.#blobs.mesh);
     this.#drawBodies();
   }
 
@@ -1101,16 +1162,16 @@ export class Siege3DView implements ScreenView {
     this.#dust(at, Math.round(feel.dust * 1.6), Math.max(width, height) * 0.8);
     const base = this.#materials[kind][2] ?? this.#materials[kind][0];
     if (!base) return;
-    for (let piece = 0; piece < DEBRIS_PIECES && this.#debris.length < MAX_DEBRIS; piece++) {
+    const { debrisPieces, maxDebris } = this.#look;
+    for (let piece = 0; piece < debrisPieces && this.#debris.length < maxDebris; piece++) {
       const material = base.clone();
       material.transparent = true;
-      const mesh = new THREE.Mesh(
-        new THREE.BoxGeometry(
-          width * (0.25 + Math.random() * 0.2),
-          height * (0.3 + Math.random() * 0.2),
-          depth * (0.3 + Math.random() * 0.2),
-        ),
-        material,
+      // One box for every chunk, scaled to its size.
+      const mesh = new THREE.Mesh(this.#debrisBox, material);
+      mesh.scale.set(
+        width * (0.25 + Math.random() * 0.2),
+        height * (0.3 + Math.random() * 0.2),
+        depth * (0.3 + Math.random() * 0.2),
       );
       mesh.position.set(
         at.x + (Math.random() - 0.5) * width * 0.6,
@@ -1168,7 +1229,9 @@ export class Siege3DView implements ScreenView {
   }
 
   #dust(at: Vec3, count: number, size: number): void {
-    for (let index = 0; index < count && this.#puffs.length < MAX_PUFFS; index++) {
+    const { dustShare, maxPuffs } = this.#look;
+    const puffs = Math.round(count * dustShare);
+    for (let index = 0; index < puffs && this.#puffs.length < maxPuffs; index++) {
       const material = new THREE.SpriteMaterial({
         map: this.#puffTexture,
         color: COLORS.dust,
@@ -1225,7 +1288,21 @@ export class Siege3DView implements ScreenView {
       slowLeft > 0 ? slow.factor + (1 - slow.factor) * Math.max(0, 1 - slowShare * 3) : 1;
     const dt = frozen ? 0 : realDt * scale;
     const round = this.#round;
+    const physicsFrom = performance.now();
     round?.advance(dt);
+    perf.physicsMs.push(performance.now() - physicsFrom);
+    // Calm frames (aiming down the sights, no camera work, nothing slowed) tell the graphics tier
+    // how this phone copes.
+    if (
+      round?.phase === 'aim' &&
+      !this.#cine &&
+      !this.#fly &&
+      !this.#scout.on &&
+      !frozen &&
+      scale === 1
+    ) {
+      this.#deps.graphics.sample(realDt * 1000);
+    }
     const finished = this.#finished;
     if (finished && this.#now >= finished.at) {
       this.#finished = undefined;
@@ -1234,6 +1311,7 @@ export class Siege3DView implements ScreenView {
     this.#drawBodies();
     this.#animateGuards(dt);
     this.#drawBallista(realDt);
+    this.#drawBlobs();
     this.#drawAim();
     // The ghost keeps its width on screen as the camera moves.
     if (this.#ghost.visible && this.#trailPoints.length > 1) this.#drawGhost();
@@ -1356,6 +1434,64 @@ export class Siege3DView implements ScreenView {
         this.#drawGhost();
       }
     }
+  }
+
+  /**
+   * The blob shadows (low tier): under every block and guard, where the rules have it, and under
+   * the ballista. Each is its thing's footprint on the ground, shrinking away as it rises.
+   */
+  #drawBlobs(): void {
+    const blobs = this.#blobs;
+    const round = this.#round;
+    if (!blobs?.mesh.visible || !round) return;
+    const rules = this.#deps.game.data.siege;
+    const { spread, lift, fadeHeight } = rules.looks.blobShadows;
+    const pose = this.#pose;
+    const { turn, axes } = this.#footprint;
+    let index = 0;
+    const under = (size: readonly [number, number, number]) => {
+      turn.set(pose.rotation.x, pose.rotation.y, pose.rotation.z, pose.rotation.w);
+      const [across, up, along] = axes as [THREE.Vector3, THREE.Vector3, THREE.Vector3];
+      across.set(size[0], 0, 0).applyQuaternion(turn);
+      up.set(0, size[1], 0).applyQuaternion(turn);
+      along.set(0, 0, size[2]).applyQuaternion(turn);
+      // Lined up with its width as it lies (or its depth, if the width points up).
+      const lying = Math.hypot(across.x, across.z) > 0.1 * size[0] ? across : along;
+      const length = Math.max(Math.hypot(lying.x, lying.z), 1e-6);
+      const ux = lying.x / length;
+      const uz = lying.z / length;
+      // Its extent along that way and across it, and how high its lowest corner is.
+      const extent = (x: number, z: number) =>
+        axes.reduce((sum, axis) => sum + Math.abs(axis.x * x + axis.z * z), 0);
+      const bottom = pose.position.y - axes.reduce((sum, axis) => sum + Math.abs(axis.y), 0) / 2;
+      const left = Math.min(Math.max(1 - bottom / fadeHeight, 0), 1) * spread;
+      blobs.place(
+        index++,
+        pose.position.x,
+        pose.position.z,
+        extent(ux, uz) * left,
+        extent(-uz, ux) * left,
+        Math.atan2(-uz, ux),
+        lift,
+      );
+    };
+    this.#blocks.forEach((look, block) => {
+      const state = round.blocks[block];
+      if (look.gone || !state) {
+        blobs.place(index++, 0, 0, 0);
+        return;
+      }
+      round.blockPose(block, pose);
+      under(state.block.size);
+    });
+    round.guards.forEach((_, guard) => {
+      round.guardPose(guard, pose);
+      under(rules.guard.size);
+    });
+    const at = this.#lastBallista;
+    const [width, , depth] = round.weapon.size;
+    blobs.place(index++, at.x, at.z, width * spread, depth * spread, -this.#aim.yaw, lift);
+    blobs.commit();
   }
 
   /**
@@ -1501,6 +1637,7 @@ export class Siege3DView implements ScreenView {
 
   #updateEffects(dt: number): void {
     const gravity = this.#deps.game.data.siege.physics.gravity;
+    const { debrisSeconds } = this.#look;
     this.#puffs = this.#puffs.filter((puff) => {
       puff.age += dt;
       if (puff.age >= puff.life) {
@@ -1517,9 +1654,9 @@ export class Siege3DView implements ScreenView {
     });
     this.#debris = this.#debris.filter((piece) => {
       piece.age += dt;
-      if (piece.age >= DEBRIS_SECONDS) {
+      if (piece.age >= debrisSeconds) {
+        // The box is shared: only its own look goes.
         piece.mesh.removeFromParent();
-        piece.mesh.geometry.dispose();
         piece.material.dispose();
         return false;
       }
@@ -1537,7 +1674,7 @@ export class Siege3DView implements ScreenView {
       piece.mesh.rotation.x += piece.spin.x * dt;
       piece.mesh.rotation.y += piece.spin.y * dt;
       piece.mesh.rotation.z += piece.spin.z * dt;
-      piece.material.opacity = Math.min(1, (DEBRIS_SECONDS - piece.age) / 0.5);
+      piece.material.opacity = Math.min(1, (debrisSeconds - piece.age) / 0.5);
       return true;
     });
   }
@@ -1876,7 +2013,7 @@ export class Siege3DView implements ScreenView {
     canvas.addEventListener('pointerdown', (event) => {
       this.#sfx.unlock();
       if (this.#touch || !this.#round || this.#scout.on) return;
-      canvas.setPointerCapture(event.pointerId);
+      if (!capturePointer(canvas, event.pointerId)) return;
       this.#touch = {
         id: event.pointerId,
         x: event.clientX,
@@ -2435,3 +2572,24 @@ function fitted(
   });
   return outer;
 }
+
+/** A round's frame record, empty. */
+function newPerf() {
+  return {
+    frames: 0,
+    seconds: 0,
+    worst: 0,
+    collapseFrames: 0,
+    collapseSeconds: 0,
+    calls: 0,
+    physicsMs: [] as number[],
+  };
+}
+
+/** The value `share` of the way up `values` once sorted (0 if there are none). */
+function quantile(values: readonly number[], share: number): number {
+  const sorted = [...values].sort((a, b) => a - b);
+  return sorted[Math.min(sorted.length - 1, Math.floor(share * sorted.length))] ?? 0;
+}
+
+const round1 = (value: number): number => Math.round(value * 10) / 10;

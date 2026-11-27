@@ -1,3 +1,4 @@
+import { capturePointer, releasePointer } from '../app/pointer';
 import { dragIntent, draggedValue, valueAt, type SliderDragTuning } from './sliderDrag';
 
 // A range input that a scroll can't change. Chrome on Android moves a native slider's thumb as
@@ -45,7 +46,7 @@ export function touchSlider(input: HTMLInputElement, tuning: SliderDragTuning): 
     // A scroll the browser took over after all: put the value back as it was.
     if (!keep && changed) set(start);
     drag = undefined;
-    if (track.hasPointerCapture(event.pointerId)) track.releasePointerCapture(event.pointerId);
+    releasePointer(track, event.pointerId);
     if (changed) input.dispatchEvent(new Event('change', { bubbles: true }));
   };
 
@@ -65,7 +66,11 @@ export function touchSlider(input: HTMLInputElement, tuning: SliderDragTuning): 
       // No text selection while dragging; focus as a native slider takes it, for the arrow keys.
       event.preventDefault();
       input.focus();
-      track.setPointerCapture(event.pointerId);
+      // The mouse button's already up (or the pointer's gone): no drag to follow.
+      if (!capturePointer(track, event.pointerId)) {
+        drag = undefined;
+        return;
+      }
       const box = input.getBoundingClientRect();
       set(valueAt(event.clientX - box.left, box.width, range()));
     }
@@ -80,8 +85,12 @@ export function touchSlider(input: HTMLInputElement, tuning: SliderDragTuning): 
         drag = undefined;
         return;
       }
+      // The finger's already gone: leave the value as it was.
+      if (!capturePointer(track, event.pointerId)) {
+        drag = undefined;
+        return;
+      }
       drag.dragging = true;
-      track.setPointerCapture(event.pointerId);
     }
     const box = input.getBoundingClientRect();
     set(

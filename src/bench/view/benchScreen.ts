@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { EventLogger } from '../../core';
+import { gpuOf } from '../../app/deviceHints';
 import {
   loadBenchData,
   type BenchData,
@@ -147,12 +148,12 @@ const errorText = (error: unknown): string =>
 
 function deviceInfo(renderer: THREE.WebGLRenderer): DeviceInfo {
   const gl = renderer.getContext();
-  const debug = gl.getExtension('WEBGL_debug_renderer_info');
   const text = (value: unknown) => (typeof value === 'string' ? value : String(value));
   const nav = navigator as Navigator & { deviceMemory?: number };
+  const { gpu, vendor } = gpuOf(gl);
   return {
-    gpu: text(gl.getParameter(debug ? debug.UNMASKED_RENDERER_WEBGL : gl.RENDERER)),
-    gpuVendor: text(gl.getParameter(debug ? debug.UNMASKED_VENDOR_WEBGL : gl.VENDOR)),
+    gpu,
+    gpuVendor: vendor,
     devicePixelRatio: window.devicePixelRatio,
     screen: [window.screen.width, window.screen.height],
     userAgent: navigator.userAgent,

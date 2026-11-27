@@ -22,6 +22,7 @@ import {
   type TrackGate,
   type TrackGates,
 } from '../sim';
+import { capturePointer } from '../../app/pointer';
 
 export interface RunnerViewDeps {
   game: Game;
@@ -870,7 +871,7 @@ export class RunnerView implements ScreenView {
     canvas.addEventListener('pointerdown', (event) => {
       this.#sfx.unlock();
       if (this.#drag) return;
-      canvas.setPointerCapture(event.pointerId);
+      if (!capturePointer(canvas, event.pointerId)) return;
       this.#drag = { pointer: event.pointerId, startX: event.clientX, startTarget: this.#targetX };
       if (!this.#started && !this.#sim.done) {
         this.#started = true;

@@ -19,6 +19,7 @@ import {
   drawEndGrain,
   drawSplitGrain,
 } from '../../../app/woodGrain';
+import { capturePointer } from '../../../app/pointer';
 
 export interface Splitting3DDeps {
   game: Game;
@@ -1278,7 +1279,7 @@ export class Splitting3DView implements ScreenView {
       this.#sfx.unlock();
       const round = this.#round;
       if (!round || this.#pointer) return;
-      canvas.setPointerCapture(event.pointerId);
+      if (!capturePointer(canvas, event.pointerId)) return;
       const angle = this.#angleAt(event.clientX, event.clientY);
       this.#pointer = {
         id: event.pointerId,

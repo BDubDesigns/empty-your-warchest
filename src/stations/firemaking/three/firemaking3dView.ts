@@ -18,6 +18,7 @@ import {
   type FireRules,
 } from '../logic/fire';
 import { FiremakingRound, nextLayers, type FiremakingEvent, type RackResult } from '../logic/round';
+import { capturePointer } from '../../../app/pointer';
 
 export interface Firemaking3DDeps {
   game: Game;
@@ -1264,7 +1265,7 @@ export class Firemaking3DView implements ScreenView {
       const handle = this.#handleOnScreen();
       const near =
         Math.hypot(event.clientX - handle.x, event.clientY - handle.y) <= round.feel.grabPx;
-      canvas.setPointerCapture(event.pointerId);
+      if (!capturePointer(canvas, event.pointerId)) return;
       this.#pointer = {
         id: event.pointerId,
         startX: event.clientX,
