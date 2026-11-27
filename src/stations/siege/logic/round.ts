@@ -1,20 +1,26 @@
 import { Rng, type EventLogger } from '../../../core';
-import type {
-  GameData,
-  Siege,
-  SiegeBlock,
-  SiegeFeel,
-  SiegeFort,
-  SiegeGuard,
-  SiegeMaterial,
-  SiegePosition,
-  SiegeWeapon,
+import {
+  layoutCastle,
+  middleOf,
+  pointAlong,
+  type Castle,
+  type CastleLayout,
+  type CastleVantage,
+  type GameData,
+  type PostSlot,
+  type Siege,
+  type SiegeFeel,
+  type SiegeMaterial,
+  type SiegeObjective,
+  type SiegePartKind,
+  type SiegeWeapon,
 } from '../../../data';
-import { objectiveMet } from './objective';
-import { alert, startWalker, stepWalker, walking, type GuardMode, type Walker } from './watch';
+import { castleBodies, standsOn, type BodyShape, type PartBody } from './castleBodies';
+import { objectiveProgress, planRound, type Progress, type RoundPlan } from './objectives';
 import type { Physics } from './physics';
 import { siegeRewards, type SiegeRewards } from './score';
 import {
+  clampAim,
   shotSpears,
   siegeWeapon,
   type Aim,
@@ -26,7 +32,9 @@ import {
 
 type World = InstanceType<Physics['World']>;
 type Body = ReturnType<World['createRigidBody']>;
+type Collider = ReturnType<World['createCollider']>;
 type EventQueue = InstanceType<Physics['EventQueue']>;
+type ColliderDesc = InstanceType<Physics['ColliderDesc']>;
 
 /** A rotation, as Rapier gives it. */
 export interface Quat {
@@ -44,16 +52,16 @@ export interface Pose {
 
 export type MaterialKind = SiegeMaterial['kind'];
 
-/** What was hit: a block or a guard, by its index in `blocks` or `guards`. */
-export type Target = { kind: 'block' | 'guard'; index: number };
+/** What was hit: a castle part or a guard (the captain among them), by its index. */
+export type Target = { kind: 'part' | 'guard'; index: number };
 
 /** What happened in a step, for the view's juice (and the tests). */
 export type SiegeEvent =
-  /** The ballista shoots `spears` spears; each leaves on its own `launch` (now or a moment later). */
-  | { type: 'throw'; mode: ThrowMode; spears: number }
+  /** The ballista shoots `spears` spears from vantage `vantage`. */
+  | { type: 'throw'; mode: ThrowMode; spears: number; vantage: number }
   /** A spear left the ballista: its index in `spears`. */
   | { type: 'launch'; spear: number }
-  /** A spear hit a block or a guard at `speed` m/s, dealing `damage` (it may have broken it). */
+  /** A spear hit a part or a guard at `speed` m/s, dealing `damage`. */
   | {
       type: 'hit';
       spear: number;
@@ -63,68 +71,55 @@ export type SiegeEvent =
       damage: number;
       at: Vec3;
     }
-  /**
-   * Every impact on a block or a guard, for rules to hook into (damage now; noise, say, later):
-   * a spear's first touch on it, or a sudden change of its speed over `crashMinSpeed` (a crash).
-   */
-  | {
-      type: 'impact';
-      target: Target;
-      material: string;
-      kind: MaterialKind | 'guard';
-      by: 'spear' | 'crash';
-      speed: number;
-      damage: number;
-    }
-  /** A spear came down on the ground. */
+  /** A spear came down on the ground, or on stone that never breaks. */
   | { type: 'land'; spear: number; speed: number; at: Vec3 }
-  /** A block slammed into something: its speed changed by `speed` m/s in a step. */
-  | { type: 'thud'; block: number; kind: MaterialKind; speed: number; at: Vec3 }
-  /** A block ran out of hit points and broke: it's gone from the world. */
-  | { type: 'break'; block: number; kind: MaterialKind; at: Vec3 }
-  /** A block counted as knocked down. */
-  | { type: 'down'; block: number }
-  /** A guard is down (no hit points left, or knocked over). */
-  | { type: 'guardDown'; guard: number; at: Vec3 }
-  /** A guard heard something: a sleeper woke (`woke`), or a guard on watch was alerted. */
-  | { type: 'alerted'; guard: number; woke: boolean }
-  /** The ballista set off for spot `spot` of the position it's at. */
-  | { type: 'spot'; spot: number }
-  /** Position `position` is won; the ballista rolls on to the next in a moment. */
-  | { type: 'positionWon'; position: number }
-  /** The ballista has arrived at position `position`. */
-  | { type: 'arrived'; position: number }
-  /** The banner has tipped far enough to be falling. */
-  | { type: 'bannerFalling' }
-  /** The last position is won: the fort has fallen. The round ends once it settles. */
+  /** A loose part slammed into something: its speed changed by `speed` m/s in a step. */
+  | { type: 'thud'; part: number; kind: MaterialKind; speed: number; at: Vec3 }
+  /** A part came loose: it's a body the physics moves now. */
+  | { type: 'loose'; part: number }
+  /** A part ran out of hit points and broke: it's gone from the world. */
+  | { type: 'break'; part: number; kind: MaterialKind; at: Vec3 }
+  /** A part counted as knocked down. */
+  | { type: 'down'; part: number }
+  /** A guard is down: hit, fallen with what he stood on, or crushed. */
+  | { type: 'guardDown'; guard: number; at: Vec3; by: GuardDownBy }
+  /** An objective moved on: `done` of `needed`, `complete` once it's all done. */
+  | { type: 'objective'; objective: number; done: number; needed: number; complete: boolean }
+  /** The camera (and the ballista) moved to another vantage point. */
+  | { type: 'vantage'; vantage: number }
+  /** Every objective is done. The round ends once it all settles. */
   | { type: 'won' }
   | { type: 'end'; result: SiegeResult };
 
+export type GuardDownBy = 'spear' | 'fall' | 'crush';
+
+/** How the round ended: every objective done, out of spears, or withdrawn. */
+export type SiegeEnding = 'all' | 'spears' | 'withdrew';
+
 export interface SiegeResult extends SiegeRewards {
-  fort: string;
-  won: boolean;
+  ending: SiegeEnding;
+  /** Each objective's kind and how far it got. */
+  objectives: (Progress & { kind: SiegeObjective['kind'] })[];
+  /** Objectives done, of `total`. */
+  done: number;
+  total: number;
   /** Spears shot. */
   used: number;
-  /** Throws: shots of the ballista, aimed or barrage alike, over every position (what stars count). */
+  /** Throws: shots of the ballista, aimed or barrage alike (what stars count). */
   throws: number;
-  /** Throws at each position, in order. */
-  throwsPerPosition: number[];
   par: number;
-  /** Blocks knocked down or broken (each counted once). */
-  blocksDown: number;
-  blocksBroken: number;
+  /** Parts knocked down or broken (each counted once), and broken. */
+  partsDown: number;
+  partsBroken: number;
   guardsDown: number;
-  /** Damage dealt to blocks and guards, by spears and crashes. */
+  /** Damage dealt to parts and guards, by spears and crashes. */
   damage: number;
   /** Round time (physics seconds). */
   seconds: number;
 }
 
-/**
- * Aiming (and shooting); a position won and the ballista about to roll on to the next; the fort
- * has fallen and is settling; or the round is over.
- */
-export type SiegePhase = 'aim' | 'advance' | 'won' | 'done';
+/** Aiming (and shooting); every objective done and settling; or the round is over. */
+export type SiegePhase = 'aim' | 'won' | 'done';
 
 export interface SiegeHooks {
   logger: EventLogger;
@@ -141,34 +136,55 @@ export interface SiegeHooks {
 export interface SiegeOptions {
   /** Spears in an aimed volley (from the Command level). */
   aimed: number;
-  /** For the shots' random stray: the same seed and shots replay the same round. */
+  /** Where the objectives go, and the shots' random stray: the same seed and shots replay. */
   seed: number;
-  /** Start at this position (for tests): the ones before it count as passed. */
-  position?: number;
+  /** The vantage point to start at (index in the castle's); the first by default. */
+  vantage?: number;
+  /** The round's objectives and where they are (for tests), instead of the seed's. */
+  plan?: RoundPlan;
 }
 
-/** One of the fort's blocks, as the round sees it. */
-export interface BlockState {
-  block: SiegeBlock;
-  kind: MaterialKind;
-  start: Vec3;
+/** Fixed where it was built; loose (the physics moves it); fixed again where it settled; gone. */
+export type PartMode = 'fixed' | 'loose' | 'frozen' | 'broken';
+
+/** One of the castle's parts that can come apart (or the spear rack), as the round sees it. */
+export interface PartState {
+  body: PartBody;
+  kind: SiegePartKind;
+  material: MaterialKind;
   /** Hit points: full at `maxHp`, broken at 0. */
   hp: number;
   maxHp: number;
-  down: boolean;
-  broken: boolean;
+  mode: PartMode;
+  /** Knocked down: dropped or tipped far enough (counted once). */
+  fallen: boolean;
+  /** Where it was built (its frame: its foot, turned). */
+  start: Pose;
 }
 
-/** One of the fort's guards. */
+/** One of the guards (the battlement's, or the captain). */
 export interface GuardState {
-  guard: SiegeGuard;
-  /** The position it guards. */
-  position: number;
+  role: 'guard' | 'captain';
+  /** The objective (by index) he's part of. */
+  objective: number;
+  /** His box (what's hit: for the captain, only what shows above the sill), and how far his feet are below its middle. */
+  size: [number, number, number];
+  feet: number;
+  /** How tall he's drawn. */
+  height: number;
   hp: number;
   maxHp: number;
   down: boolean;
-  /** What he's about (on watch, asleep, alerted …), and where along his walkway. */
-  walker: Walker;
+  by: GuardDownBy | undefined;
+  /** Walking his stretch (or standing), and the way he faces (radians about y, 0 toward +z). */
+  walking: boolean;
+  facing: number;
+  /** His stretch of a guard path (or lookout), how far along the path he is, and which way he's going. */
+  slot: PostSlot | undefined;
+  along: number;
+  heading: 1 | -1;
+  /** Seconds left of his pause at the end of his stretch. */
+  pause: number;
 }
 
 /** A shot spear. */
@@ -177,6 +193,10 @@ export interface SpearState {
   flying: boolean;
   /** The throw it was part of. */
   throwIndex: number;
+  /** No longer a body: lying where it settled, or stuck in a part (and moving with it). */
+  frozen: boolean;
+  /** Gone: off the field, or the part it was stuck in broke. */
+  gone: boolean;
 }
 
 /** A spear of a shot still on the ballista: it leaves on step `at`. */
@@ -186,60 +206,70 @@ interface Pending {
   throwIndex: number;
 }
 
-/** The ballista moving from one spot to another, over round time `at` to `at + seconds`. */
-interface Move {
-  /** Where it rolls through, from where it was to where it's going. */
-  points: Spot[];
-  at: number;
-  seconds: number;
-}
-
 interface Tracked {
-  body: Body;
-  collider: number;
+  body: Body | undefined;
+  colliders: Collider[];
   /** Its pose before the last step, so the view can draw between steps. */
   before: Pose;
+  /** Its pose now (kept once it's no body: fixed, frozen or gone). */
+  now: Pose;
   /** Its velocity before the last step, to tell a sudden change (a thud). */
   velocity: Vec3;
-  /** Taken out of the world (a broken block): never touch `body` again. */
-  gone: boolean;
+  /** Seconds it's been still for. */
+  still: number;
 }
+
+/** What a collider belongs to. */
+type Owner = { kind: 'part' | 'guard' | 'spear'; index: number } | { kind: 'ground' | 'solid' };
 
 const DEG = Math.PI / 180;
 /** Collision groups (membership << 16 | what it collides with): spears never hit each other. */
 const GROUND = 0x0001;
-const BLOCK = 0x0002;
+const PART = 0x0002;
 const SPEAR = 0x0004;
+const GUARD = 0x0008;
 const groups = (member: number, filter: number) => (member << 16) | filter;
-/**
- * How far past a broken block's own size bodies are woken (metres): as far as anything resting
- * on it can reach (the widest floor in a fort).
- */
-const WAKE_REACH = 3;
-/** What's left of a spear's speed once it's hit a guard walking his walkway. */
-const SPEAR_IN_GUARD = 0.1;
-/** How near a walkway guard's feet a broken block must be for him to lose his footing (m). */
-const FOOTING = 0.3;
+/** How far round a broken part loose bodies are woken (m): anything resting on it. */
+const WAKE_REACH = 4;
+/** How near the top of a part a guard's feet must be, and how far past its edges, to stand on it (m). */
+const FOOTING = 0.2;
+/** A spear this far below the field, or past its edge, is gone (m). */
+const OFF_FIELD = 3;
+
+/** The castle laid out once per castle: it's the same every round. */
+const layouts = new WeakMap<Castle, CastleLayout>();
+function layoutOf(castle: Castle): CastleLayout {
+  let layout = layouts.get(castle);
+  if (!layout) {
+    layout = layoutCastle(castle);
+    layouts.set(castle, layout);
+  }
+  return layout;
+}
 
 /**
- * One siege: a fort of blocks and guards in a Rapier physics world, the ballista and the spears
- * it shoots, and the rules round them. The fort is taken position by position: win one (its
- * guards down, or at the last the banner) and the ballista rolls on to the next. The world is
- * stepped at a fixed rate (`advance` turns real time into whole steps), so the same shots on the
- * same steps, with the same seed, always go the same way. With no spears left, you lose once
- * everything has settled.
+ * One siege at the castle: its parts (fixed until something they rest on goes or a falling part
+ * knocks them, loose bodies after, fixed again once they settle), the guards and the captain,
+ * the ballista at a vantage point and the spears it shoots, in a Rapier physics world, and the
+ * rules round them: the round's objectives, placed from its seed. The world is stepped at a fixed
+ * rate (`advance` turns real time into whole steps), so the same shots on the same steps, with the
+ * same seed, always go the same way. It ends once every objective is done (and it's settled), once
+ * the spears run out (and it's settled), or when you withdraw.
  */
 export class SiegeRound {
-  readonly fort: SiegeFort;
   readonly rules: Siege;
-  readonly blocks: BlockState[];
+  readonly castle: Castle;
+  readonly layout: CastleLayout;
+  readonly plan: RoundPlan;
+  readonly parts: PartState[] = [];
   readonly guards: GuardState[] = [];
   readonly spears: SpearState[] = [];
-  readonly bannerIndex: number;
+  /** How far along each objective is. */
+  readonly progress: Progress[];
   /** Spears in an aimed volley. */
   readonly aimed: number;
-  /** What shoots the spears. */
   readonly weapon: SiegeWeapon;
+  readonly vantages: readonly CastleVantage[];
   phase: SiegePhase = 'aim';
   result: SiegeResult | undefined;
   /** How far between the last step and the next the view should draw (0 to 1). */
@@ -250,22 +280,22 @@ export class SiegeRound {
   readonly #hooks: SiegeHooks;
   readonly #recovery: number;
   readonly #rng: Rng;
-  /** The guards' own random numbers (where they walk), apart from the shots'. */
-  readonly #watchRng: Rng;
-  readonly #blockBodies: Tracked[] = [];
+  readonly #seed: number;
+  readonly #partBodies: Tracked[] = [];
   readonly #guardBodies: Tracked[] = [];
   readonly #spearBodies: Tracked[] = [];
-  /** Which block, guard or spear each collider belongs to. */
-  readonly #colliders = new Map<number, { kind: 'block' | 'guard' | 'spear'; index: number }>();
+  /** A spear stuck in a part: which, and where in its frame. */
+  readonly #stuck = new Map<number, { part: number; local: Pose }>();
+  /** The parts each part rests on now (as built; as it settled, once it's moved). */
+  readonly #supports: number[][];
+  /** Each guard's parts he may stand on, along his stretch. */
+  readonly #footing: number[][] = [];
+  readonly #owners = new Map<number, Owner>();
   /** Spear and target pairs already reported as hits. */
   readonly #hits = new Set<string>();
   readonly #lastThud: number[];
-  readonly #throwsAt: number[];
-  #position: number;
-  #spot = 0;
-  #move: Move | undefined;
-  /** Won the position at `at`; rolling on to `next`. */
-  #advance: { at: number; next: number; rolling: boolean } | undefined;
+  readonly #middle: [number, number];
+  #vantage: number;
   #pending: Pending[] = [];
   #steps = 0;
   #carry = 0;
@@ -275,115 +305,200 @@ export class SiegeRound {
   #lastThrow: { at: number; index: number } | undefined;
   #calmFor = 0;
   #wonAt = 0;
-  #bannerFalling = false;
 
   constructor(
     physics: Physics,
-    data: Pick<GameData, 'siege' | 'tuning'>,
-    fortId: string,
+    data: Pick<GameData, 'siege' | 'castle' | 'tuning'>,
     hooks: SiegeHooks,
     options: SiegeOptions,
   ) {
-    const fort = data.siege.forts.find((entry) => entry.id === fortId);
-    if (!fort) throw new Error(`Unknown fort "${fortId}"`);
-    this.fort = fort;
     this.rules = data.siege;
+    this.castle = data.castle;
+    this.layout = layoutOf(data.castle);
     this.aimed = options.aimed;
     this.weapon = siegeWeapon(data.siege);
+    this.vantages = data.castle.vantages;
     this.#physics = physics;
     this.#hooks = hooks;
     this.#recovery = data.tuning.weaponRecoveryOnWin;
+    this.#seed = options.seed;
     this.#rng = new Rng(options.seed);
-    this.#watchRng = new Rng((options.seed ^ 0x5bd1e995) >>> 0);
-    this.#position = Math.min(Math.max(options.position ?? 0, 0), fort.positions.length - 1);
-    this.#throwsAt = fort.positions.map(() => 0);
-    this.#spot = middleSpot(fort.positions[this.#position]);
+    this.#vantage = Math.min(Math.max(options.vantage ?? 0, 0), this.vantages.length - 1);
+    this.#middle = middleOf(data.castle);
+    // Where things go is drawn apart from the shots, so the shots don't move them.
+    this.plan =
+      options.plan ??
+      planRound(this.rules, this.layout, new Rng((options.seed ^ 0x9e3779b9) >>> 0));
     const settings = this.rules.physics;
     this.#world = new physics.World({ x: 0, y: -settings.gravity, z: 0 });
     this.#world.timestep = settings.timestep;
     this.#world.numSolverIterations = settings.solverIterations;
     this.#queue = new physics.EventQueue(true);
 
-    const ground = this.#world.createRigidBody(physics.RigidBodyDesc.fixed());
+    // The field, and the stonework that never comes apart.
+    const [cx, cz] = this.#middle;
+    const field = this.#world.createRigidBody(physics.RigidBodyDesc.fixed());
     const reach = settings.groundReach;
-    this.#world.createCollider(
+    const ground = this.#world.createCollider(
       physics.ColliderDesc.cuboid(reach, 0.5, reach)
-        .setTranslation(0, -0.5, 0)
+        .setTranslation(cx, -0.5, cz)
         .setFriction(settings.groundFriction)
-        .setCollisionGroups(groups(GROUND, BLOCK | SPEAR)),
-      ground,
+        .setCollisionGroups(groups(GROUND, PART | SPEAR | GUARD)),
+      field,
     );
-
-    // The fort starts awake, every block resting exactly on the ones below (checked at startup),
-    // so it stands still on its own; the engine puts it to sleep once it's still. (Starting it
-    // asleep was worse: blocks put to sleep before their contacts are known drift once woken.)
-    this.blocks = fort.blocks.map((block, index) => {
-      const material = this.rules.materials.find((entry) => entry.id === block.material);
-      if (!material) throw new Error(`Unknown material "${block.material}"`);
-      const [x, y, z] = block.at;
-      const tracked = this.#addBox(
-        { x, y, z },
-        block.size,
-        { density: material.density, friction: material.friction },
-        material.restitution,
-        { kind: 'block', index },
+    this.#owners.set(ground.handle, { kind: 'ground' });
+    const bodies = castleBodies(this.castle, this.layout, this.rules.bodies, this.plan.rack);
+    const solid = this.#material(this.rules.bodies.solid);
+    const stone = this.#world.createRigidBody(physics.RigidBodyDesc.fixed());
+    for (const shape of bodies.solids) {
+      const collider = this.#world.createCollider(
+        this.#shapeDesc(shape)
+          .setFriction(solid.friction)
+          .setRestitution(solid.restitution)
+          .setCollisionGroups(groups(PART, GROUND | PART | SPEAR | GUARD)),
+        stone,
       );
-      this.#blockBodies.push(tracked);
-      const hp = block.hp ?? material.hp;
-      return {
-        block,
-        kind: material.kind,
-        start: { x, y, z },
-        hp,
-        maxHp: hp,
-        down: false,
-        broken: false,
-      };
-    });
-    const { guard: rules } = this.rules;
-    fort.positions.forEach((position, positionIndex) => {
-      for (const guard of position.guards) {
-        const [x, y, z] = guard.at;
-        const index = this.guards.length;
-        this.#guardBodies.push(
-          this.#addBox(
-            { x, y: y + rules.size[1] / 2, z },
-            rules.size,
-            { density: rules.density, friction: rules.friction },
-            0,
-            { kind: 'guard', index },
-          ),
-        );
-        const walker = startWalker(guard.watch, x, this.#watchRng);
-        this.guards.push({
-          guard,
-          position: positionIndex,
-          hp: rules.hp,
-          maxHp: rules.hp,
-          down: false,
-          walker,
-        });
-        // A guard walking his walkway is moved by the rules, not pushed about by the physics.
-        if (walking(walker, guard.walk)) this.#walkOn(index);
-      }
-    });
-    this.#lastThud = this.blocks.map(() => -Infinity);
-    this.bannerIndex = fort.blocks.findIndex((block) => block.banner);
+      this.#owners.set(collider.handle, { kind: 'solid' });
+    }
 
-    hooks.logger.log('siege.start', {
-      fort: fort.id,
-      blocks: fort.blocks.length,
-      par: fort.par,
+    // The parts that can come apart: fixed where they're built until they come loose.
+    bodies.parts.forEach((part, index) => {
+      const setting = this.rules.parts[part.kind];
+      const material = this.#material(setting.material);
+      const rotation = turnQuat(part.turn);
+      const body = this.#world.createRigidBody(
+        physics.RigidBodyDesc.fixed()
+          .setTranslation(part.foot[0], part.foot[1], part.foot[2])
+          .setRotation(rotation),
+      );
+      const colliders = part.shapes.map((shape) => {
+        const collider = this.#world.createCollider(
+          this.#shapeDesc(shape)
+            .setDensity(material.density)
+            .setFriction(material.friction)
+            .setRestitution(material.restitution)
+            .setCollisionGroups(groups(PART, GROUND | PART | SPEAR | GUARD))
+            .setActiveEvents(physics.ActiveEvents.COLLISION_EVENTS),
+          body,
+        );
+        this.#owners.set(collider.handle, { kind: 'part', index });
+        return collider;
+      });
+      this.#partBodies.push(track(body, colliders));
+      const start: Pose = {
+        position: { x: part.foot[0], y: part.foot[1], z: part.foot[2] },
+        rotation: rotation,
+      };
+      this.parts.push({
+        body: part,
+        kind: part.kind,
+        material: material.kind,
+        hp: setting.hp,
+        maxHp: setting.hp,
+        mode: 'fixed',
+        fallen: false,
+        start,
+      });
+    });
+    this.#supports = bodies.parts.map((part) => [...part.supports]);
+    this.#lastThud = this.parts.map(() => -Infinity);
+
+    // The battlement's guards, each on his stretch, and the captain at his window.
+    const guard = this.rules.guard;
+    for (const planned of this.plan.guards) {
+      const index = this.guards.length;
+      const state: GuardState = {
+        role: 'guard',
+        objective: planned.objective,
+        size: [...guard.size],
+        feet: guard.size[1] / 2,
+        height: guard.size[1],
+        hp: guard.hp,
+        maxHp: guard.hp,
+        down: false,
+        by: undefined,
+        walking: false,
+        facing: 0,
+        slot: planned.slot,
+        along: 0,
+        heading: planned.heading,
+        pause: 0,
+      };
+      if (planned.slot.kind === 'path') {
+        state.along = planned.slot.from + (planned.slot.to - planned.slot.from) * planned.start;
+      }
+      const feet = this.#feetOf(state);
+      state.facing = this.#outward(feet);
+      this.guards.push(state);
+      this.#guardBodies.push(this.#addGuard(index, feet, state));
+      this.#footing.push(this.#footingFor(state));
+    }
+    const captain = this.plan.objectives.findIndex((objective) => objective.kind === 'captain');
+    const window =
+      this.plan.captainWindow === undefined
+        ? undefined
+        : this.layout.anchors.captainWindows[this.plan.captainWindow];
+    if (captain >= 0 && window) {
+      const rules = this.rules.captain;
+      const height = guard.size[1] * rules.scale;
+      const floor = window.at[1] - this.castle.windowMiddle;
+      const shows = Math.max(height - rules.sill, 0.1);
+      const index = this.guards.length;
+      const state: GuardState = {
+        role: 'captain',
+        objective: captain,
+        size: [guard.size[0] * rules.scale, shows, guard.size[2] * rules.scale],
+        feet: rules.sill + shows / 2,
+        height,
+        hp: rules.hp,
+        maxHp: rules.hp,
+        down: false,
+        by: undefined,
+        walking: false,
+        facing: Math.atan2(window.out[0], window.out[1]),
+        slot: undefined,
+        along: 0,
+        heading: 1,
+        pause: 0,
+      };
+      const feet: Vec3 = {
+        x: window.at[0] - window.out[0] * rules.inset,
+        y: floor,
+        z: window.at[2] - window.out[1] * rules.inset,
+      };
+      this.guards.push(state);
+      this.#guardBodies.push(this.#addGuard(index, feet, state));
+      this.#footing.push([]);
+    }
+    this.progress = this.plan.objectives.map((objective, index) =>
+      objectiveProgress(objective, this.#objectiveView(index)),
+    );
+    // One step of the world with nothing moving yet, so its rays (Fire's aim) find what's built.
+    this.#world.step(this.#queue);
+    this.#queue.clear();
+
+    const feel = hooks.feel();
+    hooks.logger.log('siege.roundStart', {
+      seed: options.seed,
       spears: hooks.spears(),
       aimed: options.aimed,
-      seed: options.seed,
-      positions: fort.positions.map((position) => ({
-        name: position.name,
-        objective: position.objective.kind,
-        guards: position.guards.length,
-        spots: position.spots.length,
+      par: this.rules.par,
+      vantage: this.vantages[this.#vantage]?.id,
+      parts: this.parts.length,
+      objectives: this.plan.objectives.map((objective, index) => ({
+        kind: objective.kind,
+        needed: this.progress[index]?.needed,
       })),
-      feel: hooks.feel(),
+      captainWindow: this.plan.captainWindow,
+      rack: this.plan.rack,
+      guards: this.plan.guards.map((planned) => ({
+        post: planned.slot.post,
+        ...(planned.slot.kind === 'path' && {
+          from: round2(planned.slot.from),
+          to: round2(planned.slot.to),
+        }),
+      })),
+      feel,
     });
   }
 
@@ -406,58 +521,42 @@ export class SiegeRound {
     return this.#throws;
   }
 
-  /** The position the ballista is at (or leaving). */
-  get position(): number {
-    return this.#position;
+  /** Damage dealt so far, by spears and crashes. */
+  get damage(): number {
+    return this.#damage;
   }
 
-  get currentPosition(): SiegePosition {
-    const position = this.fort.positions[this.#position];
-    if (!position) throw new Error('No position');
-    return position;
+  /** The vantage point the ballista (and the camera) is at. */
+  get vantage(): number {
+    return this.#vantage;
   }
 
-  /** The spot the ballista is at (or moving to), at its position. */
-  get spot(): number {
-    return this.#spot;
+  /** Parts knocked down or broken, each counted once. */
+  get partsDown(): number {
+    return this.parts.filter((part) => part.fallen || part.mode === 'broken').length;
   }
 
-  /** Blocks knocked down or broken, each counted once. */
-  get blocksDown(): number {
-    return this.blocks.filter((block) => block.down || block.broken).length;
+  get partsBroken(): number {
+    return this.parts.filter((part) => part.mode === 'broken').length;
   }
 
-  get blocksBroken(): number {
-    return this.blocks.filter((block) => block.broken).length;
+  /** Parts the physics is moving now (loose ones). */
+  get partsLoose(): number {
+    return this.parts.filter((part) => part.mode === 'loose').length;
+  }
+
+  /** Spears that are still bodies (flying, or not yet settled). */
+  get spearBodies(): number {
+    return this.#spearBodies.filter((tracked) => tracked.body !== undefined).length;
   }
 
   get guardsDown(): number {
     return this.guards.filter((guard) => guard.down).length;
   }
 
-  /** Guards still up at the ballista's position. */
-  get guardsLeft(): number {
-    return this.guards.filter((guard) => guard.position === this.#position && !guard.down).length;
-  }
-
-  /** Damage dealt so far, by spears and crashes. */
-  get damage(): number {
-    return this.#damage;
-  }
-
-  /** Where the ballista is now: at its spot, or on its way to the next. */
-  ballista(): Spot {
-    const move = this.#move;
-    if (!move) return this.#spotAt(this.#position, this.#spot);
-    const share = Math.min(Math.max((this.seconds - move.at) / move.seconds, 0), 1);
-    // Eased: it sets off and pulls up gently, at an even pace along the way between.
-    const eased = share * share * (3 - 2 * share);
-    return alongPath(move.points, eased);
-  }
-
-  /** The ballista is moving (between spots, or on to the next position). */
-  get moving(): boolean {
-    return this.#move !== undefined || this.phase === 'advance';
+  /** Objectives done. */
+  get done(): number {
+    return this.progress.filter((progress) => progress.done >= progress.needed).length;
   }
 
   /** The last shot is still leaving the ballista, or its spears are in the air and it's too soon. */
@@ -469,42 +568,59 @@ export class SiegeRound {
     return this.spears.some((spear) => spear.throwIndex === last.index && spear.flying);
   }
 
-  /** Whether the ballista can shoot now: aiming, still, loaded, and at least a spear left. */
+  /** Whether the ballista can shoot now: aiming, loaded, and at least a spear left. */
   get canThrow(): boolean {
-    return this.phase === 'aim' && !this.moving && !this.reloading && this.#hooks.spears() >= 1;
+    return this.phase === 'aim' && !this.reloading && this.#hooks.spears() >= 1;
   }
 
-  /** Sends the ballista to another spot of its position. Returns false if it can't go now. */
-  moveTo(spot: number): boolean {
-    const spots = this.currentPosition.spots;
-    if (this.phase !== 'aim' || this.moving || spot === this.#spot || !spots[spot]) return false;
-    this.#move = {
-      points: [this.ballista(), this.#spotAt(this.#position, spot)],
-      at: this.seconds,
-      seconds: this.#hooks.feel().spotSeconds,
+  /**
+   * Where the ballista stands at vantage `index` (the one it's at by default): `mount.ahead` in
+   * front of the camera along the ground, its pivot `mount.below` under it.
+   */
+  mount(index = this.#vantage): Spot {
+    const vantage = this.vantages[index] ?? this.vantages[0];
+    if (!vantage) return { x: 0, y: 0, z: 0 };
+    const [x, y, z] = vantage.at;
+    const dx = vantage.look[0] - x;
+    const dz = vantage.look[2] - z;
+    const flat = Math.hypot(dx, dz) || 1;
+    const { ahead, below } = this.rules.mount;
+    return {
+      x: x + (dx / flat) * ahead,
+      y: y - below - this.weapon.pivotHeight,
+      z: z + (dz / flat) * ahead,
     };
-    this.#spot = spot;
-    this.#hooks.logger.log('siege.spot', {
-      fort: this.fort.id,
-      position: this.#position,
-      spot,
+  }
+
+  /** Moves the ballista (and the camera) to vantage point `index`. Returns false if it can't. */
+  setVantage(index: number): boolean {
+    if (this.phase === 'done' || index === this.#vantage || !this.vantages[index]) return false;
+    const from = this.#vantage;
+    this.#vantage = index;
+    this.#hooks.logger.log('siege.vantage', {
+      from: this.vantages[from]?.id,
+      to: this.vantages[index]?.id,
+      throws: this.#throws,
       step: this.#steps,
     });
-    this.#hooks.onEvent({ type: 'spot', spot });
+    this.#hooks.onEvent({ type: 'vantage', vantage: index });
     return true;
   }
 
   /**
-   * The ballista shoots (taking the spears from the warchest), if it can. Spears that leave
-   * straight away go on the next step; the rest of a volley a moment after.
+   * The ballista shoots (taking the spears from the warchest), if it can. `at` is the point it was
+   * aimed at, for the logs. Spears that leave straight away go on the next step; the rest of a
+   * volley a moment after.
    */
-  throw(mode: ThrowMode, aim: Aim): boolean {
+  throw(mode: ThrowMode, aim: Aim, at?: Vec3): boolean {
     if (!this.canThrow) return false;
     const feel = this.#hooks.feel();
+    const kept = clampAim(aim, this.weapon);
+    const spot = this.mount();
     const spears = shotSpears(
       mode,
-      aim,
-      this.ballista(),
+      kept,
+      spot,
       this.aimed,
       this.#hooks.spears(),
       this.weapon,
@@ -514,7 +630,6 @@ export class SiegeRound {
     this.#hooks.spend(spears.length);
     this.#used += spears.length;
     const index = this.#throws++;
-    this.#throwsAt[this.#position] = (this.#throwsAt[this.#position] ?? 0) + 1;
     const { timestep } = this.rules.physics;
     for (const spear of spears) {
       this.#pending.push({
@@ -526,25 +641,46 @@ export class SiegeRound {
     this.#lastThrow = { at: this.seconds, index };
     this.#calmFor = 0;
     this.#hooks.logger.log('siege.throw', {
-      fort: this.fort.id,
       mode,
-      yaw: Math.round((aim.yaw / DEG) * 10) / 10,
-      tilt: Math.round((aim.tilt / DEG) * 10) / 10,
+      vantage: this.vantages[this.#vantage]?.id,
+      aim: {
+        yaw: round2(kept.yaw / DEG),
+        tilt: round2(kept.tilt / DEG),
+        ...(at && { at: { x: round2(at.x), y: round2(at.y), z: round2(at.z) } }),
+      },
+      // The ballista has one speed: no power to set.
+      power: this.weapon.speed,
       spears: spears.length,
-      position: this.#position,
-      spot: this.#spot,
+      throw: this.#throws,
       left: this.#hooks.spears(),
       step: this.#steps,
     });
-    this.#hooks.onEvent({ type: 'throw', mode, spears: spears.length });
-    const from = this.ballista();
-    this.#noise(
-      'fire',
-      { x: from.x, y: this.weapon.pivotHeight, z: from.z },
-      this.rules.noise.fire,
-    );
-    this.#launchDue(feel);
+    this.#hooks.onEvent({ type: 'throw', mode, spears: spears.length, vantage: this.#vantage });
+    this.#launchDue();
     return true;
+  }
+
+  /**
+   * The first thing a ray from `from` along `way` meets within `far` m (a part, a guard, the
+   * stonework or the field): where Fire aims, so a shot hits what the rules have there.
+   */
+  rayHit(from: Vec3, way: Vec3, far: number): Vec3 | undefined {
+    const length = Math.hypot(way.x, way.y, way.z) || 1;
+    const dir = { x: way.x / length, y: way.y / length, z: way.z / length };
+    const ray = new this.#physics.Ray(from, dir);
+    const hit = this.#world.castRay(
+      ray,
+      far,
+      true,
+      undefined,
+      groups(0xffff, GROUND | PART | GUARD),
+    );
+    if (!hit) return undefined;
+    return {
+      x: from.x + dir.x * hit.timeOfImpact,
+      y: from.y + dir.y * hit.timeOfImpact,
+      z: from.z + dir.z * hit.timeOfImpact,
+    };
   }
 
   /**
@@ -569,152 +705,112 @@ export class SiegeRound {
   /** One fixed physics step, and the rules after it. */
   step(): void {
     if (this.phase === 'done') return;
-    const feel = this.#hooks.feel();
-    this.#launchDue(feel);
+    const { timestep } = this.rules.physics;
+    this.#launchDue();
     // A spear in flight flies nose first (its weight is up front), until it first touches.
     this.spears.forEach((spear, index) => {
-      const tracked = this.#spearBodies[index];
-      if (!spear.flying || !tracked) return;
-      tracked.body.setRotation(alongY(tracked.body.linvel()), false);
-      tracked.body.setAngvel({ x: 0, y: 0, z: 0 }, false);
+      const body = this.#spearBodies[index]?.body;
+      if (!spear.flying || !body) return;
+      body.setRotation(alongY(body.linvel()), false);
+      body.setAngvel({ x: 0, y: 0, z: 0 }, false);
     });
-    for (const tracked of [...this.#blockBodies, ...this.#guardBodies, ...this.#spearBodies]) {
-      if (!tracked.gone) remember(tracked);
-    }
+    for (const tracked of this.#moving()) remember(tracked);
     this.#walkGuards();
     this.#world.step(this.#queue);
     this.#steps++;
     const now = this.seconds;
+    const feel = this.#hooks.feel();
 
-    // Blocks hit this step, broken once everything's been counted (in order, so it replays).
+    // Parts hit or knocked this step, dealt with once everything's been counted (in order).
     const breaking = new Set<number>();
+    const knocks = new Map<number, number>();
+    const crushes = new Map<number, number>();
     this.#queue.drainCollisionEvents((first, second, started) => {
       if (!started) return;
-      const a = this.#colliders.get(first);
-      const b = this.#colliders.get(second);
-      const spear = a?.kind === 'spear' ? a : b?.kind === 'spear' ? b : undefined;
-      if (!spear) return;
-      const other = spear === a ? b : a;
-      const target =
-        other && other.kind !== 'spear' ? { kind: other.kind, index: other.index } : undefined;
-      this.#spearTouched(spear.index, target, feel, breaking);
+      const a = this.#owners.get(first);
+      const b = this.#owners.get(second);
+      if (!a || !b) return;
+      const spear = a.kind === 'spear' ? a : b.kind === 'spear' ? b : undefined;
+      if (spear && 'index' in spear) {
+        const other = spear === a ? b : a;
+        this.#spearTouched(spear.index, other, feel, breaking);
+        return;
+      }
+      for (const [mover, other] of [
+        [a, b],
+        [b, a],
+      ] as const) {
+        if (mover.kind !== 'part' || this.parts[mover.index]?.mode !== 'loose') continue;
+        const speed = length(this.#partBodies[mover.index]?.velocity);
+        if (other.kind === 'part') {
+          const mode = this.parts[other.index]?.mode;
+          if (mode === 'fixed' || mode === 'frozen') {
+            knocks.set(other.index, Math.max(knocks.get(other.index) ?? 0, speed));
+          }
+        } else if (other.kind === 'guard') {
+          crushes.set(other.index, Math.max(crushes.get(other.index) ?? 0, speed));
+        }
+      }
     });
 
     const { damage } = this.rules;
-    this.#blockBodies.forEach((tracked, index) => {
-      const state = this.blocks[index];
-      if (!state || tracked.gone || tracked.body.isSleeping()) return;
+    this.parts.forEach((state, index) => {
+      if (state.mode !== 'loose') return;
+      const tracked = this.#partBodies[index];
+      const body = tracked?.body;
+      if (!tracked || !body) return;
+      readPose(body, tracked.now);
+      if (body.isSleeping()) return;
       const change = suddenChange(tracked);
       if (change > damage.crashMinSpeed) {
         const amount = (change - damage.crashMinSpeed) * damage.crashPerSpeed;
-        this.#impact({ kind: 'block', index }, 'crash', change, amount);
-        const at = copy(tracked.body.translation());
-        this.#noise('crash', at, this.rules.noise.hit[state.kind] * this.rules.noise.crashShare);
-        if (this.#hurt({ kind: 'block', index }, amount)) breaking.add(index);
+        if (this.#hurt({ kind: 'part', index }, amount)) breaking.add(index);
       }
       if (change >= feel.thudSpeed && now - (this.#lastThud[index] ?? 0) >= feel.thudGapSeconds) {
         this.#lastThud[index] = now;
         this.#hooks.onEvent({
           type: 'thud',
-          block: index,
-          kind: state.kind,
+          part: index,
+          kind: state.material,
           speed: change,
-          at: copy(tracked.body.translation()),
+          at: copy(body.translation()),
         });
       }
-      if (!state.down) {
-        const at = tracked.body.translation();
-        const tilt = tiltOf(tracked.body.rotation());
-        if (state.start.y - at.y >= this.rules.down.drop || tilt >= this.rules.down.tilt) {
-          state.down = true;
-          this.#hooks.onEvent({ type: 'down', block: index });
-        }
-      }
+      this.#checkFallen(index);
     });
-    for (const index of [...breaking].sort((a, b) => a - b)) this.#break(index);
+    // A loose part slamming into a fixed one knocks it loose (and hurts it).
+    for (const [index, speed] of [...knocks].sort((x, y) => x[0] - y[0])) {
+      if (speed < damage.knockSpeed || breaking.has(index)) continue;
+      const amount = Math.max(speed - damage.crashMinSpeed, 0) * damage.crashPerSpeed;
+      if (this.#hurt({ kind: 'part', index }, amount)) breaking.add(index);
+      else this.#loosen(index);
+    }
+    for (const index of [...breaking].sort((x, y) => x - y)) this.#break(index);
+    for (const [index, speed] of [...crushes].sort((x, y) => x[0] - y[0])) {
+      if (speed >= damage.knockSpeed) this.#guardDown(index, 'crush');
+    }
 
+    // Guards: hit hard enough, knocked over, or what they stand on gone from under them.
+    this.guards.forEach((state, index) => {
+      if (state.down) return;
+      if (state.hp <= 0) {
+        this.#guardDown(index, 'spear');
+        return;
+      }
+      if (this.#footingGone(index)) this.#guardDown(index, 'fall');
+    });
     this.#guardBodies.forEach((tracked, index) => {
-      const state = this.guards[index];
-      if (!state || state.down) return;
-      // Walking his walkway, he's moved, not knocked about: only spears hurt him.
-      const change =
-        tracked.body.isSleeping() || tracked.body.isKinematic() ? 0 : suddenChange(tracked);
-      if (change > damage.crashMinSpeed) {
-        const amount = (change - damage.crashMinSpeed) * damage.crashPerSpeed;
-        this.#impact({ kind: 'guard', index }, 'crash', change, amount);
-        this.#hurt({ kind: 'guard', index }, amount);
-      }
-      if (state.hp <= 0 || tiltOf(tracked.body.rotation()) >= this.rules.guard.downTilt) {
-        this.#guardDown(index);
-      }
+      const body = tracked.body;
+      if (body && this.guards[index]?.down) readPose(body, tracked.now);
     });
 
-    const banner = this.#blockBodies[this.bannerIndex];
-    const standing = banner && !banner.gone ? banner.body : undefined;
-    if (standing && !this.#bannerFalling) {
-      if (tiltOf(standing.rotation()) >= this.rules.banner.fallTilt) {
-        this.#bannerFalling = true;
-        this.#hooks.onEvent({ type: 'bannerFalling' });
-      }
-    }
+    this.#settle(timestep);
+    this.#checkObjectives(now);
 
-    // The ballista arriving at a spot, or at the next position.
-    const move = this.#move;
-    if (move && now >= move.at + move.seconds) {
-      this.#move = undefined;
-      const advance = this.#advance;
-      if (advance?.rolling) {
-        this.#advance = undefined;
-        this.#position = advance.next;
-        this.#spot = middleSpot(this.currentPosition);
-        this.phase = 'aim';
-        this.#hooks.logger.log('siege.position', {
-          fort: this.fort.id,
-          position: this.#position,
-          name: this.currentPosition.name,
-          throws: this.#throws,
-          step: this.#steps,
-        });
-        this.#hooks.onEvent({ type: 'arrived', position: this.#position });
-      }
-    }
-    const advance = this.#advance;
-    if (advance && !advance.rolling && now >= advance.at + feel.advanceDelaySeconds) {
-      advance.rolling = true;
-      const next = this.fort.positions[advance.next];
-      this.#move = {
-        points: [
-          this.ballista(),
-          ...(next?.approach ?? []).map(([x, z]) => ({ x, z })),
-          this.#spotAt(advance.next, middleSpot(next)),
-        ],
-        at: now,
-        seconds: feel.advanceSeconds,
-      };
-    }
-
-    const view = {
-      rules: this.rules,
-      bannerHeight: standing?.translation().y,
-      guardsLeft: this.guardsLeft,
-    };
-    if (this.phase === 'aim' && objectiveMet(this.currentPosition.objective, view)) {
-      const next = this.#position + 1;
-      if (next >= this.fort.positions.length) {
-        this.phase = 'won';
-        this.#wonAt = now;
-        this.#hooks.onEvent({ type: 'won' });
-      } else {
-        this.phase = 'advance';
-        this.#advance = { at: now, next, rolling: false };
-        this.#hooks.onEvent({ type: 'positionWon', position: this.#position });
-      }
-    }
-
-    this.#calmFor = this.#calm() ? this.#calmFor + this.rules.physics.timestep : 0;
+    this.#calmFor = this.#calm() ? this.#calmFor + timestep : 0;
     const settled = this.#calmFor >= this.rules.settle.seconds;
     if (this.phase === 'won' && (settled || now - this.#wonAt >= this.rules.settle.winSeconds)) {
-      this.#finish(true);
+      this.#finish('all');
     } else if (
       this.phase === 'aim' &&
       settled &&
@@ -723,30 +819,37 @@ export class SiegeRound {
       this.#pending.length === 0 &&
       !this.spears.some((spear) => spear.flying)
     ) {
-      this.#finish(false);
+      this.#finish('spears');
     }
   }
 
-  /** Block `index`'s pose, drawn `alpha` of the way from its last step to its current one. */
-  blockPose(index: number, out: Pose): Pose {
-    const tracked = this.#blockBodies[index];
+  /** Ends the round now, with what's done (Withdraw). */
+  withdraw(): void {
+    if (this.phase === 'done') return;
+    this.#finish(this.done >= this.progress.length ? 'all' : 'withdrew');
+  }
+
+  /** Part `index`'s frame (its foot, turned), drawn `alpha` of the way from its last step. */
+  partPose(index: number, out: Pose): Pose {
+    const tracked = this.#partBodies[index];
     return tracked ? between(tracked, this.alpha, out) : out;
   }
 
+  /** Guard `index`'s box middle and turn. */
   guardPose(index: number, out: Pose): Pose {
     const tracked = this.#guardBodies[index];
     return tracked ? between(tracked, this.alpha, out) : out;
   }
 
+  /** Spear `index`'s middle and turn (its length along its y): flying, lying, or stuck in a part. */
   spearPose(index: number, out: Pose): Pose {
+    const stuck = this.#stuck.get(index);
+    if (stuck) {
+      const part = this.partPose(stuck.part, scratchPose);
+      return compose(part, stuck.local, out);
+    }
     const tracked = this.#spearBodies[index];
     return tracked ? between(tracked, this.alpha, out) : out;
-  }
-
-  /** How fast spear `index` is going (m/s). */
-  spearSpeed(index: number): number {
-    const velocity = this.#spearBodies[index]?.body.linvel();
-    return velocity ? Math.hypot(velocity.x, velocity.y, velocity.z) : 0;
   }
 
   /** Leaving mid-round: the shot spears are spent. */
@@ -754,10 +857,10 @@ export class SiegeRound {
     if (this.phase === 'done') return;
     this.phase = 'done';
     this.#hooks.logger.log('siege.quit', {
-      fort: this.fort.id,
       used: this.#used,
-      position: this.#position,
-      blocksDown: this.blocksDown,
+      throws: this.#throws,
+      done: this.done,
+      partsDown: this.partsDown,
       guardsDown: this.guardsDown,
       seconds: round2(this.seconds),
     });
@@ -769,47 +872,181 @@ export class SiegeRound {
     this.#world.free();
   }
 
-  #spotAt(position: number, spot: number): Spot {
-    const at = this.fort.positions[position]?.spots[spot] ?? [0, 0];
-    return { x: at[0], z: at[1] };
+  // Bodies
+
+  #material(id: string): SiegeMaterial {
+    const material = this.rules.materials.find((entry) => entry.id === id);
+    if (!material) throw new Error(`Unknown material "${id}"`);
+    return material;
   }
 
-  /** A box body: a block, or a guard. */
-  #addBox(
-    at: Vec3,
-    size: readonly [number, number, number],
-    stuff: { density: number; friction: number },
-    restitution: number,
-    owner: { kind: 'block' | 'guard'; index: number },
-  ): Tracked {
+  /** A collider for a shape, in its body's frame. */
+  #shapeDesc(shape: BodyShape): ColliderDesc {
+    const { ColliderDesc } = this.#physics;
+    if (shape.kind === 'box') {
+      const [hx, hy, hz] = shape.half;
+      return ColliderDesc.cuboid(hx, hy, hz)
+        .setTranslation(shape.at[0], shape.at[1], shape.at[2])
+        .setRotation(turnQuat(shape.turn));
+    }
+    if (shape.kind === 'cone') {
+      return ColliderDesc.cone(shape.height / 2, shape.radius).setTranslation(
+        shape.at[0],
+        shape.at[1] + shape.height / 2,
+        shape.at[2],
+      );
+    }
+    const desc = ColliderDesc.convexHull(new Float32Array(shape.points.flat()));
+    if (!desc) throw new Error('A castle shape has no hull');
+    return desc;
+  }
+
+  /**
+   * A guard's body: kinematic while he stands (the rules move him), hit by spears and told of
+   * falling parts, but pushing nothing about.
+   */
+  #addGuard(index: number, feet: Vec3, state: GuardState): Tracked {
     const physics = this.#physics;
+    const middle = { x: feet.x, y: feet.y + state.feet, z: feet.z };
+    const rotation = turnQuat(state.facing);
     const body = this.#world.createRigidBody(
-      physics.RigidBodyDesc.dynamic().setTranslation(at.x, at.y, at.z),
+      physics.RigidBodyDesc.kinematicPositionBased()
+        .setTranslation(middle.x, middle.y, middle.z)
+        .setRotation(rotation),
     );
+    const { density, friction } = this.rules.guard;
     const collider = this.#world.createCollider(
-      physics.ColliderDesc.cuboid(size[0] / 2, size[1] / 2, size[2] / 2)
-        .setDensity(stuff.density)
-        .setFriction(stuff.friction)
-        .setRestitution(restitution)
-        .setCollisionGroups(groups(BLOCK, GROUND | BLOCK | SPEAR)),
+      physics.ColliderDesc.cuboid(state.size[0] / 2, state.size[1] / 2, state.size[2] / 2)
+        .setDensity(density)
+        .setFriction(friction)
+        .setCollisionGroups(groups(GUARD, SPEAR | PART))
+        .setSolverGroups(groups(GUARD, SPEAR))
+        .setActiveEvents(physics.ActiveEvents.COLLISION_EVENTS),
       body,
     );
-    this.#colliders.set(collider.handle, owner);
-    return track(body, collider.handle);
+    this.#owners.set(collider.handle, { kind: 'guard', index });
+    return track(body, [collider]);
+  }
+
+  /** Where a guard's feet are now: along his stretch, or at his lookout. */
+  #feetOf(state: GuardState): Vec3 {
+    const slot = state.slot;
+    if (!slot) return { x: 0, y: 0, z: 0 };
+    if (slot.kind === 'lookout') {
+      const lookout = this.layout.anchors.lookouts.find((entry) => entry.id === slot.post);
+      const [x, y, z] = lookout?.at ?? [0, 0, 0];
+      return { x, y, z };
+    }
+    const path = this.layout.anchors.guardPaths.find((entry) => entry.id === slot.post);
+    if (!path) return { x: 0, y: 0, z: 0 };
+    const [x, y, z] = pointAlong(path, state.along);
+    return { x, y, z };
+  }
+
+  /** The way from the courtyard's middle out past `at`: where a standing guard looks. */
+  #outward(at: Vec3): number {
+    return Math.atan2(at.x - this.#middle[0], at.z - this.#middle[1]);
+  }
+
+  /** The parts under a guard's stretch (or lookout): what he may stand on. */
+  #footingFor(state: GuardState): number[] {
+    const slot = state.slot;
+    if (!slot) return [];
+    const points: Vec3[] = [];
+    if (slot.kind === 'lookout') points.push(this.#feetOf(state));
+    else {
+      const path = this.layout.anchors.guardPaths.find((entry) => entry.id === slot.post);
+      const steps = Math.max(1, Math.ceil((slot.to - slot.from) / 0.25));
+      for (let i = 0; i <= steps; i++) {
+        const [x, y, z] = path
+          ? pointAlong(path, slot.from + ((slot.to - slot.from) * i) / steps)
+          : [0, 0, 0];
+        points.push({ x, y, z });
+      }
+    }
+    const found = new Set<number>();
+    this.parts.forEach((part, index) => {
+      if (points.some((point) => standsOn(part.body, [point.x, point.y, point.z], FOOTING))) {
+        found.add(index);
+      }
+    });
+    return [...found].sort((a, b) => a - b);
+  }
+
+  /** Whether what guard `index` stands on has gone from under him (broken, or fallen). */
+  #footingGone(index: number): boolean {
+    const state = this.guards[index];
+    const footing = this.#footing[index];
+    if (!state || !footing || footing.length === 0) return false;
+    const feet = this.#feetOf(state);
+    const under = footing.filter((part) => {
+      const body = this.parts[part]?.body;
+      return body !== undefined && standsOn(body, [feet.x, feet.y, feet.z], FOOTING);
+    });
+    if (under.length === 0) return false;
+    return under.every((part) => {
+      const state = this.parts[part];
+      return state !== undefined && (state.mode === 'broken' || state.fallen);
+    });
+  }
+
+  /** One step of every standing guard: walking his stretch, pausing at its ends. */
+  #walkGuards(): void {
+    const { timestep } = this.rules.physics;
+    const { patrolSpeed, patrolPause } = this.rules.guardMoves;
+    this.guards.forEach((state, index) => {
+      const slot = state.slot;
+      if (state.down || slot?.kind !== 'path') return;
+      if (state.pause > 0) {
+        state.pause -= timestep;
+        state.walking = false;
+      } else {
+        state.along += state.heading * patrolSpeed * timestep;
+        if (state.along <= slot.from || state.along >= slot.to) {
+          state.along = Math.min(Math.max(state.along, slot.from), slot.to);
+          state.heading = state.heading === 1 ? -1 : 1;
+          state.pause = patrolPause;
+        }
+        state.walking = true;
+      }
+      const feet = this.#feetOf(state);
+      if (state.walking) {
+        const path = this.layout.anchors.guardPaths.find((entry) => entry.id === slot.post);
+        if (path) {
+          const [ax, , az] = pointAlong(path, state.along - 0.05 * state.heading);
+          const [bx, , bz] = pointAlong(path, state.along + 0.05 * state.heading);
+          if (Math.hypot(bx - ax, bz - az) > 1e-6) state.facing = Math.atan2(bx - ax, bz - az);
+        }
+      } else state.facing = this.#outward(feet);
+      const body = this.#guardBodies[index]?.body;
+      if (!body) return;
+      body.setNextKinematicTranslation({ x: feet.x, y: feet.y + state.feet, z: feet.z });
+      body.setNextKinematicRotation(turnQuat(state.facing));
+    });
+  }
+
+  /** The bodies that move: loose parts, spears that are still bodies, guards. */
+  *#moving(): Generator<Tracked> {
+    for (let index = 0; index < this.parts.length; index++) {
+      const tracked = this.#partBodies[index];
+      if (tracked && this.parts[index]?.mode === 'loose') yield tracked;
+    }
+    for (const tracked of this.#spearBodies) if (tracked.body) yield tracked;
+    for (const tracked of this.#guardBodies) yield tracked;
   }
 
   /** Sends off every spear of the last shot whose moment has come. */
-  #launchDue(feel: SiegeFeel): void {
+  #launchDue(): void {
     if (this.#pending.length === 0) return;
     const due = this.#pending.filter((pending) => pending.at <= this.#steps);
     this.#pending = this.#pending.filter((pending) => pending.at > this.#steps);
     for (const pending of due) {
-      const spear = this.#addSpear(pending, feel);
+      const spear = this.#addSpear(pending);
       this.#hooks.onEvent({ type: 'launch', spear });
     }
   }
 
-  #addSpear(pending: Pending, feel: SiegeFeel): number {
+  #addSpear(pending: Pending): number {
     const physics = this.#physics;
     const spear = this.rules.projectile;
     const { position, velocity } = pending.launch;
@@ -818,130 +1055,95 @@ export class SiegeRound {
         .setTranslation(position.x, position.y, position.z)
         .setRotation(alongY(velocity))
         .setLinvel(velocity.x, velocity.y, velocity.z)
-        // So a fast spear can't pass through a block between two steps.
+        // So a fast spear can't pass through a part between two steps.
         .setCcdEnabled(true),
     );
     const collider = this.#world.createCollider(
       physics.ColliderDesc.capsule(Math.max(spear.length / 2 - spear.radius, 0.01), spear.radius)
-        .setMass(feel.spearMass)
+        .setMass(this.#hooks.feel().spearMass)
         .setFriction(spear.friction)
         .setRestitution(spear.restitution)
-        .setCollisionGroups(groups(SPEAR, GROUND | BLOCK))
+        .setCollisionGroups(groups(SPEAR, GROUND | PART | GUARD))
         .setActiveEvents(physics.ActiveEvents.COLLISION_EVENTS),
       body,
     );
     const index = this.spears.length;
-    this.#colliders.set(collider.handle, { kind: 'spear', index });
-    this.#spearBodies.push(track(body, collider.handle));
-    this.spears.push({ flying: true, throwIndex: pending.throwIndex });
+    this.#owners.set(collider.handle, { kind: 'spear', index });
+    this.#spearBodies.push(track(body, [collider]));
+    this.spears.push({ flying: true, throwIndex: pending.throwIndex, frozen: false, gone: false });
     return index;
   }
 
-  /** A spear touched a block or a guard (or the ground, `target` undefined). */
-  #spearTouched(
-    index: number,
-    target: Target | undefined,
-    feel: SiegeFeel,
-    breaking: Set<number>,
-  ): void {
+  /** A spear touched a part, a guard, the stonework or the field. */
+  #spearTouched(index: number, other: Owner, feel: SiegeFeel, breaking: Set<number>): void {
     const spear = this.spears[index];
     const tracked = this.#spearBodies[index];
-    if (!spear || !tracked) return;
+    const body = tracked?.body;
+    if (!spear || !tracked || !body) return;
     const before = tracked.velocity;
-    const speed = Math.hypot(before.x, before.y, before.z);
-    // Glass shatters at a touch and stops nothing: the spear flies on as it was.
-    const glass = target?.kind === 'block' && this.blocks[target.index]?.kind === 'glass';
-    if (glass) tracked.body.setLinvel(before, true);
-    else if (spear.flying) {
+    const speed = length(before);
+    if (spear.flying) {
       spear.flying = false;
-      // A spear that's hit something is spent: it glances off slowly (never on across the fort).
-      const now = tracked.body.linvel();
+      // A spear that's hit something is spent: it glances off slowly (never on across the castle).
+      const now = body.linvel();
       const kept = this.rules.projectile.afterHit;
-      tracked.body.setLinvel({ x: now.x * kept, y: now.y * kept, z: now.z * kept }, true);
-      tracked.body.setLinearDamping(this.rules.projectile.landedDamping);
-      tracked.body.setAngularDamping(this.rules.projectile.landedSpinDamping);
+      body.setLinvel({ x: now.x * kept, y: now.y * kept, z: now.z * kept }, true);
+      body.setLinearDamping(this.rules.projectile.landedDamping);
+      body.setAngularDamping(this.rules.projectile.landedSpinDamping);
     }
-    const at = tip(tracked.body, this.rules.projectile.length / 2);
-    if (!target) {
+    const at = tip(body, this.rules.projectile.length / 2);
+    if (other.kind !== 'part' && other.kind !== 'guard') {
       if (speed >= feel.thudSpeed) this.#hooks.onEvent({ type: 'land', spear: index, speed, at });
       return;
     }
-    // A guard walking his walkway can't be knocked back (the rules move him), so a spear that
-    // hits him would bounce off as off a wall, and fly on anywhere: it stops in him instead.
-    if (target.kind === 'guard' && this.#guardBodies[target.index]?.body.isKinematic()) {
-      tracked.body.setLinvel(
-        {
-          x: before.x * SPEAR_IN_GUARD,
-          y: before.y * SPEAR_IN_GUARD,
-          z: before.z * SPEAR_IN_GUARD,
-        },
-        true,
-      );
+    const target: Target = { kind: other.kind, index: 'index' in other ? other.index : 0 };
+    // A standing guard can't be knocked back (the rules move him), so a spear that hits him would
+    // bounce off as off a wall, and fly on anywhere: it stops in him instead.
+    if (target.kind === 'guard' && !this.guards[target.index]?.down) {
+      const share = this.rules.projectile.inGuard;
+      body.setLinvel({ x: before.x * share, y: before.y * share, z: before.z * share }, true);
     }
     const key = `${String(index)}:${target.kind}:${String(target.index)}`;
     if (this.#hits.has(key) || this.#gone(target)) return;
     this.#hits.add(key);
     const { spearMinSpeed, spearPerSpeed } = this.rules.damage;
     const damage = Math.max(speed - spearMinSpeed, 0) * spearPerSpeed;
-    this.#impact(target, 'spear', speed, damage);
-    const kind = this.#kindOf(target);
-    this.#noise(`hit:${kind}`, at, this.rules.noise.hit[kind]);
+    const kind =
+      target.kind === 'guard' ? 'guard' : (this.parts[target.index]?.material ?? 'stone');
     if (target.kind === 'guard') {
       const guard = this.guards[target.index];
-      const body = this.#guardBodies[target.index]?.body.translation();
       this.#hooks.logger.log('siege.guardHit', {
-        fort: this.fort.id,
         guard: target.index,
-        mode: guard?.walker.mode,
-        step: guard?.walker.mode === 'alert' ? guard.walker.step : undefined,
-        ducked: round2(guard?.walker.ducked ?? 0),
-        x: round2(body?.x ?? 0),
+        role: guard?.role,
+        walking: guard?.walking,
         damage: round2(damage),
-        at: this.#steps,
+        vantage: this.vantages[this.#vantage]?.id,
+        step: this.#steps,
       });
     }
-    if (this.#hurt(target, damage) && target.kind === 'block') breaking.add(target.index);
+    if (this.#hurt(target, damage) && target.kind === 'part') breaking.add(target.index);
     if (speed < feel.thudSpeed && damage <= 0) return;
     this.#hooks.onEvent({
       type: 'hit',
       spear: index,
       target,
-      kind: this.#kindOf(target),
+      kind,
       speed,
       damage: round2(damage),
       at,
     });
   }
 
-  #kindOf(target: Target): MaterialKind | 'guard' {
-    return target.kind === 'guard' ? 'guard' : (this.blocks[target.index]?.kind ?? 'stone');
-  }
-
-  /** Broken (a block) or down (a guard): spears and crashes do it no more harm. */
+  /** Broken (a part) or down (a guard): spears and crashes do it no more harm. */
   #gone(target: Target): boolean {
-    return target.kind === 'block'
-      ? this.blocks[target.index]?.broken !== false
+    return target.kind === 'part'
+      ? this.parts[target.index]?.mode === 'broken'
       : this.guards[target.index]?.down !== false;
   }
 
-  #impact(target: Target, by: 'spear' | 'crash', speed: number, damage: number): void {
-    if (this.#gone(target)) return;
-    const material =
-      target.kind === 'guard' ? 'guard' : (this.blocks[target.index]?.block.material ?? '');
-    this.#hooks.onEvent({
-      type: 'impact',
-      target,
-      material,
-      kind: this.#kindOf(target),
-      by,
-      speed: round2(speed),
-      damage: round2(damage),
-    });
-  }
-
-  /** Deals `amount` damage to a block or a guard. Returns true if that leaves it with none. */
+  /** Deals `amount` damage to a part or a guard. Returns true if that leaves it with none. */
   #hurt(target: Target, amount: number): boolean {
-    const state = target.kind === 'block' ? this.blocks[target.index] : this.guards[target.index];
+    const state = target.kind === 'part' ? this.parts[target.index] : this.guards[target.index];
     if (!state || this.#gone(target) || amount <= 0) return false;
     const dealt = Math.min(amount, state.hp);
     state.hp -= dealt;
@@ -949,211 +1151,324 @@ export class SiegeRound {
     return state.hp <= 0;
   }
 
-  /** A guard is down: pushed over if it's still standing, and it lies where it falls. */
-  #guardDown(index: number): void {
+  /**
+   * Part `index` comes loose (it's a body the physics moves now), and so does everything resting
+   * on it.
+   */
+  #loosen(index: number): void {
+    const stack = [index];
+    while (stack.length > 0) {
+      const next = stack.pop();
+      if (next === undefined) continue;
+      const state = this.parts[next];
+      const body = this.#partBodies[next]?.body;
+      if (!state || !body || (state.mode !== 'fixed' && state.mode !== 'frozen')) continue;
+      state.mode = 'loose';
+      const tracked = this.#partBodies[next];
+      if (tracked) tracked.still = 0;
+      body.setBodyType(this.#physics.RigidBodyType.Dynamic, true);
+      // It's moving now: what it rests on is up to the physics, until it settles again.
+      this.#supports[next] = [];
+      this.#hooks.onEvent({ type: 'loose', part: next });
+      stack.push(...this.#restingOn(next));
+    }
+  }
+
+  /** The parts resting on part `index` (as built, or as they settled). */
+  #restingOn(index: number): number[] {
+    const found: number[] = [];
+    this.#supports.forEach((supports, other) => {
+      if (supports.includes(index)) found.push(other);
+    });
+    return found;
+  }
+
+  /** Part `index` at 0 hit points breaks: out of the world, so what rested on it comes loose. */
+  #break(index: number): void {
+    const state = this.parts[index];
+    const tracked = this.#partBodies[index];
+    const body = tracked?.body;
+    if (!state || !tracked || !body || state.mode === 'broken') return;
+    readPose(body, tracked.now);
+    state.mode = 'broken';
+    state.hp = 0;
+    const centre = this.#partMiddle(index);
+    // What rested on it comes loose; loose bodies near it are woken (asleep, one resting on it
+    // would stay up in the air).
+    const resting = this.#restingOn(index);
+    for (const collider of tracked.colliders) this.#owners.delete(collider.handle);
+    this.#world.removeRigidBody(body);
+    tracked.body = undefined;
+    copyPose(tracked.now, tracked.before);
+    for (const other of resting) this.#loosen(other);
+    this.parts.forEach((part, other) => {
+      const there = this.#partBodies[other]?.body;
+      if (part.mode !== 'loose' || !there) return;
+      const at = there.translation();
+      if (Math.hypot(at.x - centre.x, at.y - centre.y, at.z - centre.z) <= WAKE_REACH + 3) {
+        there.wakeUp();
+      }
+    });
+    // Spears stuck in it are gone with it.
+    for (const [spear, stuck] of this.#stuck) {
+      if (stuck.part !== index) continue;
+      this.#stuck.delete(spear);
+      const entry = this.spears[spear];
+      if (entry) entry.gone = true;
+    }
+    this.#hooks.onEvent({ type: 'break', part: index, kind: state.material, at: centre });
+  }
+
+  /** Where a part's middle is now (roughly: its frame lifted half its height). */
+  #partMiddle(index: number): Vec3 {
+    const tracked = this.#partBodies[index];
+    const part = this.parts[index];
+    const pose = tracked?.now;
+    if (!pose || !part) return { x: 0, y: 0, z: 0 };
+    const shape = part.body.shapes[0];
+    const up = shape?.kind === 'box' ? shape.at[1] : shape?.kind === 'cone' ? shape.height / 2 : 1;
+    const lift = rotate(pose.rotation, { x: 0, y: up, z: 0 });
+    return {
+      x: pose.position.x + lift.x,
+      y: pose.position.y + lift.y,
+      z: pose.position.z + lift.z,
+    };
+  }
+
+  /** Whether a loose part has dropped or tipped far enough to count as knocked down. */
+  #checkFallen(index: number): void {
+    const state = this.parts[index];
+    const pose = this.#partBodies[index]?.now;
+    if (!state || !pose || state.fallen) return;
+    const drop = state.start.position.y - pose.position.y;
+    if (
+      drop >= this.rules.down.drop ||
+      tiltBetween(state.start.rotation, pose.rotation) >= this.rules.down.tilt
+    ) {
+      state.fallen = true;
+      this.#hooks.onEvent({ type: 'down', part: index });
+    }
+  }
+
+  /** A guard is down: one on the walk falls with the physics; the captain sinks where he stands. */
+  #guardDown(index: number, by: GuardDownBy): void {
     const state = this.guards[index];
     const tracked = this.#guardBodies[index];
-    if (!state || !tracked || state.down) return;
+    const body = tracked?.body;
+    if (!state || !tracked || !body || state.down) return;
     state.down = true;
+    state.by = by;
     state.hp = 0;
-    this.#walkOff(index);
-    const { body } = tracked;
+    state.walking = false;
     const at = copy(body.translation());
-    if (tiltOf(body.rotation()) < this.rules.guard.downTilt) {
-      // Its head goes back, away from the ballista, and it topples.
-      const { size, topple } = this.rules.guard;
+    if (state.role === 'guard') {
+      body.setBodyType(this.#physics.RigidBodyType.Dynamic, true);
+      const collider = tracked.colliders[0];
+      collider?.setCollisionGroups(groups(GUARD, GROUND | PART | SPEAR));
+      collider?.setSolverGroups(groups(GUARD, GROUND | PART | SPEAR));
+      // His head goes back, away from the ballista, and he topples.
+      const from = this.mount();
+      const away = { x: at.x - from.x, z: at.z - from.z };
+      const flat = Math.hypot(away.x, away.z) || 1;
+      const push = this.rules.guard.topple * body.mass();
       body.applyImpulseAtPoint(
-        { x: 0, y: 0, z: -topple * body.mass() },
-        { x: at.x, y: at.y + size[1] / 2, z: at.z },
+        { x: (away.x / flat) * push, y: 0, z: (away.z / flat) * push },
+        { x: at.x, y: at.y + state.size[1] / 2, z: at.z },
         true,
       );
     }
     this.#hooks.logger.log('siege.guardDown', {
-      fort: this.fort.id,
       guard: index,
-      position: state.position,
-      atPosition: this.#position,
+      role: state.role,
+      by,
+      vantage: this.vantages[this.#vantage]?.id,
+      throws: this.#throws,
       step: this.#steps,
     });
-    this.#hooks.onEvent({ type: 'guardDown', guard: index, at });
+    this.#hooks.onEvent({ type: 'guardDown', guard: index, at, by });
   }
 
-  /** A block at 0 hit points breaks: out of the world, so what it held up falls. */
-  #break(index: number): void {
-    const state = this.blocks[index];
-    const tracked = this.#blockBodies[index];
-    if (!state || !tracked || tracked.gone) return;
-    state.broken = true;
-    state.hp = 0;
-    const at = copy(tracked.body.translation());
-    remember(tracked);
-    // Whatever rested on it falls: wake everything near it before taking it away. (Asleep, a
-    // body resting on it would stay up in the air; resting bodies don't always still list their
-    // contacts once asleep, so it goes by distance.)
-    const reach = Math.hypot(...state.block.size) / 2 + WAKE_REACH;
-    for (const other of [...this.#blockBodies, ...this.#guardBodies]) {
-      if (other.gone || other === tracked) continue;
-      const there = other.body.translation();
-      if (Math.hypot(there.x - at.x, there.y - at.y, there.z - at.z) <= reach) other.body.wakeUp();
-    }
-    // A guard walking on it loses his footing: the physics has him from here.
-    const [width, height, depth] = state.block.size;
-    this.guards.forEach((guard, guardIndex) => {
-      const body = this.#guardBodies[guardIndex]?.body;
-      if (!body?.isKinematic()) return;
-      const feet = body.translation().y - this.rules.guard.size[1] / 2;
-      const there = body.translation();
+  /**
+   * Spears and loose parts that have been still long enough stop costing the physics: a spear
+   * stops being a body (stuck in the part it lies in, or lying where it is), a part is fixed where
+   * it lies (resting on what it touches). Spears off the field are gone.
+   */
+  #settle(dt: number): void {
+    const { speed, spin, spearSeconds, partSeconds } = this.rules.settle;
+    const reach = this.rules.physics.groundReach;
+    this.spears.forEach((spear, index) => {
+      const tracked = this.#spearBodies[index];
+      const body = tracked?.body;
+      if (!tracked || !body) return;
+      readPose(body, tracked.now);
+      const at = tracked.now.position;
       if (
-        Math.abs(feet - (at.y + height / 2)) <=
-          FOOTING + guard.walker.ducked * this.rules.guardMoves.duck &&
-        Math.abs(there.x - at.x) <= width / 2 + FOOTING &&
-        Math.abs(there.z - at.z) <= depth / 2 + FOOTING
+        at.y < -OFF_FIELD ||
+        Math.abs(at.x - this.#middle[0]) > reach ||
+        Math.abs(at.z - this.#middle[1]) > reach
       ) {
-        this.#walkOff(guardIndex);
-        guard.walker.mode = 'stand';
+        spear.flying = false;
+        spear.gone = true;
+        this.#dropBody(tracked);
+        return;
       }
+      if (spear.flying) return;
+      tracked.still = length(body.linvel()) < speed ? tracked.still + dt : 0;
+      if (tracked.still < spearSeconds) return;
+      // In a part: it goes where the part goes.
+      const part = this.#touching(tracked.colliders).find(
+        (other) => this.parts[other]?.mode !== 'broken',
+      );
+      const partPose = part === undefined ? undefined : this.#partBodies[part]?.now;
+      if (part !== undefined && partPose) {
+        this.#stuck.set(index, { part, local: relative(partPose, tracked.now) });
+      }
+      spear.frozen = true;
+      this.#dropBody(tracked);
     });
-    this.#colliders.delete(tracked.collider);
-    this.#world.removeRigidBody(tracked.body);
-    tracked.gone = true;
-    this.#hooks.onEvent({ type: 'break', block: index, kind: state.kind, at });
-    this.#noise(`break:${state.kind}`, at, this.rules.noise.break[state.kind]);
+    this.parts.forEach((state, index) => {
+      const tracked = this.#partBodies[index];
+      const body = tracked?.body;
+      if (state.mode !== 'loose' || !tracked || !body) return;
+      const still =
+        body.isSleeping() || (length(body.linvel()) < speed && length(body.angvel()) < spin);
+      tracked.still = still ? tracked.still + dt : 0;
+      if (tracked.still < partSeconds) return;
+      this.#supports[index] = this.#touching(tracked.colliders).filter(
+        (other) => other !== index && this.parts[other]?.mode !== 'broken',
+      );
+      body.setBodyType(this.#physics.RigidBodyType.Fixed, false);
+      state.mode = 'frozen';
+      readPose(body, tracked.now);
+      copyPose(tracked.now, tracked.before);
+    });
   }
 
-  /** Nothing is moving faster than the settle speeds (resting bodies are asleep or nearly). */
+  /** The parts (by index) these colliders touch or nearly touch, in order. */
+  #touching(colliders: Collider[]): number[] {
+    const found = new Set<number>();
+    for (const collider of colliders) {
+      this.#world.contactPairsWith(collider, (other) => {
+        const owner = this.#owners.get(other.handle);
+        if (owner?.kind === 'part') found.add(owner.index);
+      });
+    }
+    return [...found].sort((a, b) => a - b);
+  }
+
+  /** Takes a spear's body out of the world: it's no longer the physics' to move. */
+  #dropBody(tracked: Tracked): void {
+    const body = tracked.body;
+    if (!body) return;
+    readPose(body, tracked.now);
+    copyPose(tracked.now, tracked.before);
+    for (const collider of tracked.colliders) this.#owners.delete(collider.handle);
+    this.#world.removeRigidBody(body);
+    tracked.body = undefined;
+  }
+
+  /** What an objective's check sees. */
+  #objectiveView(objective: number) {
+    const captain = this.guards.find((guard) => guard.role === 'captain');
+    const rack = this.parts.find((part) => part.kind === 'rack');
+    return {
+      captainDown: captain?.down === true,
+      rackBroken: rack?.mode === 'broken',
+      guardsDown: this.guards.filter(
+        (guard) => guard.role === 'guard' && guard.objective === objective && guard.down,
+      ).length,
+    };
+  }
+
+  /** Each objective's progress: told and logged as it moves on; all done, the round's won. */
+  #checkObjectives(now: number): void {
+    this.plan.objectives.forEach((objective, index) => {
+      const before = this.progress[index];
+      const after = objectiveProgress(objective, this.#objectiveView(index));
+      if (!before || after.done === before.done) return;
+      this.progress[index] = after;
+      const complete = after.done >= after.needed;
+      this.#hooks.logger.log('siege.objective', {
+        objective: index,
+        kind: objective.kind,
+        done: after.done,
+        needed: after.needed,
+        complete,
+        throws: this.#throws,
+        vantage: this.vantages[this.#vantage]?.id,
+        step: this.#steps,
+      });
+      this.#hooks.onEvent({
+        type: 'objective',
+        objective: index,
+        done: after.done,
+        needed: after.needed,
+        complete,
+      });
+    });
+    if (this.phase === 'aim' && this.done >= this.progress.length) {
+      this.phase = 'won';
+      this.#wonAt = now;
+      this.#hooks.onEvent({ type: 'won' });
+    }
+  }
+
+  /** Nothing is moving faster than the settle speeds. */
   #calm(): boolean {
     const { speed, spin } = this.rules.settle;
-    const still = ({ body, gone }: Tracked, turning: boolean) => {
-      if (gone || body.isSleeping()) return true;
-      const v = body.linvel();
-      const w = body.angvel();
-      return Math.hypot(v.x, v.y, v.z) < speed && (!turning || Math.hypot(w.x, w.y, w.z) < spin);
+    const still = (body: Body | undefined, turning: boolean) => {
+      if (!body || body.isSleeping() || !body.isDynamic()) return true;
+      return length(body.linvel()) < speed && (!turning || length(body.angvel()) < spin);
     };
     // A spear lying on the ground jiggles round its length, quickly for something so thin, while
     // going nowhere: only how fast it moves counts.
     return (
-      [...this.#blockBodies, ...this.#guardBodies].every((tracked) => still(tracked, true)) &&
-      this.#spearBodies.every((tracked) => still(tracked, false))
+      this.#partBodies.every((tracked) => still(tracked.body, true)) &&
+      this.#guardBodies.every((tracked) => still(tracked.body, true)) &&
+      this.#spearBodies.every((tracked) => still(tracked.body, false))
     );
   }
 
-  /**
-   * A guard starts walking his walkway: the rules move him (kinematic), and only spears touch him
-   * (he walks through the walkway as he ducks; nothing else pushes him about).
-   */
-  #walkOn(index: number): void {
-    const tracked = this.#guardBodies[index];
-    if (!tracked || tracked.body.isKinematic()) return;
-    tracked.body.setBodyType(this.#physics.RigidBodyType.KinematicPositionBased, true);
-    tracked.body.setRotation({ x: 0, y: 0, z: 0, w: 1 }, true);
-    this.#world.getCollider(tracked.collider).setCollisionGroups(groups(BLOCK, SPEAR));
-  }
-
-  /** A walking guard stops (down, or his footing gone): stood up straight, the physics has him. */
-  #walkOff(index: number): void {
-    const tracked = this.#guardBodies[index];
-    const state = this.guards[index];
-    if (!tracked || !state || !tracked.body.isKinematic()) return;
-    const [, y, z] = state.guard.at;
-    const there = tracked.body.translation();
-    tracked.body.setTranslation({ x: there.x, y: y + this.rules.guard.size[1] / 2, z }, true);
-    state.walker.ducked = 0;
-    tracked.body.setBodyType(this.#physics.RigidBodyType.Dynamic, true);
-    this.#world
-      .getCollider(tracked.collider)
-      .setCollisionGroups(groups(BLOCK, GROUND | BLOCK | SPEAR));
-  }
-
-  /** One step of every guard on watch: walking, waking, pacing and ducking. */
-  #walkGuards(): void {
-    const { timestep } = this.rules.physics;
-    const moves = this.rules.guardMoves;
-    const [, tall] = this.rules.guard.size;
-    this.guards.forEach((state, index) => {
-      if (state.down) return;
-      const { walker, guard } = state;
-      stepWalker(walker, guard, moves, timestep, this.#watchRng);
-      if (!walking(walker, guard.walk)) return;
-      this.#walkOn(index);
-      const body = this.#guardBodies[index]?.body;
-      if (!body?.isKinematic()) return;
-      const [, y, z] = guard.at;
-      body.setNextKinematicTranslation({
-        x: walker.x,
-        y: y + tall / 2 - walker.ducked * moves.duck,
-        z,
-      });
-    });
-  }
-
-  /**
-   * A noise `reach` metres round `at`: guards on watch within it are alerted, sleepers within
-   * `sleepShare` of it wake. Logged when it alerts anyone.
-   */
-  #noise(source: string, at: Vec3, reach: number): void {
-    if (reach <= 0) return;
-    const { sleepShare } = this.rules.noise;
-    const moves = this.rules.guardMoves;
-    const heard: number[] = [];
-    this.guards.forEach((state, index) => {
-      if (state.down) return;
-      const there = this.#guardBodies[index]?.body.translation();
-      if (!there) return;
-      const away = Math.hypot(there.x - at.x, there.y - at.y, there.z - at.z);
-      const asleep = state.walker.mode === 'sleep';
-      if (away > reach * (asleep ? sleepShare : 1)) return;
-      const from: GuardMode = state.walker.mode;
-      if (!alert(state.walker, moves)) return;
-      heard.push(index);
-      this.#hooks.logger.log('siege.guardWake', {
-        fort: this.fort.id,
-        guard: index,
-        from,
-        to: state.walker.mode,
-        by: source,
-        step: this.#steps,
-      });
-      this.#hooks.onEvent({ type: 'alerted', guard: index, woke: asleep });
-    });
-    if (heard.length === 0) return;
-    this.#hooks.logger.log('siege.noise', {
-      fort: this.fort.id,
-      source,
-      radius: round2(reach),
-      at: { x: round2(at.x), y: round2(at.y), z: round2(at.z) },
-      woken: heard,
-      step: this.#steps,
-    });
-  }
-
-  /** Blocks broken, by the kind of piece they were part of (wall, gate, keep …). */
-  #piecesBroken(): Record<string, number> {
+  /** Parts broken, by kind (wall chunk, battlement …). */
+  #partsBroken(): Record<string, number> {
     const counts: Record<string, number> = {};
-    for (const state of this.blocks) {
-      if (state.broken) counts[state.block.pieceKind] = (counts[state.block.pieceKind] ?? 0) + 1;
+    for (const part of this.parts) {
+      if (part.mode === 'broken') counts[part.kind] = (counts[part.kind] ?? 0) + 1;
     }
     return counts;
   }
 
-  #finish(won: boolean): void {
-    const blocksDown = this.blocksDown;
+  #finish(ending: SiegeEnding): void {
+    const partsDown = this.partsDown;
     const guardsDown = this.guardsDown;
+    const done = this.done;
     const rewards = siegeRewards(
-      { won, used: this.#used, throws: this.#throws, blocksDown, guardsDown },
-      this.fort,
+      {
+        done,
+        objectives: this.progress.length,
+        throws: this.#throws,
+        used: this.#used,
+        partsDown,
+        guardsDown,
+      },
       this.rules,
       this.#recovery,
     );
     const result: SiegeResult = {
       ...rewards,
-      fort: this.fort.id,
-      won,
+      ending,
+      objectives: this.plan.objectives.map((objective, index) => ({
+        kind: objective.kind,
+        done: this.progress[index]?.done ?? 0,
+        needed: this.progress[index]?.needed ?? 1,
+      })),
+      done,
+      total: this.progress.length,
       used: this.#used,
       throws: this.#throws,
-      throwsPerPosition: [...this.#throwsAt],
-      par: this.fort.par,
-      blocksDown,
-      blocksBroken: this.blocksBroken,
+      par: this.rules.par,
+      partsDown,
+      partsBroken: this.partsBroken,
       guardsDown,
       damage: Math.round(this.#damage),
       seconds: round2(this.seconds),
@@ -1162,23 +1477,25 @@ export class SiegeRound {
     this.result = result;
     this.alpha = 1;
     this.#hooks.logger.log('siege.end', {
-      fort: result.fort,
-      won,
-      throws: result.throws,
-      throwsPerPosition: result.throwsPerPosition,
-      spearsUsed: result.used,
-      par: result.par,
+      ending,
+      won: result.won,
       stars: result.stars,
+      done,
+      total: result.total,
+      objectives: result.objectives,
+      throws: result.throws,
+      par: result.par,
+      spearsUsed: result.used,
       xp: result.xp,
       recovered: result.recovered,
-      blocksDown,
-      blocksBroken: result.blocksBroken,
-      piecesBroken: this.#piecesBroken(),
-      merlonsBroken: this.blocks.filter((state) => state.broken && state.block.merlon).length,
+      partsDown,
+      partsBroken: result.partsBroken,
+      piecesBroken: this.#partsBroken(),
       guardsDown,
       damage: result.damage,
-      position: this.#position,
+      vantage: this.vantages[this.#vantage]?.id,
       aimed: this.aimed,
+      seed: this.#seed,
       seconds: result.seconds,
     });
     this.#hooks.finish(result);
@@ -1186,68 +1503,57 @@ export class SiegeRound {
   }
 }
 
-/** The point `share` (0 to 1) of the way along a path of points, by distance. */
-function alongPath(points: Spot[], share: number): Spot {
-  const legs = points.slice(1).map((to, index) => {
-    const from = points[index] ?? to;
-    return { from, to, length: Math.hypot(to.x - from.x, to.z - from.z) };
-  });
-  const total = legs.reduce((sum, leg) => sum + leg.length, 0);
-  let left = share * total;
-  for (const leg of legs) {
-    if (left <= leg.length || leg === legs.at(-1)) {
-      const part = leg.length > 0 ? Math.min(left / leg.length, 1) : 1;
-      return {
-        x: leg.from.x + (leg.to.x - leg.from.x) * part,
-        z: leg.from.z + (leg.to.z - leg.from.z) * part,
-      };
-    }
-    left -= leg.length;
-  }
-  return points.at(-1) ?? { x: 0, z: 0 };
-}
+const scratchPose: Pose = { position: { x: 0, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0, w: 1 } };
 
-/** The spot a position starts at: the one nearest the middle of the field. */
-function middleSpot(position: SiegePosition | undefined): number {
-  const spots = position?.spots ?? [];
-  let best = 0;
-  spots.forEach(([x], index) => {
-    if (Math.abs(x) < Math.abs(spots[best]?.[0] ?? Infinity)) best = index;
-  });
-  return best;
-}
-
-function track(body: Body, collider: number): Tracked {
+function track(body: Body, colliders: Collider[]): Tracked {
   const tracked: Tracked = {
     body,
-    collider,
+    colliders,
     before: { position: { x: 0, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0, w: 1 } },
+    now: { position: { x: 0, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0, w: 1 } },
     velocity: { x: 0, y: 0, z: 0 },
-    gone: false,
+    still: 0,
   };
-  remember(tracked);
+  readPose(body, tracked.now);
+  copyPose(tracked.now, tracked.before);
   return tracked;
 }
 
 /** Notes a body's pose and velocity before a step. */
 function remember(tracked: Tracked): void {
-  const { body, before } = tracked;
+  const body = tracked.body;
+  if (!body) return;
+  readPose(body, tracked.before);
+  const velocity = body.linvel();
+  tracked.velocity = { x: velocity.x, y: velocity.y, z: velocity.z };
+}
+
+function readPose(body: Body, out: Pose): void {
   const at = body.translation();
   const turn = body.rotation();
-  const velocity = body.linvel();
-  before.position.x = at.x;
-  before.position.y = at.y;
-  before.position.z = at.z;
-  before.rotation.x = turn.x;
-  before.rotation.y = turn.y;
-  before.rotation.z = turn.z;
-  before.rotation.w = turn.w;
-  tracked.velocity = { x: velocity.x, y: velocity.y, z: velocity.z };
+  out.position.x = at.x;
+  out.position.y = at.y;
+  out.position.z = at.z;
+  out.rotation.x = turn.x;
+  out.rotation.y = turn.y;
+  out.rotation.z = turn.z;
+  out.rotation.w = turn.w;
+}
+
+function copyPose(from: Pose, to: Pose): void {
+  to.position.x = from.position.x;
+  to.position.y = from.position.y;
+  to.position.z = from.position.z;
+  to.rotation.x = from.rotation.x;
+  to.rotation.y = from.rotation.y;
+  to.rotation.z = from.rotation.z;
+  to.rotation.w = from.rotation.w;
 }
 
 /** How much a body's velocity changed in the last step (m/s): a crash, if it's big. */
 function suddenChange(tracked: Tracked): number {
-  const velocity = tracked.body.linvel();
+  const velocity = tracked.body?.linvel();
+  if (!velocity) return 0;
   return Math.hypot(
     velocity.x - tracked.velocity.x,
     velocity.y - tracked.velocity.y,
@@ -1255,11 +1561,12 @@ function suddenChange(tracked: Tracked): number {
   );
 }
 
-/** A body's pose `alpha` of the way from before the last step to now (where it was, if gone). */
+/** A body's pose `alpha` of the way from before the last step to now (as it lies, if no body). */
 function between(tracked: Tracked, alpha: number, out: Pose): Pose {
   const { position, rotation } = tracked.before;
-  const at = tracked.gone ? position : tracked.body.translation();
-  const turn = tracked.gone ? rotation : tracked.body.rotation();
+  if (tracked.body) readPose(tracked.body, tracked.now);
+  const at = tracked.now.position;
+  const turn = tracked.now.rotation;
   out.position.x = position.x + (at.x - position.x) * alpha;
   out.position.y = position.y + (at.y - position.y) * alpha;
   out.position.z = position.z + (at.z - position.z) * alpha;
@@ -1270,21 +1577,76 @@ function between(tracked: Tracked, alpha: number, out: Pose): Pose {
   const y = rotation.y + (turn.y * s - rotation.y) * alpha;
   const z = rotation.z + (turn.z * s - rotation.z) * alpha;
   const w = rotation.w + (turn.w * s - rotation.w) * alpha;
-  const length = Math.hypot(x, y, z, w) || 1;
-  out.rotation.x = x / length;
-  out.rotation.y = y / length;
-  out.rotation.z = z / length;
-  out.rotation.w = w / length;
+  const size = Math.hypot(x, y, z, w) || 1;
+  out.rotation.x = x / size;
+  out.rotation.y = y / size;
+  out.rotation.z = z / size;
+  out.rotation.w = w / size;
   return out;
+}
+
+/** A turn of `angle` radians about y, as a rotation. */
+export function turnQuat(angle: number): Quat {
+  return { x: 0, y: Math.sin(angle / 2), z: 0, w: Math.cos(angle / 2) };
+}
+
+function multiply(a: Quat, b: Quat): Quat {
+  return {
+    x: a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
+    y: a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
+    z: a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w,
+    w: a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z,
+  };
+}
+
+function conjugate(q: Quat): Quat {
+  return { x: -q.x, y: -q.y, z: -q.z, w: q.w };
+}
+
+/** `v` turned by `q`. */
+function rotate(q: Quat, v: Vec3): Vec3 {
+  const turned = multiply(multiply(q, { x: v.x, y: v.y, z: v.z, w: 0 }), conjugate(q));
+  return { x: turned.x, y: turned.y, z: turned.z };
+}
+
+/** `child` (a world pose) in `parent`'s frame. */
+function relative(parent: Pose, child: Pose): Pose {
+  const inverse = conjugate(parent.rotation);
+  const offset = rotate(inverse, {
+    x: child.position.x - parent.position.x,
+    y: child.position.y - parent.position.y,
+    z: child.position.z - parent.position.z,
+  });
+  return { position: offset, rotation: multiply(inverse, child.rotation) };
+}
+
+/** `local` (in `parent`'s frame) in the world. */
+function compose(parent: Pose, local: Pose, out: Pose): Pose {
+  const offset = rotate(parent.rotation, local.position);
+  const turn = multiply(parent.rotation, local.rotation);
+  out.position.x = parent.position.x + offset.x;
+  out.position.y = parent.position.y + offset.y;
+  out.position.z = parent.position.z + offset.z;
+  out.rotation.x = turn.x;
+  out.rotation.y = turn.y;
+  out.rotation.z = turn.z;
+  out.rotation.w = turn.w;
+  return out;
+}
+
+/** How far (degrees) a body has tipped from how it was turned at first: its up axis's tilt. */
+function tiltBetween(start: Quat, now: Quat): number {
+  const up = rotate(multiply(now, conjugate(start)), { x: 0, y: 1, z: 0 });
+  return Math.acos(Math.min(Math.max(up.y, -1), 1)) / DEG;
 }
 
 /** The rotation that turns a spear's length (its local y) along `direction`. */
 export function alongY(direction: Vec3): Quat {
-  const length = Math.hypot(direction.x, direction.y, direction.z);
-  if (length < 1e-9) return { x: 0, y: 0, z: 0, w: 1 };
-  const bx = direction.x / length;
-  const by = direction.y / length;
-  const bz = direction.z / length;
+  const size = Math.hypot(direction.x, direction.y, direction.z);
+  if (size < 1e-9) return { x: 0, y: 0, z: 0, w: 1 };
+  const bx = direction.x / size;
+  const by = direction.y / size;
+  const bz = direction.z / size;
   // Straight down: half a turn about x.
   if (by < -0.999999) return { x: 1, y: 0, z: 0, w: 0 };
   // (0, 1, 0) × b, and 1 + (0, 1, 0) · b, normalised.
@@ -1297,18 +1659,19 @@ export function alongY(direction: Vec3): Quat {
 
 /** How far a body has turned from upright, in degrees. */
 export function tiltOf(rotation: Quat): number {
-  return (2 * Math.acos(Math.min(Math.abs(rotation.w), 1))) / DEG;
+  const up = rotate(rotation, { x: 0, y: 1, z: 0 });
+  return Math.acos(Math.min(Math.max(up.y, -1), 1)) / DEG;
 }
 
 /** The front end of a spear: `reach` along its length from the middle. */
 function tip(body: Body, reach: number): Vec3 {
   const at = body.translation();
-  const q = body.rotation();
-  // The local y axis, turned by q.
-  const x = 2 * (q.x * q.y - q.w * q.z);
-  const y = 1 - 2 * (q.x * q.x + q.z * q.z);
-  const z = 2 * (q.y * q.z + q.w * q.x);
-  return { x: at.x + x * reach, y: at.y + y * reach, z: at.z + z * reach };
+  const way = rotate(body.rotation(), { x: 0, y: 1, z: 0 });
+  return { x: at.x + way.x * reach, y: at.y + way.y * reach, z: at.z + way.z * reach };
+}
+
+function length(vector: Vec3 | undefined): number {
+  return vector ? Math.hypot(vector.x, vector.y, vector.z) : 0;
 }
 
 function copy(vector: Vec3): Vec3 {

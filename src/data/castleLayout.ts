@@ -918,6 +918,74 @@ function layParts(castle: Castle, walls: LaidWall[], buildings: LaidBuilding[]):
   return parts;
 }
 
+/**
+ * A place a guard keeps at a post: his own stretch of a guard path (`from` to `to` m along it),
+ * or a lookout on a tower.
+ */
+export type PostSlot =
+  { post: string; kind: 'path'; from: number; to: number } | { post: string; kind: 'lookout' };
+
+/** How long a guard path is (m), round its loop if it's one. */
+export function pathLength(path: CastleLayout['anchors']['guardPaths'][number]): number {
+  const { points, loop } = path;
+  let total = 0;
+  const legs = points.length - (loop ? 0 : 1);
+  for (let i = 0; i < legs; i++) {
+    const a = points[i]?.at;
+    const b = points[(i + 1) % points.length]?.at;
+    if (a && b) total += Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]);
+  }
+  return total;
+}
+
+/** The point `distance` m along a guard path (kept to its ends; round again, on a loop). */
+export function pointAlong(
+  path: CastleLayout['anchors']['guardPaths'][number],
+  distance: number,
+): Vec3 {
+  const { points, loop } = path;
+  const length = pathLength(path);
+  let left = loop && length > 0 ? ((distance % length) + length) % length : distance;
+  left = Math.min(Math.max(left, 0), length);
+  const legs = points.length - (loop ? 0 : 1);
+  for (let i = 0; i < legs; i++) {
+    const a = points[i]?.at;
+    const b = points[(i + 1) % points.length]?.at;
+    if (!a || !b) continue;
+    const leg = Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]);
+    if (left <= leg || i === legs - 1) {
+      const share = leg > 0 ? Math.min(left / leg, 1) : 0;
+      return [
+        a[0] + (b[0] - a[0]) * share,
+        a[1] + (b[1] - a[1]) * share,
+        a[2] + (b[2] - a[2]) * share,
+      ];
+    }
+    left -= leg;
+  }
+  return points[0]?.at ?? [0, 0, 0];
+}
+
+/**
+ * The places at `post` (a guard path or a lookout) a guard can keep, each `slot` m of the path
+ * (as many as fit, evenly; at least one), or the lookout itself. None if there's no such post.
+ */
+export function postSlots(layout: CastleLayout, post: string, slot: number): PostSlot[] {
+  if (layout.anchors.lookouts.some((lookout) => lookout.id === post)) {
+    return [{ post, kind: 'lookout' }];
+  }
+  const path = layout.anchors.guardPaths.find((candidate) => candidate.id === post);
+  if (!path) return [];
+  const length = pathLength(path);
+  const count = Math.max(1, Math.floor(length / slot + EPS));
+  return Array.from({ length: count }, (_, index) => ({
+    post,
+    kind: 'path' as const,
+    from: (length * index) / count,
+    to: (length * (index + 1)) / count,
+  }));
+}
+
 /** Every reason the castle doesn't hold together; none, if it does. */
 export function castleProblems(castle: Castle): CastleProblem[] {
   const problems: CastleProblem[] = [];
