@@ -2,14 +2,15 @@ import * as THREE from 'three';
 import { releaseContext, restoreContext } from '../../../app/trouble';
 import { groundMesh, wornGround } from '../../../app/ground';
 import type { Haptics } from '../../../app/haptics';
-import { loadModel } from '../../../app/models';
+import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';
+import { loadAnimatedModel, loadModel, type AnimatedModel } from '../../../app/models';
 import { scatter, type Placement } from '../../../app/scatter';
 import type { ScreenView } from '../../../app/screen';
 import { Sfx } from '../../../app/sfx';
 import { SkillBar, type XpDeposit } from '../../../app/skillBar';
 import { WarchestHud, type ScreenPoint } from '../../../app/warchestHud';
 import { Rng, type EventLogger, type Game, type LiveChoice, type LiveTuning } from '../../../core';
-import type { SiegeFeel, SiegeFort } from '../../../data';
+import type { Siege, SiegeFeel, SiegeFort } from '../../../data';
 import type { GhostLine } from '../feel';
 import { loadPhysics, type Physics } from '../logic/physics';
 import {
@@ -32,7 +33,7 @@ import {
   type ThrowMode,
   type Vec3,
 } from '../logic/throw';
-import { buildBallista, buildGuard, greyGuard, type BallistaLook, type GuardLook } from './figures';
+import { buildBallista, type BallistaLook } from './figures';
 import { makeTextures, puffTexture, stageTint, whooshUrl } from './looks';
 
 export interface Siege3DDeps {
@@ -119,12 +120,43 @@ const COLORS = {
   spotOn: 0xf0cd5c,
 };
 
+/**
+ * A block as drawn: on its own (a weak post, the banner, glass, a skinned piece), or one slot of a
+ * batch, the blocks of a size and kind drawn at once (damage as their colour; broken, shrunk away).
+ */
 interface BlockLook {
-  mesh: THREE.Mesh;
+  object?: THREE.Object3D;
+  batch?: { mesh: THREE.InstancedMesh; slot: number };
   kind: MaterialKind;
   stage: number;
   gone: boolean;
 }
+
+/** The models the siege's things are skinned with (`skins` in the data), loaded. */
+interface Skins {
+  gate: THREE.Object3D;
+  tower: THREE.Object3D;
+  banner: THREE.Object3D;
+  ballista: THREE.Object3D;
+  spear: THREE.Object3D;
+  guard: AnimatedModel;
+}
+
+/** A guard as drawn: Kenney's soldier, playing what he's about. */
+interface GuardLook {
+  root: THREE.Group;
+  model: THREE.Object3D;
+  mixer: THREE.AnimationMixer;
+  actions: Map<string, THREE.AnimationAction>;
+  clip: string;
+  down: boolean;
+  downAt: number;
+}
+
+/** Beyond this far from the camera (m) a guard's animation isn't played on. */
+const ANIMATE_WITHIN = 90;
+/** How long a fallen guard's animation runs before it's left on its last frame (s). */
+const DIE_SECONDS = 2.5;
 
 interface Puff {
   sprite: THREE.Sprite;
@@ -195,10 +227,11 @@ export class Siege3DView implements ScreenView {
   readonly #textures: ReturnType<typeof makeTextures>;
   /** Block looks, by kind and damage stage (0 whole, 1 cracked, 2 crumbling). */
   readonly #materials: Record<MaterialKind, THREE.MeshLambertMaterial[]>;
-  readonly #spearParts: { shaft: THREE.BufferGeometry; tip: THREE.BufferGeometry };
   readonly #spearMaterials: { shaft: THREE.Material; tip: THREE.Material };
   readonly #ballista: BallistaLook;
   readonly #ghost: THREE.InstancedMesh;
+  /** Frames drawn this round, to log how smoothly: all, and while watching a collapse. */
+  #perf = { frames: 0, seconds: 0, worst: 0, collapseFrames: 0, collapseSeconds: 0, calls: 0 };
   /** The kick of the last shot, from 1 (just shot) down to 0 (settled). */
   #kick = 0;
   /** Over each guard's head: "Z z z" while he sleeps, "!" a moment when he's alerted. */
@@ -249,7 +282,12 @@ export class Siege3DView implements ScreenView {
   #mode: ThrowMode = 'aimed';
   #aim: Aim;
   #blocks: BlockLook[] = [];
-  #guards: (GuardLook & { down: boolean })[] = [];
+  #guards: GuardLook[] = [];
+  /** The batches of plain blocks, by size and kind. */
+  #batches: THREE.InstancedMesh[] = [];
+  readonly #skins: Skins;
+  /** Plain blocks in batches: their look per kind (the damage is the colour). */
+  readonly #batchMaterials: Record<MaterialKind, THREE.MeshLambertMaterial>;
   #spears: THREE.Group[] = [];
   #flag: THREE.Mesh | undefined;
   #puffs: Puff[] = [];
@@ -293,9 +331,11 @@ export class Siege3DView implements ScreenView {
     physics: Physics,
     hud: WarchestHud,
     tree: THREE.Object3D,
+    skins: Skins,
   ) {
     this.#element = element;
     this.#deps = deps;
+    this.#skins = skins;
     this.#physics = physics;
     this.#hud = hud;
     const rules = deps.game.data.siege;
@@ -329,6 +369,11 @@ export class Siege3DView implements ScreenView {
           }),
       ),
     };
+    this.#batchMaterials = {
+      stone: new THREE.MeshLambertMaterial({ map: this.#textures.stone[0] ?? null }),
+      wood: new THREE.MeshLambertMaterial({ map: this.#textures.wood[0] ?? null }),
+      glass: new THREE.MeshLambertMaterial({ color: COLORS.glass }),
+    };
     const { length, radius } = rules.projectile;
     // A spear's length runs along its local y, as the rules' capsule does, point at +y.
     const tipLength = Math.min(0.22, length * 0.12);
@@ -336,7 +381,6 @@ export class Siege3DView implements ScreenView {
     shaft.translate(0, -tipLength / 2, 0);
     const tip = new THREE.ConeGeometry(radius * 1.1, tipLength, 6);
     tip.translate(0, length / 2 - tipLength / 2, 0);
-    this.#spearParts = { shaft, tip };
     this.#spearMaterials = {
       shaft: new THREE.MeshLambertMaterial({ color: COLORS.shaft }),
       tip: new THREE.MeshLambertMaterial({ color: COLORS.iron }),
@@ -352,6 +396,12 @@ export class Siege3DView implements ScreenView {
     }
     const weapon = siegeWeapon(rules);
     this.#ballista = buildBallista(weapon, () => this.#spearMesh());
+    this.#ballista.root.traverse((child) => {
+      if (child instanceof THREE.Mesh) child.visible = false;
+    });
+    const carriage = fitted(skins.ballista, weapon.size, rules.skins.ballista);
+    carriage.position.y = weapon.size[1] / 2 - weapon.pivotHeight;
+    this.#ballista.turn.add(carriage);
     // The last shot's path: a solid tube of short segments, bright enough for daylight.
     const segment = new THREE.CylinderGeometry(0.5, 0.5, 1, 8, 1, true);
     segment.rotateX(Math.PI / 2);
@@ -373,7 +423,7 @@ export class Siege3DView implements ScreenView {
   }
 
   static async create(element: HTMLElement, deps: Siege3DDeps): Promise<Siege3DView> {
-    const [physics, hud, tree] = await Promise.all([
+    const [physics, hud, tree, skins] = await Promise.all([
       loadPhysics(),
       WarchestHud.create(element, {
         game: deps.game,
@@ -382,13 +432,19 @@ export class Siege3DView implements ScreenView {
         logger: deps.logger,
       }),
       loadModel(TREE_MODEL),
+      loadSkins(deps.game.data.siege.skins),
     ]);
-    return new Siege3DView(element, deps, physics, hud, tree);
+    return new Siege3DView(element, deps, physics, hud, tree, skins);
   }
 
   /** Loads the physics engine (and starts its wasm) and the models ahead of time, at the camp. */
-  static async preload(): Promise<void> {
-    await Promise.all([loadPhysics(), WarchestHud.preload(), loadModel(TREE_MODEL)]);
+  static async preload(skins?: Siege['skins']): Promise<void> {
+    await Promise.all([
+      loadPhysics(),
+      WarchestHud.preload(),
+      loadModel(TREE_MODEL),
+      ...(skins ? [loadSkins(skins)] : []),
+    ]);
   }
 
   // ScreenView
@@ -476,6 +532,14 @@ export class Siege3DView implements ScreenView {
     this.#title = undefined;
     this.#rolling = 0;
     this.#lastBallista = round.ballista();
+    this.#perf = {
+      frames: 0,
+      seconds: 0,
+      worst: 0,
+      collapseFrames: 0,
+      collapseSeconds: 0,
+      calls: 0,
+    };
     this.#fly = undefined;
     if (this.#flyNext) {
       this.#flyNext = false;
@@ -493,8 +557,18 @@ export class Siege3DView implements ScreenView {
     this.#round = undefined;
     // Each round builds its fort, guards and spears afresh: free what they put on the graphics
     // card, or every round leaves the last one's there.
-    for (const look of this.#blocks) this.#free(look.mesh);
-    for (const look of this.#guards) this.#free(look.root);
+    for (const look of this.#blocks) if (look.object) this.#free(look.object);
+    for (const mesh of this.#batches) {
+      mesh.removeFromParent();
+      mesh.geometry.dispose();
+      mesh.dispose();
+    }
+    this.#batches = [];
+    for (const look of this.#guards) {
+      look.mixer.stopAllAction();
+      look.mixer.uncacheRoot(look.model);
+      this.#free(look.root);
+    }
     // The marks' look is shared: only out of the scene.
     for (const mark of this.#marks) {
       for (const z of mark.zs) {
@@ -544,6 +618,17 @@ export class Siege3DView implements ScreenView {
 
   /** The round is over: pay its Command XP and the spears it got back. */
   #pay(result: SiegeResult): void {
+    const perf = this.#perf;
+    this.#deps.logger.log('siege.perf', {
+      fort: result.fort,
+      fps: Math.round(perf.frames / Math.max(perf.seconds, 0.001)),
+      worstMs: Math.round(perf.worst * 1000),
+      collapseFps:
+        perf.collapseFrames > 0
+          ? Math.round(perf.collapseFrames / Math.max(perf.collapseSeconds, 0.001))
+          : undefined,
+      drawCalls: perf.calls,
+    });
     const { game } = this.#deps;
     const rules = game.data.siege;
     const before = game.xp(this.#skill);
@@ -614,52 +699,98 @@ export class Siege3DView implements ScreenView {
     return trees;
   }
 
-  /** The fort's blocks and guards, sized from the rules'; the banner gets its flag. */
+  /**
+   * The fort's blocks and guards, sized from the rules'. Gates, tower blocks and the banner wear
+   * the Castle Kit's pieces; weak posts and glass are drawn on their own; every other block goes in
+   * a batch with the others of its size and kind (one draw for them all).
+   */
   #buildFort(round: SiegeRound): void {
+    const rules = this.#deps.game.data.siege;
+    const skinFor = (index: number, kind: string): THREE.Object3D | undefined => {
+      if (index === round.bannerIndex) return this.#skins.banner;
+      if (kind === 'gate') return this.#skins.gate;
+      if (kind === 'tower') return this.#skins.tower;
+      return undefined;
+    };
+    const settingFor = (index: number, kind: string) =>
+      index === round.bannerIndex
+        ? rules.skins.banner
+        : kind === 'gate'
+          ? rules.skins.gate
+          : rules.skins.tower;
+    // First the batches' sizes: how many of each size and kind.
+    const keyOf = (index: number) => {
+      const state = round.blocks[index];
+      if (!state) return undefined;
+      const { block } = state;
+      const alone =
+        skinFor(index, block.pieceKind) !== undefined ||
+        (block.weak && Math.max(block.size[0], block.size[2]) < WEAK_BAND_UNDER) ||
+        state.kind === 'glass';
+      return alone ? undefined : `${block.size.join('x')}:${state.kind}`;
+    };
+    const counts = new Map<string, number>();
+    round.blocks.forEach((_, index) => {
+      const key = keyOf(index);
+      if (key) counts.set(key, (counts.get(key) ?? 0) + 1);
+    });
+    const batches = new Map<string, { mesh: THREE.InstancedMesh; next: number }>();
     this.#blocks = round.blocks.map((state, index) => {
       const [width, height, depth] = state.block.size;
-      const mesh = new THREE.Mesh(
-        new THREE.BoxGeometry(width, height, depth),
-        this.#materials[state.kind][0],
-      );
-      mesh.castShadow = mesh.receiveShadow = true;
-      if (state.block.weak && Math.max(width, depth) < WEAK_BAND_UNDER) {
-        // A red band round a weak post, so it reads as the place to hit.
-        const across = Math.max(width, depth) * 0.62;
-        const band = new THREE.Mesh(
-          new THREE.CylinderGeometry(across, across, height * 0.18, 10),
-          new THREE.MeshLambertMaterial({ color: COLORS.weakBand }),
-        );
-        band.position.y = height * 0.12;
-        mesh.add(band);
+      const key = keyOf(index);
+      if (key) {
+        let batch = batches.get(key);
+        if (!batch) {
+          const mesh = new THREE.InstancedMesh(
+            new THREE.BoxGeometry(width, height, depth),
+            this.#batchMaterials[state.kind],
+            counts.get(key) ?? 1,
+          );
+          mesh.castShadow = mesh.receiveShadow = true;
+          // Their boxes move with the fort: bounds are worked out afresh, not from the start.
+          mesh.frustumCulled = false;
+          this.#fortGroup.add(mesh);
+          this.#batches.push(mesh);
+          batch = { mesh, next: 0 };
+          batches.set(key, batch);
+        }
+        const slot = batch.next++;
+        batch.mesh.setColorAt(slot, stageTint(COLORS[state.kind], 0));
+        return { batch: { mesh: batch.mesh, slot }, kind: state.kind, stage: 0, gone: false };
       }
-      if (index === round.bannerIndex) {
-        mesh.material = new THREE.MeshLambertMaterial({ color: COLORS.leather });
-        const flag = new THREE.Mesh(
-          new THREE.PlaneGeometry(1.1, 0.7, 10, 4),
-          new THREE.MeshLambertMaterial({ map: this.#textures.banner, side: THREE.DoubleSide }),
+      const skin = skinFor(index, state.block.pieceKind);
+      let object: THREE.Object3D;
+      if (skin) {
+        object = fitted(skin, state.block.size, settingFor(index, state.block.pieceKind));
+      } else {
+        const mesh = new THREE.Mesh(
+          new THREE.BoxGeometry(width, height, depth),
+          this.#materials[state.kind][0],
         );
-        // Flying from the top of the pole, out to the right.
-        flag.geometry.translate(0.55, 0, 0);
-        flag.position.set(width / 2, height / 2 - 0.4, 0);
-        flag.castShadow = true;
-        mesh.add(flag);
-        this.#flag = flag;
-        const knob = new THREE.Mesh(
-          new THREE.SphereGeometry(width * 0.9, 8, 6),
-          new THREE.MeshLambertMaterial({ color: COLORS.bannerTrim }),
-        );
-        knob.position.y = height / 2;
-        mesh.add(knob);
+        mesh.castShadow = mesh.receiveShadow = state.kind !== 'glass';
+        if (state.block.weak) {
+          // A red band round a weak post, so it reads as the place to hit.
+          const across = Math.max(width, depth) * 0.62;
+          const band = new THREE.Mesh(
+            new THREE.CylinderGeometry(across, across, height * 0.18, 10),
+            new THREE.MeshLambertMaterial({ color: COLORS.weakBand }),
+          );
+          band.position.y = height * 0.12;
+          mesh.add(band);
+        }
+        object = mesh;
       }
-      this.#fortGroup.add(mesh);
-      return { mesh, kind: state.kind, stage: 0, gone: false };
+      this.#fortGroup.add(object);
+      return { object, kind: state.kind, stage: 0, gone: false };
     });
-    const size = this.#deps.game.data.siege.guard.size;
+    for (const mesh of this.#batches) {
+      if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+    }
+    const size = rules.guard.size;
     this.#guards = round.guards.map(() => {
-      const look = buildGuard(size);
+      const look = this.#guardLook(size);
       this.#fortGroup.add(look.root);
-      return { ...look, down: false };
+      return look;
     });
     const [width, height, depth] = size;
     this.#marks = round.guards.map(() => {
@@ -682,6 +813,46 @@ export class Siege3DView implements ScreenView {
       return { zs, bang, alertedAt: -Infinity, sense };
     });
     this.#drawBodies();
+  }
+
+  /**
+   * A guard: Kenney's soldier (cloned with his skeleton), scaled evenly to the guard's height, his
+   * feet at the bottom of the rules' box, with his own mixer for his clips.
+   */
+  #guardLook(size: readonly [number, number, number]): GuardLook {
+    const skin = this.#deps.game.data.siege.skins.guard;
+    const model = SkeletonUtils.clone(this.#skins.guard.scene);
+    const bounds = new THREE.Box3().setFromObject(model);
+    const tall = Math.max(bounds.max.y - bounds.min.y, 0.001);
+    model.scale.setScalar(size[1] / tall);
+    model.rotation.y = skin.turn * DEG;
+    model.position.y = -size[1] / 2;
+    model.traverse((child) => {
+      child.castShadow = true;
+    });
+    const root = new THREE.Group();
+    root.add(model);
+    const mixer = new THREE.AnimationMixer(model);
+    const actions = new Map<string, THREE.AnimationAction>();
+    for (const clip of this.#skins.guard.animations) actions.set(clip.name, mixer.clipAction(clip));
+    return { root, model, mixer, actions, clip: '', down: false, downAt: 0 };
+  }
+
+  /** Plays `name` on a guard, crossfading from what he was playing. */
+  #playClip(look: GuardLook, name: string): void {
+    if (look.clip === name) return;
+    const next = look.actions.get(name);
+    if (!next) return;
+    const previous = look.actions.get(look.clip);
+    next.reset();
+    if (name === this.#deps.game.data.siege.skins.guard.clips.down) {
+      // Down: once through, and left lying on its last frame.
+      next.setLoop(THREE.LoopOnce, 1);
+      next.clampWhenFinished = true;
+    }
+    next.play();
+    if (previous) next.crossFadeFrom(previous, 0.2, false);
+    look.clip = name;
   }
 
   /** Rings on the ground at the position's spots, the ballista's own lit. */
@@ -726,11 +897,19 @@ export class Siege3DView implements ScreenView {
   }
 
   #spearMesh(): THREE.Group {
+    // The ballista model's bolt, its length along y (as the rules' capsule) and the rules' length.
     const group = new THREE.Group();
-    const shaft = new THREE.Mesh(this.#spearParts.shaft, this.#spearMaterials.shaft);
-    const tip = new THREE.Mesh(this.#spearParts.tip, this.#spearMaterials.tip);
-    shaft.castShadow = tip.castShadow = true;
-    group.add(shaft, tip);
+    const bolt = this.#skins.spear.clone(true);
+    const size = new THREE.Box3().setFromObject(bolt).getSize(new THREE.Vector3());
+    const long = Math.max(size.x, size.y, size.z, 0.001);
+    // Its length the spear's; half as thick as that would make it, so it reads as a bolt.
+    const along = this.#deps.game.data.siege.projectile.length / long;
+    bolt.scale.set(along, along * 0.5, along * 0.5);
+    bolt.rotation.z = Math.PI / 2;
+    bolt.traverse((child) => {
+      child.castShadow = true;
+    });
+    group.add(bolt);
     return group;
   }
 
@@ -830,7 +1009,7 @@ export class Siege3DView implements ScreenView {
         const look = this.#guards[event.guard];
         if (look && !look.down) {
           look.down = true;
-          greyGuard(look);
+          look.downAt = this.#now;
         }
         this.#dust(event.at, Math.ceil(feel.dust * 0.6), 0.6);
         if (!this.#killShown) {
@@ -899,7 +1078,11 @@ export class Siege3DView implements ScreenView {
     const state = this.#round?.blocks[index];
     if (!look || !state) return;
     look.gone = true;
-    look.mesh.visible = false;
+    if (look.object) look.object.visible = false;
+    if (look.batch) {
+      look.batch.mesh.setMatrixAt(look.batch.slot, new THREE.Matrix4().makeScale(0, 0, 0));
+      look.batch.mesh.instanceMatrix.needsUpdate = true;
+    }
     if (kind === 'glass') {
       // A bright, high shatter.
       this.#play('break-stone', 0.6, 1400);
@@ -1021,7 +1204,17 @@ export class Siege3DView implements ScreenView {
 
   #loop(time: number): void {
     this.#timer.update(time);
-    const realDt = Math.min(this.#timer.getDelta(), 0.05);
+    const frameDt = this.#timer.getDelta();
+    const realDt = Math.min(frameDt, 0.05);
+    // How smoothly it draws: overall, and while the camera watches a collapse (the heaviest).
+    const perf = this.#perf;
+    perf.frames++;
+    perf.seconds += frameDt;
+    perf.worst = Math.max(perf.worst, frameDt);
+    if (this.#element.dataset.camera === 'collapse') {
+      perf.collapseFrames++;
+      perf.collapseSeconds += frameDt;
+    }
     this.#now += realDt;
     const frozen = this.#now < this.#frozenUntil;
     // Slow motion (a kill, a collapse, the banner), easing back to full speed over its last third.
@@ -1039,6 +1232,7 @@ export class Siege3DView implements ScreenView {
       this.#showCard(finished.result);
     }
     this.#drawBodies();
+    this.#animateGuards(dt);
     this.#drawBallista(realDt);
     this.#drawAim();
     // The ghost keeps its width on screen as the camera moves.
@@ -1056,6 +1250,7 @@ export class Siege3DView implements ScreenView {
     this.#sun.position.set(middle.x - 8, 16, middle.z + 16);
     this.#sun.target.position.set(middle.x, 0, middle.z);
     this.#renderer.render(this.#scene, this.#camera);
+    perf.calls = Math.max(perf.calls, this.#renderer.info.render.calls);
   }
 
   /** Every block, guard and spear where the rules have it, and blocks' damage showing. */
@@ -1067,22 +1262,46 @@ export class Siege3DView implements ScreenView {
       object.position.set(pose.position.x, pose.position.y, pose.position.z);
       object.quaternion.set(pose.rotation.x, pose.rotation.y, pose.rotation.z, pose.rotation.w);
     };
+    const matrix = new THREE.Matrix4();
+    const at = new THREE.Vector3();
+    const turn = new THREE.Quaternion();
+    const scale = new THREE.Vector3();
     this.#blocks.forEach((look, index) => {
       if (look.gone) return;
       round.blockPose(index, pose);
-      place(look.mesh);
       const state = round.blocks[index];
-      if (!state || index === round.bannerIndex) return;
-      const share = state.hp / state.maxHp;
+      const share = state ? state.hp / state.maxHp : 1;
       const stage = share > 0.66 ? 0 : share > 0.33 ? 1 : 2;
-      if (stage !== look.stage) {
+      // Crumbling: a touch smaller, as if chips have come off.
+      const shrink = stage === 2 ? 0.94 : 1;
+      if (look.batch) {
+        at.set(pose.position.x, pose.position.y, pose.position.z);
+        turn.set(pose.rotation.x, pose.rotation.y, pose.rotation.z, pose.rotation.w);
+        look.batch.mesh.setMatrixAt(
+          look.batch.slot,
+          matrix.compose(at, turn, scale.setScalar(shrink)),
+        );
+        if (stage !== look.stage) {
+          look.stage = stage;
+          look.batch.mesh.setColorAt(look.batch.slot, stageTint(COLORS[look.kind], stage));
+          if (look.batch.mesh.instanceColor) look.batch.mesh.instanceColor.needsUpdate = true;
+        }
+        return;
+      }
+      if (!look.object) return;
+      place(look.object);
+      if (
+        stage !== look.stage &&
+        index !== round.bannerIndex &&
+        look.object instanceof THREE.Mesh
+      ) {
         look.stage = stage;
         const material = this.#materials[look.kind][stage];
-        if (material) look.mesh.material = material;
-        // Crumbling: a touch smaller, as if chips have come off.
-        look.mesh.scale.setScalar(stage === 2 ? 0.94 : 1);
+        if (material) look.object.material = material;
+        look.object.scale.setScalar(shrink);
       }
     });
+    for (const mesh of this.#batches) mesh.instanceMatrix.needsUpdate = true;
     const feel = this.#deps.feel.values;
     const [, tall] = this.#deps.game.data.siege.guard.size;
     this.#guards.forEach((look, index) => {
@@ -1091,11 +1310,7 @@ export class Siege3DView implements ScreenView {
       const state = round.guards[index];
       const mark = this.#marks[index];
       if (!state || !mark) return;
-      // Asleep: slumped forward on his feet. Woken: looking about.
-      if (state.walker.mode === 'sleep' && !state.down) look.root.rotateX(-0.28);
-      if (state.walker.mode === 'waking' && !state.down) {
-        look.root.rotateY(Math.sin(this.#now * 7) * 0.5);
-      }
+      this.#poseGuard(look, state);
       const head = new THREE.Vector3(pose.position.x, pose.position.y + tall / 2, pose.position.z);
       const asleep = state.walker.mode === 'sleep' && !state.down;
       mark.zs.forEach((z, order) => {
@@ -1140,6 +1355,53 @@ export class Siege3DView implements ScreenView {
         if (this.#trailPoints.length > GHOST_SEGMENTS + 1) this.#trailPoints.shift();
         this.#drawGhost();
       }
+    }
+  }
+
+  /**
+   * A guard's clip for what he's about, and which way he faces: at the ballista, or the way he's
+   * walking. Down, he's drawn lying where his body lies (his die clip does the falling).
+   */
+  #poseGuard(look: GuardLook, state: SiegeRound['guards'][number]): void {
+    const skin = this.#deps.game.data.siege.skins.guard;
+    const { walker } = state;
+    const [width, height, depth] = this.#deps.game.data.siege.guard.size;
+    let clip: keyof typeof skin.clips = 'stand';
+    let facing = 0;
+    if (state.down) clip = 'down';
+    else if (walker.mode === 'sleep') clip = 'sleep';
+    else if (walker.mode === 'waking') clip = 'waking';
+    else if (walker.mode === 'patrol' && walker.timer <= 0 && state.guard.walk) {
+      clip = 'patrol';
+      facing = walker.heading * 90;
+    } else if (walker.mode === 'alert' && state.guard.walk) {
+      if (walker.step === 'dash') {
+        clip = 'dash';
+        facing = Math.sign(walker.to - walker.x) * 90;
+      } else clip = walker.step === 'duck' ? 'duck' : 'lean';
+    }
+    this.#playClip(look, skin.clips[clip]);
+    look.model.rotation.y = (skin.turn + facing) * DEG;
+    if (state.down && !look.down) {
+      look.down = true;
+      look.downAt = this.#now;
+    }
+    if (state.down) {
+      // Lying: upright as drawn (the clip lies him down), his feet on what's under the body.
+      look.root.quaternion.identity();
+      look.model.position.y = -Math.min(width, depth) / 2;
+    } else {
+      look.model.position.y = -height / 2;
+    }
+  }
+
+  /** The guards' animations, on time's own clock (slowed with it); not the far off or long down. */
+  #animateGuards(dt: number): void {
+    const eye = this.#camera.position;
+    for (const look of this.#guards) {
+      if (look.down && this.#now - look.downAt > DIE_SECONDS) continue;
+      if (look.root.position.distanceTo(eye) > ANIMATE_WITHIN) continue;
+      look.mixer.update(dt);
     }
   }
 
@@ -1229,8 +1491,10 @@ export class Siege3DView implements ScreenView {
    */
   #wallHit(far = Infinity): THREE.Intersection | undefined {
     this.#raycaster.far = far;
-    const standing = this.#blocks.filter((look) => !look.gone).map((look) => look.mesh);
-    const [hit] = this.#raycaster.intersectObjects(standing, true);
+    const standing: THREE.Object3D[] = this.#blocks.flatMap((look) =>
+      !look.gone && look.object ? [look.object] : [],
+    );
+    const [hit] = this.#raycaster.intersectObjects([...standing, ...this.#batches], true);
     this.#raycaster.far = Infinity;
     return hit;
   }
@@ -2113,4 +2377,61 @@ function textSprite(text: string, color: string): THREE.CanvasTexture {
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
   return texture;
+}
+
+/** Loads the models the siege's things wear (each once, shared). */
+async function loadSkins(skins: Siege['skins']): Promise<Skins> {
+  const [gate, tower, banner, ballista, spearModel, guard] = await Promise.all([
+    loadModel(skins.gate.model),
+    loadModel(skins.tower.model),
+    loadModel(skins.banner.model),
+    loadModel(skins.ballista.model),
+    loadModel(skins.bolt.model),
+    loadAnimatedModel(skins.guard.model),
+  ]);
+  // The spear is one part of its model (the ballista's bolt), by name.
+  const part = skins.bolt.node ? spearModel.getObjectByName(skins.bolt.node) : undefined;
+  const spear = (part ?? spearModel).clone(true);
+  spear.position.set(0, 0, 0);
+  spear.rotation.set(0, 0, 0);
+  return { gate, tower, banner, ballista, spear, guard };
+}
+
+/**
+ * A model as the skin of a box `size` (width, height, depth) with its middle at the origin:
+ * turned `turn` degrees, then stretched to the box on every axis (`box`) or scaled evenly to its
+ * height (`height`), and centred on it.
+ */
+function fitted(
+  model: THREE.Object3D,
+  size: readonly [number, number, number],
+  skin: { fit: 'box' | 'height'; turn: number },
+): THREE.Group {
+  const turned = new THREE.Group();
+  const copy = model.clone(true);
+  copy.rotation.y = skin.turn * DEG;
+  turned.add(copy);
+  turned.updateMatrixWorld(true);
+  const bounds = new THREE.Box3().setFromObject(turned);
+  const native = bounds.getSize(new THREE.Vector3());
+  const middle = bounds.getCenter(new THREE.Vector3());
+  const scale =
+    skin.fit === 'box'
+      ? new THREE.Vector3(
+          size[0] / Math.max(native.x, 0.001),
+          size[1] / Math.max(native.y, 0.001),
+          size[2] / Math.max(native.z, 0.001),
+        )
+      : new THREE.Vector3().setScalar(size[1] / Math.max(native.y, 0.001));
+  const holder = new THREE.Group();
+  holder.scale.copy(scale);
+  holder.add(turned);
+  const outer = new THREE.Group();
+  // Centred: the shift is inside the scaling, so it's the unscaled middle.
+  turned.position.copy(middle).negate();
+  outer.add(holder);
+  outer.traverse((child) => {
+    child.castShadow = child.receiveShadow = true;
+  });
+  return outer;
 }

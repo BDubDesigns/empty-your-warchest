@@ -20,6 +20,29 @@ export function loadModel(url: string): Promise<THREE.Object3D> {
   return model;
 }
 
+/** A model with its animation clips (a character). */
+export interface AnimatedModel {
+  scene: THREE.Object3D;
+  animations: THREE.AnimationClip[];
+}
+const animated = new Map<string, Promise<AnimatedModel>>();
+
+/**
+ * Loads a glTF/GLB model with its animations, made matte. Shared like `loadModel`: clone the scene
+ * with SkeletonUtils (it's skinned), and play the clips on the clone.
+ */
+export function loadAnimatedModel(url: string): Promise<AnimatedModel> {
+  let model = animated.get(url);
+  if (!model) {
+    model = loader
+      .loadAsync(url)
+      .then((gltf) => ({ scene: matte(gltf.scene), animations: gltf.animations }));
+    void model.catch(() => animated.delete(url));
+    animated.set(url, model);
+  }
+  return model;
+}
+
 /**
  * Kenney's packs export fully metallic materials, which render black without an environment
  * map; these are meant to be flat-shaded, so make every standard material matte.

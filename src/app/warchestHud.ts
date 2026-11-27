@@ -9,7 +9,11 @@ import { PANEL_CLOSE_MS, WarchestPanel } from './warchestPanel';
 import { releaseContext, restoreContext } from './trouble';
 import { splitDeposit } from './warchestPour';
 
-const MODELS = { chest: 'models/kenney/chest.glb', log: 'models/kenney/log.glb' };
+const MODELS = {
+  chest: 'models/kenney/chest.glb',
+  log: 'models/kenney/log.glb',
+  potion: 'models/quaternius/Potion_2.gltf',
+};
 const SOUNDS = Object.fromEntries(
   [
     'chest-open',
@@ -22,9 +26,19 @@ const SOUNDS = Object.fromEntries(
     'panel-close',
   ].map((name) => [name, `audio/warchest/${name}.mp3`]),
 );
-async function loadHudModels(): Promise<{ chest: THREE.Object3D; log: THREE.Object3D }> {
-  const [chest, log] = await Promise.all([loadModel(MODELS.chest), loadModel(MODELS.log)]);
-  return { chest, log };
+interface HudModels {
+  chest: THREE.Object3D;
+  log: THREE.Object3D;
+  potion: THREE.Object3D;
+}
+
+async function loadHudModels(): Promise<HudModels> {
+  const [chest, log, potion] = await Promise.all([
+    loadModel(MODELS.chest),
+    loadModel(MODELS.log),
+    loadModel(MODELS.potion),
+  ]);
+  return { chest, log, potion };
 }
 /** Chest and flying pieces, in CSS pixels. */
 const CHEST_SIZE = 46;
@@ -43,13 +57,25 @@ const PIECE_LENGTHS: Record<ItemLook, number> = {
 
 /**
  * A piece of an item, as it flies into the chest, its length along z: the log model for a round
- * log, and for a split stave or a pointed spear, a shaft drawn here (no model to load). The
- * cauldron's shelf draws its ingredient icons from these too.
+ * log, and for a split stave or a pointed spear, a shaft drawn here (no model to load). A potion
+ * is Quaternius's bottle when `potion` is given, else a small drawn one. The cauldron's shelf draws
+ * its ingredient icons from these too.
  */
-export function pieceModel(look: ItemLook, log: THREE.Object3D): THREE.Object3D {
+export function pieceModel(
+  look: ItemLook,
+  log: THREE.Object3D,
+  potion?: THREE.Object3D,
+): THREE.Object3D {
   if (look === 'round') return log.clone(true);
   const piece = new THREE.Group();
   const wood = new THREE.MeshLambertMaterial({ color: look === 'split' ? 0xd9b07a : 0xa47a4a });
+  if (look === 'bottle' && potion) {
+    // A potion: Quaternius's bottle, stood on its side along z.
+    const bottle = potion.clone(true);
+    bottle.rotation.x = Math.PI / 2;
+    piece.add(bottle);
+    return piece;
+  }
   if (look === 'bottle') {
     // A small bottle: a green glass body, a neck, a cork (lying along z).
     const glass = new THREE.MeshLambertMaterial({
@@ -214,6 +240,7 @@ export class WarchestHud {
   /** A piece model for each item poured so far, sized to fly. */
   readonly #pieces = new Map<string, THREE.Object3D>();
   readonly #log: THREE.Object3D;
+  readonly #potion: THREE.Object3D;
   readonly #sfx = new Sfx();
   readonly #anchor: HTMLElement;
   readonly #count: HTMLElement;
@@ -241,11 +268,7 @@ export class WarchestHud {
   #running = false;
   readonly #logger: EventLogger;
 
-  private constructor(
-    element: HTMLElement,
-    deps: HudDeps,
-    models: { chest: THREE.Object3D; log: THREE.Object3D },
-  ) {
+  private constructor(element: HTMLElement, deps: HudDeps, models: HudModels) {
     this.#element = element;
     this.#game = deps.game;
     this.#item = deps.item;
@@ -286,6 +309,7 @@ export class WarchestHud {
     this.#lid = model.getObjectByName('lid');
     this.#scene.add(chest);
     this.#log = models.log;
+    this.#potion = models.potion;
 
     this.#anchor = document.createElement('div');
     this.#anchor.className = 'warchest-hud';
@@ -370,7 +394,7 @@ export class WarchestHud {
     let piece = this.#pieces.get(item);
     if (piece) return piece;
     const look = this.#game.data.items.find((entry) => entry.id === item)?.look ?? 'round';
-    piece = pieceModel(look, this.#log);
+    piece = pieceModel(look, this.#log, this.#potion);
     const size = new THREE.Box3().setFromObject(piece).getSize(new THREE.Vector3());
     piece.scale.setScalar((PIECE_LENGTH * PIECE_LENGTHS[look]) / Math.max(size.z, size.x, 0.001));
     this.#pieces.set(item, piece);

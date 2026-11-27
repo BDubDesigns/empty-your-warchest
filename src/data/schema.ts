@@ -1322,6 +1322,14 @@ export const siegeFeelSchema = z.object({
   buzzBannerMs: nonNegative,
 });
 
+/** A model skinning a rules' box (see `skins`). */
+const skinSchema = z.object({
+  model: z.string().regex(/^models\/.+\.(glb|gltf)$/, 'A model under models/, .glb or .gltf'),
+  fit: z.enum(['box', 'height']),
+  turn: z.number(),
+  node: z.string().optional(),
+});
+
 /**
  * The parts pieces are built from, in metres: wall stones (`stone`, the `halfStone` that squares
  * off every other course, the `merlon` on top), a tower's square block (`towerBlock` across, a
@@ -1382,6 +1390,32 @@ const siegeShape = z.object({
     topple: nonNegative,
   }),
   parts: siegePartsSchema,
+  /**
+   * How the siege's things look: a model over a rules' box, only a skin (the physics stays the
+   * box). `fit: box` stretches it to the box on every axis (like the trees); `height` scales it
+   * evenly to the box's height. `turn` turns it about the up axis first (degrees). `node` picks one
+   * part of the model by name (the ballista's bolt, for the spear). Guards play the named `clips`
+   * of their model for what they're about.
+   */
+  skins: z.object({
+    gate: skinSchema,
+    tower: skinSchema,
+    banner: skinSchema,
+    ballista: skinSchema,
+    bolt: skinSchema,
+    guard: skinSchema.extend({
+      clips: z.object({
+        stand: name,
+        patrol: name,
+        sleep: name,
+        waking: name,
+        dash: name,
+        duck: name,
+        lean: name,
+        down: name,
+      }),
+    }),
+  }),
   /**
    * How guards move (m/s and s). On watch a guard on a walkway walks it at `patrolSpeed`, pausing
    * `patrolPause` at each end. Alerted, he paces at `alertSpeed` to a new place, ducks `duck`
