@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { ScreenView } from './screen';
 import { theme } from './theme';
+import { capturePointer } from './pointer';
 
 /** Placeholder for the Attack Run's three.js view: a box you can spin by dragging. */
 export class ThreeView implements ScreenView {
@@ -78,7 +79,7 @@ export class ThreeView implements ScreenView {
 
   #listenForDrag(canvas: HTMLCanvasElement): void {
     canvas.addEventListener('pointerdown', (event) => {
-      canvas.setPointerCapture(event.pointerId);
+      if (!capturePointer(canvas, event.pointerId)) return;
       this.#dragX = event.clientX;
       this.#spinSpeed = 0;
     });

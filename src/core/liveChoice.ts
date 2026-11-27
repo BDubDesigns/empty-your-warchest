@@ -11,6 +11,8 @@ export interface Choice<T extends string = string> {
   readonly label: string;
   readonly options: readonly ChoiceOption<T>[];
   readonly value: T;
+  /** A line under the buttons, if the choice has more to say (what Auto picked, say). */
+  readonly detail?: string;
   set(value: T): void;
   onChange(listener: (value: T) => void): () => void;
 }

@@ -4,6 +4,7 @@
 import { brewing } from './brewing';
 import { camp } from './camp';
 import { firemaking } from './firemaking';
+import { graphics } from './graphics';
 import { items } from './items';
 import { levels } from './levels';
 import { newGame } from './newGame';
@@ -44,6 +45,7 @@ export const rawGameData: GameDataInput = {
   warchest,
   workers,
   tuning,
+  graphics,
 };
 
 /** The validated game data. Throws a GameDataError if anything in src/data is wrong. */

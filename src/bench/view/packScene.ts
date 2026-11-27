@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { GLTFLoader, type GLTF } from 'three/addons/loaders/GLTFLoader.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';
+import { BlobShadows } from '../../app/blobShadows';
 import { groundMesh } from '../../app/ground';
 import { matte } from '../../app/models';
 import { scatter } from '../../app/scatter';
@@ -100,21 +101,6 @@ function partsOf(shape: Shape): Part[] {
     });
   });
   return parts;
-}
-
-/** A soft round shadow, for the blobs under people. */
-function blobTexture(): THREE.Texture {
-  const canvas = document.createElement('canvas');
-  canvas.width = canvas.height = 64;
-  const context = canvas.getContext('2d');
-  if (!context) throw new Error('No 2D canvas');
-  const fade = context.createRadialGradient(32, 32, 0, 32, 32, 32);
-  fade.addColorStop(0, 'rgba(0,0,0,1)');
-  fade.addColorStop(0.6, 'rgba(0,0,0,0.6)');
-  fade.addColorStop(1, 'rgba(0,0,0,0)');
-  context.fillStyle = fade;
-  context.fillRect(0, 0, 64, 64);
-  return new THREE.CanvasTexture(canvas);
 }
 
 /** Wraps `parts` turned by `turn` so they stand on y = 0 about their middle, and measures them. */
@@ -578,32 +564,16 @@ export async function buildPackScene(
   // The cheapest shadows: a soft blob under each person, all one instanced mesh.
   let peopleMoved: () => void = () => undefined;
   if (run.shadows === 'blob' && characters.length > 0) {
-    const blobs = new THREE.InstancedMesh(
-      new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2),
-      new THREE.MeshBasicMaterial({
-        map: blobTexture(),
-        color: 0x000000,
-        transparent: true,
-        opacity: data.blob.opacity,
-        depthWrite: false,
-      }),
-      characters.length,
-    );
-    blobs.frustumCulled = false;
+    const blobs = new BlobShadows(characters.length, data.blob.opacity);
     const width = data.blob.width;
-    const place = new THREE.Matrix4();
-    const size = new THREE.Vector3(width, 1, width);
-    const still = new THREE.Quaternion();
-    const at = new THREE.Vector3();
     peopleMoved = () => {
       characters.forEach((character, index) => {
-        at.set(character.root.position.x, 0.02, character.root.position.z);
-        blobs.setMatrixAt(index, place.compose(at, still, size));
+        blobs.place(index, character.root.position.x, character.root.position.z, width);
       });
-      blobs.instanceMatrix.needsUpdate = true;
+      blobs.commit();
     };
     peopleMoved();
-    scene.add(blobs);
+    scene.add(blobs.mesh);
   }
 
   if (run.matte || pack.matte) makeMatte(scene);

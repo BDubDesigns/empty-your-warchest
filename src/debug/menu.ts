@@ -290,10 +290,13 @@ export function mountDebugMenu(root: HTMLElement, deps: DebugDeps): void {
       });
       return { button, value: option.value };
     });
+    const detail = el('p', { className: 'debug-note' });
     const show = (): void => {
       for (const { button, value } of buttons) {
         button.setAttribute('aria-pressed', String(value === choice.value));
       }
+      detail.textContent = choice.detail ?? '';
+      detail.hidden = choice.detail === undefined;
     };
     choice.onChange(show);
     show();
@@ -304,6 +307,7 @@ export function mountDebugMenu(root: HTMLElement, deps: DebugDeps): void {
         { className: 'debug-row' },
         buttons.map(({ button }) => button),
       ),
+      detail,
     ]);
   });
 

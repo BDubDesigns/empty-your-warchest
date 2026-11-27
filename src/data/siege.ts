@@ -171,6 +171,32 @@ export const siege = {
       },
     },
   },
+  looks: {
+    shadowMap: { size: 1024, halfWidth: 20, halfHeight: 30, far: 70, bias: -0.0005 },
+    // As the stress test's blobs (opacity 0.45), stretched to each thing's footprint and a little
+    // past it, so a soft dark edge shows round the foot of a wall.
+    blobShadows: { opacity: 0.45, spread: 1.3, lift: 0.04, fadeHeight: 1.5 },
+    tiers: {
+      high: {
+        shadows: 'map',
+        debrisPieces: 4,
+        maxDebris: 60,
+        debrisSeconds: 1.3,
+        dustShare: 1,
+        maxPuffs: 160,
+      },
+      // Guesses, to tune from phone logs (siege.perf): no shadow pass (the big win on the Galaxy
+      // A15), half the chunks and they're gone sooner, and half the dust (each puff is a draw).
+      low: {
+        shadows: 'blob',
+        debrisPieces: 2,
+        maxDebris: 20,
+        debrisSeconds: 0.9,
+        dustShare: 0.5,
+        maxPuffs: 60,
+      },
+    },
+  },
   // Walking the walkway, a guard crosses a 12 m one in about 15 s; alerted, he dashes from cover
   // to cover, out of sight a moment and out for a shot a moment.
   guardMoves: {
