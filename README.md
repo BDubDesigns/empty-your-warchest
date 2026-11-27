@@ -6,37 +6,9 @@ Design and the build plan live in Notion. This repo follows the "Build Plan — 
 
 ## Stack
 
-TypeScript (strict) + Vite, Phaser for the 2D camp and mini games, three.js for 3D (woodcutting and the runner), Vitest for unit tests, Playwright for the smoke test.
+TypeScript (strict) + Vite, Phaser for the 2D camp, three.js for the 3D stations and the siege, Rapier and cannon-es physics, zod-validated data, Vitest for unit tests, Playwright for phone-viewport tests.
 
-## Commands
-
-```bash
-npm ci              # install
-npm run dev         # local dev server
-npm run typecheck   # tsc
-npm run lint        # eslint
-npm run format      # prettier --write
-npm test            # vitest
-npm run build       # production build into dist/
-npm run test:e2e    # playwright smoke test (builds and serves dist/ first)
-```
-
-## Layout
-
-```
-src/
-  app/        app shell: switches between Phaser and three.js screens
-  data/       single source of truth: skills, items, recipes, stations, units, levels, tuning
-  core/       state, inventory, recipes, XP curve, idle engine, save/load, event logger, seeded RNG
-  camp/       Phaser camp scene (stations built from data)
-  stations/   one folder per mini game (woodcutting, splitting, firemaking)
-  runner/
-    sim/      pure TS, deterministic, no rendering imports (enforced by ESLint)
-    view/     three.js rendering + input
-  debug/      debug menu
-tests/        Vitest unit tests
-e2e/          Playwright smoke test (phone viewport, touch)
-```
+Commands, code layout and the engineering rules are in [AGENTS.md](AGENTS.md), so there's one copy to keep up to date.
 
 ## Deploys
 
