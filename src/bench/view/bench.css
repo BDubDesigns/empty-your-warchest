@@ -25,6 +25,7 @@
   right: calc(var(--safe-right) + 8px);
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   justify-content: space-between;
   gap: 8px;
   padding: 6px 8px;
@@ -223,4 +224,56 @@
   color: var(--muted);
   font-size: 12px;
   overflow-wrap: anywhere;
+}
+
+/*
+ * The quick run: which run it's on and the latest upload's code, big enough to read off a
+ * BrowserStack screen. In the HUD while the runs go, then in the panel.
+ */
+.bench-quick {
+  margin: 8px 0;
+  padding: 8px 12px;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  background: rgb(0 0 0 / 0.6);
+  font-variant-numeric: tabular-nums;
+}
+
+.bench-hud > .bench-quick {
+  flex-basis: 100%;
+  margin: 0;
+}
+
+.bench-quick[hidden] {
+  display: none;
+}
+
+.bench-quick p {
+  margin: 0;
+}
+
+.bench-quick-step {
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.bench-quick .bench-quick-code {
+  margin: 4px 0;
+  color: #f0cd5c;
+  font:
+    700 56px ui-monospace,
+    monospace;
+  letter-spacing: 0.08em;
+  line-height: 1.1;
+}
+
+.bench-quick-sent {
+  color: var(--muted);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+/* The quick run's HUD line (run, seconds left) larger, to read at a glance. */
+.bench[data-bench-set='quick'] .bench-hud {
+  font-size: 16px;
 }

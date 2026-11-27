@@ -117,7 +117,7 @@ const packSchema = z
 export const benchShadows = ['on', 'off', 'blob'] as const;
 export type BenchShadows = (typeof benchShadows)[number];
 
-/** One run in Run all. */
+/** One run in Run all or the quick run. */
 const runSchema = z.object({
   pack: name,
   scale: positiveInt,
@@ -252,6 +252,23 @@ export const benchDataShape = z
     results: z.object({ summaryUpToPx: positive }),
     packs: z.array(packSchema).min(1),
     runAll: z.array(runSchema).min(1),
+    /**
+     * Quick run (and `?bench=quick`, which starts it as the page loads): a few short runs, the log
+     * sent after each, for a device there's only a minute on (a free BrowserStack trial).
+     */
+    quick: z.object({
+      /** Seconds flown along the camera path up to `from`, not counted, once it's all loaded. */
+      warmupSeconds: positive,
+      /** Seconds measured, from `from` on the camera path. */
+      seconds: positive,
+      /** Where on the camera path (s) the measuring starts. */
+      from: nonNegative,
+      /** A run still loading after this long (s) is given up, and logged and sent as such. */
+      loadTimeoutS: positive,
+      /** How long (s) the next run waits for the last one's upload before starting anyway. */
+      uploadWaitS: positive,
+      runs: z.array(runSchema).min(1),
+    }),
   })
   .superRefine((bench, ctx) => {
     const issue = (path: (string | number)[], message: string) => {
@@ -266,18 +283,32 @@ export const benchDataShape = z
     if (bench.layout.copies.length < most) {
       issue(['layout', 'copies'], `${String(most)}× needs ${String(most)} copies' places`);
     }
-    bench.runAll.forEach((run, index) => {
-      if (!packs.has(run.pack)) issue(['runAll', index, 'pack'], `Unknown pack "${run.pack}"`);
-      if (!bench.scales.includes(run.scale)) {
-        issue(['runAll', index, 'scale'], `Scale ${String(run.scale)} isn't one of the scales`);
-      }
-    });
+    const checkRuns = (runs: readonly z.output<typeof runSchema>[], path: (string | number)[]) => {
+      runs.forEach((run, index) => {
+        if (!packs.has(run.pack)) issue([...path, index, 'pack'], `Unknown pack "${run.pack}"`);
+        if (!bench.scales.includes(run.scale)) {
+          issue([...path, index, 'scale'], `Scale ${String(run.scale)} isn't one of the scales`);
+        }
+      });
+    };
+    checkRuns(bench.runAll, ['runAll']);
+    checkRuns(bench.quick.runs, ['quick', 'runs']);
     const last = bench.camera[bench.camera.length - 1];
     if (last && last.at < bench.seconds) {
       issue(['camera'], 'The camera path must last the whole run');
     }
     if (bench.collapse.at >= bench.seconds)
       issue(['collapse', 'at'], 'The collapse must be in the run');
+    const { quick } = bench;
+    if (quick.warmupSeconds > quick.from) {
+      issue(['quick', 'warmupSeconds'], 'The warm-up flies the path before `from`: it must fit');
+    }
+    if (quick.from + quick.seconds > bench.seconds) {
+      issue(['quick', 'seconds'], 'The quick run must end within the camera path');
+    }
+    if (bench.collapse.at < quick.from || bench.collapse.at >= quick.from + quick.seconds) {
+      issue(['quick', 'from'], 'The quick run must see the fort come down');
+    }
   });
 
 export type BenchDataInput = z.input<typeof benchDataShape>;
@@ -285,6 +316,7 @@ export type BenchData = z.output<typeof benchDataShape>;
 export type BenchPack = BenchData['packs'][number];
 export type BenchPiece = z.output<typeof pieceSchema>;
 export type BenchRun = BenchData['runAll'][number];
+export type BenchQuick = BenchData['quick'];
 export type BenchLayout = BenchData['layout'];
 export type BenchCameraKey = BenchData['camera'][number];
 export type BenchPixelRatio = BenchData['pixelRatios'][number];
@@ -590,6 +622,25 @@ export const bench = {
     { pack: 'boxes', scale: 1, note: 'again: has it slowed as it warmed?' },
     { pack: 'village-heavy', scale: 1, note: 'full-size textures' },
   ],
+  // A free BrowserStack trial gives a device about a minute. With 2 + 8 s a run, the preview took
+  // 41 s from load to the last upload on a fast PC, which is too close on a slow phone (each run
+  // also loads and compiles), so 2 + 6 s: about 45 s on a slow phone. 7 to 13 s of the path takes
+  // in the flyover's side, the drop to the sights and the fort coming down at 10, with 3 s of it
+  // falling. The optimised village first, as it matters most; the boxes as the baseline; then the
+  // plain village, last as it's the slowest to load (about 10 MB, its textures at 1024 px), so it
+  // can't hold up the other two's uploads.
+  quick: {
+    warmupSeconds: 2,
+    seconds: 6,
+    from: 7,
+    loadTimeoutS: 15,
+    uploadWaitS: 5,
+    runs: [
+      { pack: 'village-lite', scale: 1 },
+      { pack: 'boxes', scale: 1 },
+      { pack: 'village', scale: 1 },
+    ],
+  },
 } satisfies BenchDataInput;
 
 /** The validated bench data. Throws if anything above is wrong. */
