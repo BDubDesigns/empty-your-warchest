@@ -488,8 +488,9 @@ describe('siege guards and positions', () => {
         run(round, 60);
         for (const tilt of [-2, 2, 5, 8]) {
           for (const yaw of [-20, -8, 8, 20]) {
-            if (round.position !== position) break;
             reload(round, 120);
+            // Won, and rolled on to the keep while reloading: these shots are done.
+            if (round.position !== position) break;
             round.throw('barrage', { yaw: yaw * DEG, tilt: tilt * DEG });
           }
         }

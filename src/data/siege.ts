@@ -118,7 +118,8 @@ export const siege = {
   ],
   weapon: 'ballista',
   // A soldier about as tall as a man: a direct hit brings him down.
-  guard: { size: [0.45, 1.75, 0.35], density: 400, friction: 0.8, hp: 20, downTilt: 50, topple: 2 },
+  // Kenney's chibi soldier, 1.5 m tall and nearly as wide: a big target, seen at range.
+  guard: { size: [1.1, 1.5, 0.8], density: 400, friction: 0.8, hp: 20, downTilt: 50, topple: 2 },
   parts: {
     stone: [1, STONE_HEIGHT, 0.7],
     halfStone: [0.5, STONE_HEIGHT, 0.7],
@@ -141,6 +142,34 @@ export const siege = {
     // thin posts gone the keep tips forward over that wall, and the banner comes down with it.
     keepPostHp: 1000,
     bannerHp: 100000,
+  },
+  // Kenney's Castle Kit and Mini Characters (CC0): skins over the rules' boxes.
+  skins: {
+    gate: { model: 'models/kenney/castle/gate.glb', fit: 'box', turn: 90 },
+    tower: { model: 'models/kenney/castle/tower-square-mid.glb', fit: 'box', turn: 0 },
+    banner: { model: 'models/kenney/castle/flag-banner-long.glb', fit: 'height', turn: 90 },
+    ballista: { model: 'models/kenney/castle/siege-ballista.glb', fit: 'box', turn: 90 },
+    bolt: {
+      model: 'models/kenney/castle/siege-ballista.glb',
+      fit: 'height',
+      turn: 0,
+      node: 'arrow',
+    },
+    guard: {
+      model: 'models/kenney/mini/character-soldier.glb',
+      fit: 'height',
+      turn: 0,
+      clips: {
+        stand: 'idle',
+        patrol: 'walk',
+        sleep: 'sit',
+        waking: 'emote-no',
+        dash: 'sprint',
+        duck: 'crouch',
+        lean: 'holding-both',
+        down: 'die',
+      },
+    },
   },
   // Walking the walkway, a guard crosses a 12 m one in about 15 s; alerted, he dashes from cover
   // to cover, out of sight a moment and out for a shot a moment.

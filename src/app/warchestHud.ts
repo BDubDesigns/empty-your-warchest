@@ -9,7 +9,11 @@ import { PANEL_CLOSE_MS, WarchestPanel } from './warchestPanel';
 import { releaseContext, restoreContext } from './trouble';
 import { splitDeposit } from './warchestPour';
 
-const MODELS = { chest: 'models/kenney/chest.glb', log: 'models/kenney/log.glb' };
+const MODELS = {
+  chest: 'models/kenney/chest.glb',
+  log: 'models/kenney/log.glb',
+  potion: 'models/quaternius/Potion_2.gltf',
+};
 const SOUNDS = Object.fromEntries(
   [
     'chest-open',
@@ -22,9 +26,19 @@ const SOUNDS = Object.fromEntries(
     'panel-close',
   ].map((name) => [name, `audio/warchest/${name}.mp3`]),
 );
-async function loadHudModels(): Promise<{ chest: THREE.Object3D; log: THREE.Object3D }> {
-  const [chest, log] = await Promise.all([loadModel(MODELS.chest), loadModel(MODELS.log)]);
-  return { chest, log };
+interface HudModels {
+  chest: THREE.Object3D;
+  log: THREE.Object3D;
+  potion: THREE.Object3D;
+}
+
+async function loadHudModels(): Promise<HudModels> {
+  const [chest, log, potion] = await Promise.all([
+    loadModel(MODELS.chest),
+    loadModel(MODELS.log),
+    loadModel(MODELS.potion),
+  ]);
+  return { chest, log, potion };
 }
 /** Chest and flying pieces, in CSS pixels. */
 const CHEST_SIZE = 46;
@@ -41,27 +55,13 @@ const PIECE_LENGTHS: Record<ItemLook, number> = {
  * A piece of an item, as it flies into the chest, its length along z: the log model for a round
  * log, and for a split stave or a pointed spear, a shaft drawn here (no model to load).
  */
-function pieceModel(look: ItemLook, log: THREE.Object3D): THREE.Object3D {
-  if (look === 'round') return log.clone(true);
+function pieceModel(look: ItemLook, models: HudModels): THREE.Object3D {
+  if (look === 'round') return models.log.clone(true);
   const piece = new THREE.Group();
   const wood = new THREE.MeshLambertMaterial({ color: look === 'split' ? 0xd9b07a : 0xa47a4a });
   if (look === 'bottle') {
-    // A small bottle: a green glass body, a neck, a cork (lying along z).
-    const glass = new THREE.MeshLambertMaterial({
-      color: 0x5fae7a,
-      transparent: true,
-      opacity: 0.85,
-    });
-    const body = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.28, 0.6, 12), glass);
-    const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.12, 0.25, 10), glass);
-    neck.position.y = 0.42;
-    const cork = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.09, 0.09, 0.12, 8),
-      new THREE.MeshLambertMaterial({ color: 0x9a7448 }),
-    );
-    cork.position.y = 0.6;
-    const bottle = new THREE.Group();
-    bottle.add(body, neck, cork);
+    // A potion: Quaternius's bottle, stood on its side along z.
+    const bottle = models.potion.clone(true);
     bottle.rotation.x = Math.PI / 2;
     piece.add(bottle);
     return piece;
@@ -178,11 +178,7 @@ export class WarchestHud {
   #running = false;
   readonly #logger: EventLogger;
 
-  private constructor(
-    element: HTMLElement,
-    deps: HudDeps,
-    models: { chest: THREE.Object3D; log: THREE.Object3D },
-  ) {
+  private constructor(element: HTMLElement, deps: HudDeps, models: HudModels) {
     this.#element = element;
     this.#game = deps.game;
     this.#item = deps.item;
@@ -224,7 +220,7 @@ export class WarchestHud {
     this.#scene.add(chest);
     // The station's item, as it flies in: a log, a stave or a spear.
     const look = deps.game.data.items.find((item) => item.id === deps.item)?.look ?? 'round';
-    const piece = pieceModel(look, models.log);
+    const piece = pieceModel(look, models);
     const pieceSize = new THREE.Box3().setFromObject(piece).getSize(new THREE.Vector3());
     piece.scale.setScalar((PIECE_LENGTH * PIECE_LENGTHS[look]) / Math.max(pieceSize.z, 0.001));
     this.#piece = piece;
