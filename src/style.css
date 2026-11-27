@@ -2235,6 +2235,18 @@ body:not([data-view='camp']) #build-label {
   box-shadow: 0 3px 10px rgb(0 0 0 / 0.4);
 }
 
+/* The skill bar drops to the second row on narrow screens (see .skill-bar): the card goes below it. */
+@media (max-width: 400px) {
+  .br-recipe {
+    top: calc(var(--safe-top) + 118px);
+  }
+}
+
+/* Room for the bottle's cork under the name. */
+.br-recipe .br-swatches {
+  padding-top: 12px;
+}
+
 .br-recipe-name {
   font:
     800 15px system-ui,
