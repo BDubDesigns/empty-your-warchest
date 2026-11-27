@@ -203,11 +203,9 @@ export class Siege3DView implements ScreenView {
   #marks: { zzz: THREE.Sprite; bang: THREE.Sprite; alertedAt: number }[] = [];
   readonly #zzzMaterial = new THREE.SpriteMaterial({
     map: textSprite('Z z z', '#eef4ff'),
-    depthTest: false,
   });
   readonly #bangMaterial = new THREE.SpriteMaterial({
     map: textSprite('!', '#ffd23c'),
-    depthTest: false,
   });
   /**
    * The flyover as a fort first opens: when it began, the camera's way through the fort and
