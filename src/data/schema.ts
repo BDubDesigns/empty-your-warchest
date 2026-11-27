@@ -16,9 +16,12 @@ export const skillSchema = z.object({ id, name });
 
 /**
  * How an item looks as a piece flying into a warchest: a round log, a split stave, a pointed shaft
- * (a spear).
+ * (a spear), a bottle, a green tuft (moss), a mushroom cap, a little grey heap (ash).
  */
-export const itemLooks = ['round', 'split', 'pointed', 'bottle'] as const;
+export const itemLooks = ['round', 'split', 'pointed', 'bottle', 'tuft', 'cap', 'heap'] as const;
+
+/** A colour as '#rrggbb'. */
+const hexColor = z.string().regex(/^#[0-9a-f]{6}$/i, 'Use a #rrggbb colour');
 
 export const itemSchema = z.object({ id, name, look: z.enum(itemLooks) });
 
@@ -35,6 +38,12 @@ export const stationSchema = z.object({
   /** Which mini game module runs this station. */
   mechanic: id,
   camp: campSpotSchema,
+});
+
+/** What a new save starts with. */
+export const newGameSchema = z.object({
+  /** In the warchest from the start (e.g. a brewing kit, so the cauldron can be tried at once). */
+  inventory: z.array(itemStackSchema),
 });
 
 export const campSchema = z.object({
@@ -307,6 +316,8 @@ export const woodcuttingFeelSchema = z.object({
 
 /** A min–max range. */
 const rangeSchema = z.object({ min: nonNegative, max: nonNegative });
+/** A whole-number min–max range, at least 1. */
+const countRange = z.object({ min: positiveInt, max: positiveInt });
 
 /** The low plants and stones scattered outside the woodcutting fence (models picked by name). */
 export const sceneryPlantKinds = [
@@ -467,6 +478,28 @@ export const woodcuttingSchema = z.object({
   ),
   /** The fall and chain speeds the fast-fall switch uses (the faster feel from before Nov 23). */
   fastFall: z.object({ fallSeconds: positive, chainDelay: nonNegative }),
+  /**
+   * Ingredients to forage, set when a round's trees are seeded so each one's drop is fixed and
+   * shows from the start. Mossy trees (moss on the trunk) and mushroom trees (mushrooms at the
+   * foot) drop theirs when felled; mossy boulders shed theirs the first time they're hit, and are
+   * plain boulders from then on. Mushroom patches on the ground pay `yield` once a round, when a
+   * falling tree lands on one or a rolling boulder runs over it, and sit `gap` clear of every
+   * trunk, boulder and the cabin, `margin` in from the fence. Drops bank with the chain's logs.
+   */
+  forage: z.object({
+    mossyTrees: z.object({ share: fraction, item: id, count: countRange }),
+    mushroomTrees: z.object({ share: fraction, item: id, count: countRange }),
+    mossyBoulders: z.object({ share: fraction, item: id, count: countRange }),
+    patches: z.object({
+      count: z.object({ min: z.number().int().min(0), max: z.number().int().min(0) }),
+      item: id,
+      yield: positiveInt,
+      radius: positive,
+      gap: nonNegative,
+      margin: nonNegative,
+      tries: positiveInt,
+    }),
+  }),
   scenery: woodcuttingScenerySchema,
   feel: woodcuttingFeelSchema,
 });
@@ -806,9 +839,73 @@ const firemakingSchema = z.object({
     tries: positiveInt,
     searchSpots: positiveInt,
   }),
+  /**
+   * Ash, banked with each rack: `perCharred` for every charred stave (instead of losing it), and
+   * `perLog` for every fuel log burned (rounded over the rack).
+   */
+  ash: z.object({ item: id, perCharred: z.number().int().min(0), perLog: nonNegative }),
   /** Grass round the fire pit, trodden bare round the trench. */
   yard: z.object({ radius: positive, wear: fraction }),
   feel: firemakingFeelSchema,
+});
+
+/** Feel numbers for brewing. The debug menu can override them live. */
+export const brewingFeelSchema = z.object({
+  /**
+   * Stirring: the share of every unstirred drop that blends in each full turn of the spoon, and
+   * the most turns a second that count (stirring faster just splashes).
+   */
+  stirPerTurn: z.number().positive().max(1),
+  maxTurnsPerSecond: positive,
+  /** How far the drag has to sweep round the pot's middle before it counts as stirring (px). */
+  stirDeadPx: nonNegative,
+  /** Seconds a drop takes to fall from the shelf into the pot. */
+  dropSeconds: positive,
+  /** How fast unstirred swirls drift round on their own (turns a second). */
+  swirlDrift: nonNegative,
+  /** Vibration (ms): a drop going in, each quarter turn of stirring, bottling. */
+  buzzDropMs: nonNegative,
+  buzzStirMs: nonNegative,
+  buzzBottleMs: nonNegative,
+});
+
+const brewReward = z.object({ potions: positiveInt, refunds: z.number().int().min(0) });
+
+/**
+ * Brewing at the cauldron: tap ingredients off the shelf into the pot, stir to see the true
+ * colour, and bottle it when it matches the recipe card's target. Each drop adds its colour
+ * weighted by its strength (mixed in OKLab, see src/stations/brewing/logic/color.ts); you can't
+ * take anything out, so water lightens and ash darkens and dulls, both using fill.
+ */
+const brewingSchema = z.object({
+  /** The most drops the pot holds, water included. */
+  maxFill: positiveInt,
+  /** On the shelf: each ingredient item, its colour in the pot, and how much a drop counts. */
+  ingredients: z.array(z.object({ item: id, color: hexColor, strength: positive })).min(1),
+  /** Water is free and never runs out (a tool, not an item). */
+  water: z.object({ name, color: hexColor, strength: positive }),
+  /**
+   * Potions to brew: the recipe bottling runs (its outputs, once per potion, and its XP per brew),
+   * the target colour on the card, and how far each brew's target is moved (seeded) along L, a
+   * and b, either way, so it can't be learned by heart. Every target within that box must have
+   * a 3-star answer within the fill (checked at startup).
+   */
+  potions: z
+    .array(
+      z.object({
+        recipe: id,
+        target: hexColor,
+        jitter: z.object({ L: nonNegative, a: nonNegative, b: nonNegative }),
+      }),
+    )
+    .min(1),
+  /** Stars from the OKLab distance to the target: at most `three` for 3, and so on. Past `one` the brew spoils. */
+  stars: z.object({ three: positive, two: positive, one: positive }),
+  /** What each star count bottles: potions, and ingredients given back (picked from those put in). */
+  rewards: z.object({ one: brewReward, two: brewReward, three: brewReward }),
+  /** Grass round the cauldron, trodden bare round its fire. */
+  yard: z.object({ radius: positive, wear: fraction }),
+  feel: brewingFeelSchema,
 });
 
 /** What a fort's blocks are made of. `kind` is how a block looks and sounds. */
@@ -1389,9 +1486,11 @@ export const gameDataShape = z.object({
   enemies: z.array(enemySchema),
   levels: z.array(levelSchema),
   camp: campSchema,
+  newGame: newGameSchema,
   woodcutting: woodcuttingSchema,
   splitting: splittingSchema,
   firemaking: firemakingSchema,
+  brewing: brewingSchema,
   siege: siegeSchema,
   runner: runnerSchema,
   warchest: warchestSchema,
@@ -1425,6 +1524,10 @@ export type Workers = GameData['workers'];
 export type WorkerJob = Workers['jobs'][number];
 export type Firemaking = GameData['firemaking'];
 export type FiremakingFeel = Firemaking['feel'];
+export type Brewing = GameData['brewing'];
+export type BrewingFeel = Brewing['feel'];
+export type BrewPotion = Brewing['potions'][number];
+export type WoodcuttingForage = GameData['woodcutting']['forage'];
 export type Gate = z.output<typeof gateSchema>;
 export type Roll = z.output<typeof rollSchema>;
 export type GateOp = Gate['op'];

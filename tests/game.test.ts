@@ -61,11 +61,13 @@ describe('Game', () => {
     stop();
     game.addItems('log', 1);
     expect(changes).toBe(2);
+    // A new game starts with the brewing kit in data.
     expect(game.snapshot()).toMatchObject({
-      inventory: [
+      inventory: expect.arrayContaining([
         { item: 'log', count: 1 },
         { item: 'spear', count: 2 },
-      ],
+        ...data.newGame.inventory,
+      ]) as unknown,
       skills: { splitting: game.xpCurve.xpForLevel(5) },
     });
   });

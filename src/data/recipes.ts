@@ -28,4 +28,15 @@ export const recipes = [
     outputs: [{ item: 'spear', count: 1 }],
     xp: 5,
   },
+  {
+    // Bottling a Sense potion at the cauldron. Its ingredients are whatever went into the pot, so
+    // the recipe takes nothing itself; the brew's stars say how many potions it makes. XP per brew
+    // (yield counts potions, XP counts the brew): a 45 s brew, about the other stations' 100 a
+    // minute. A guess until brews are tuned.
+    id: 'brew_sense',
+    station: 'cauldron',
+    inputs: [],
+    outputs: [{ item: 'sense_potion', count: 1 }],
+    xp: 75,
+  },
 ] satisfies GameDataInput['recipes'];

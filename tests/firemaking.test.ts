@@ -257,7 +257,14 @@ describe('a rack', () => {
     round.lay();
     cookTo(round, 60);
     expect(round.phase.kind).toBe('done');
-    expect(events.at(-1)).toMatchObject({ hardened: 0, charred: 6, stars: 1, burnt: true });
+    // Charred staves crumble to ash (M9) rather than being lost outright.
+    expect(events.at(-1)).toMatchObject({
+      hardened: 0,
+      charred: 6,
+      stars: 1,
+      burnt: true,
+      ash: 6 * rules.ash.perCharred,
+    });
     expect(banked.charred).toBe(6);
   });
 

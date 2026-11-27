@@ -73,6 +73,23 @@ export const woodcutting = {
   fastFall: { fallSeconds: 0.9, chainDelay: 0.12 },
   // Outside the fence: grass thick by the fence and thinning out, undergrowth, a wall of forest
   // (held back on the camera's side), and the woodcutter's track, woodpile and chopping block.
+  // Foraging for brewing (M9, Brandon): 1 tree in 3 mossy (1–2 moss), 1 in 10 with mushrooms
+  // (1 red cap), half the boulders mossy (1–2 moss, shed on the first hit), and 1–2 mushroom
+  // patches a clearing worth 3 red caps each, once. Patches are a little smaller than a canopy.
+  forage: {
+    mossyTrees: { share: 1 / 3, item: 'moss', count: { min: 1, max: 2 } },
+    mushroomTrees: { share: 0.1, item: 'red_cap', count: { min: 1, max: 1 } },
+    mossyBoulders: { share: 0.5, item: 'moss', count: { min: 1, max: 2 } },
+    patches: {
+      count: { min: 1, max: 2 },
+      item: 'red_cap',
+      yield: 3,
+      radius: 18,
+      gap: 8,
+      margin: 30,
+      tries: 40,
+    },
+  },
   scenery: {
     seed: 11,
     plants: [

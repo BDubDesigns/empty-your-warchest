@@ -4,6 +4,7 @@ export * from './feel';
 export * from './logic/aim';
 export * from './logic/chain';
 export * from './logic/fall';
+export * from './logic/forage';
 export * from './logic/generate';
 export * from './logic/layout';
 export * from './logic/round';

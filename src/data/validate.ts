@@ -132,6 +132,48 @@ function checkReferences(data: GameData, ctx: z.RefinementCtx): void {
   if (firemaking.feel.smokeWisps >= firemaking.feel.smokeThick) {
     issue(['firemaking', 'feel', 'smokeWisps'], 'Wisps must come before thick smoke');
   }
+  if (!itemIds.has(firemaking.ash.item)) {
+    issue(['firemaking', 'ash', 'item'], `Unknown item "${firemaking.ash.item}"`);
+  }
+
+  // Brewing (the answer check, with the colour maths, runs at boot: see checkBrews).
+  const brewing = data.brewing;
+  const shelf = new Set<string>();
+  brewing.ingredients.forEach((ingredient, index) => {
+    if (!itemIds.has(ingredient.item)) {
+      issue(['brewing', 'ingredients', index, 'item'], `Unknown item "${ingredient.item}"`);
+    }
+    if (shelf.has(ingredient.item)) issue(['brewing', 'ingredients', index, 'item'], 'Twice');
+    shelf.add(ingredient.item);
+  });
+  brewing.potions.forEach((potion, index) => {
+    const recipe = data.recipes.find((entry) => entry.id === potion.recipe);
+    if (!recipe)
+      issue(['brewing', 'potions', index, 'recipe'], `Unknown recipe "${potion.recipe}"`);
+    else if (recipe.inputs.length > 0) {
+      issue(['brewing', 'potions', index, 'recipe'], 'A brew takes what went into the pot');
+    }
+  });
+  if (!(brewing.stars.three <= brewing.stars.two && brewing.stars.two <= brewing.stars.one)) {
+    issue(['brewing', 'stars'], 'Bands must widen from three stars to one');
+  }
+  data.newGame.inventory.forEach((stack, index) => {
+    if (!itemIds.has(stack.item)) {
+      issue(['newGame', 'inventory', index, 'item'], `Unknown item "${stack.item}"`);
+    }
+  });
+
+  // Foraging in woodcutting.
+  const forage = data.woodcutting.forage;
+  for (const key of ['mossyTrees', 'mushroomTrees', 'mossyBoulders', 'patches'] as const) {
+    const entry = forage[key];
+    if (!itemIds.has(entry.item)) {
+      issue(['woodcutting', 'forage', key, 'item'], `Unknown item "${entry.item}"`);
+    }
+    if (entry.count.min > entry.count.max) {
+      issue(['woodcutting', 'forage', key, 'count'], 'min must not be more than max');
+    }
+  }
 
   const splitting = data.splitting;
   if (!data.recipes.some((recipe) => recipe.id === splitting.recipe)) {

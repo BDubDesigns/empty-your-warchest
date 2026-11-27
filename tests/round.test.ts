@@ -69,7 +69,13 @@ describe('WoodcuttingRound', () => {
     // A chain of 4 trees banks 4² logs.
     expect(banked()).toBe(16);
     expect(round.logs).toBe(16);
-    expect(events).toContainEqual({ type: 'banked', trees: 4, logs: 16 });
+    // No forage rules in this round, so it forages nothing.
+    expect(events).toContainEqual({
+      type: 'banked',
+      trees: 4,
+      logs: 16,
+      forage: { trees: [], boulders: [], patches: [], drops: [] },
+    });
     expect(events.filter((event) => event.type === 'landed')).toHaveLength(4);
     // Each tree the chain knocks over is hit once, before it lands.
     const order = events.flatMap((event) =>
