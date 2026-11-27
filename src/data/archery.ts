@@ -138,10 +138,13 @@ export const archery = {
   looks: {
     eyeHeight: 1.6,
     pitch: 18,
-    distance: 34,
+    distance: 44,
     bowDistance: 1.25,
-    bowSize: 0.62,
-    treeDistance: { min: 46, max: 80 },
+    bowSize: 0.3,
+    reloadSeconds: 0.3,
+    arrowLength: 2.4,
+    birdTilt: 20,
+    treeDistance: { min: 56, max: 95 },
     treeHeight: { min: 7, max: 13 },
     seed: 7,
     tiers: {

@@ -16,6 +16,7 @@ import {
 import { deviceHints } from './deviceHints';
 import { watchForTrouble } from './trouble';
 import type {
+  ArcheryFeel,
   BrewingFeel,
   FiremakingFeel,
   RunnerFeel,
@@ -32,6 +33,7 @@ import {
   type SpearSource,
 } from '../runner/feel';
 import { checkMechanics } from '../stations';
+import { archeryFeel } from '../stations/archery/feel';
 import { brewingFeel } from '../stations/brewing/feel';
 import { checkBrews } from '../stations/brewing/logic/brew';
 import { checkForts } from '../stations/siege/logic/fairness';
@@ -66,6 +68,7 @@ export interface Booted {
     splitting: LiveTuning<SplittingFeel>;
     firemaking: LiveTuning<FiremakingFeel>;
     brewing: LiveTuning<BrewingFeel>;
+    archery: LiveTuning<ArcheryFeel>;
     siege: LiveTuning<SiegeFeel>;
     runner: LiveTuning<RunnerFeel>;
   };
@@ -156,6 +159,7 @@ export async function bootGame(buildLabel: string): Promise<Booted> {
     splitting: splittingFeel(data.splitting.feel, localStorageStore()),
     firemaking: firemakingFeel(data.firemaking.feel, localStorageStore()),
     brewing: brewingFeel(data.brewing.feel, localStorageStore()),
+    archery: archeryFeel(data.archery.feel, localStorageStore()),
     siege: siegeFeel(data.siege.feel, localStorageStore()),
     runner: runnerFeel(data.runner.feel, localStorageStore()),
   };

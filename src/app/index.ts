@@ -14,7 +14,14 @@ import { noteContext } from './trouble';
 import { mechanicFor, type ScreenId as StationScreenId } from '../stations/registry';
 
 type ScreenId =
-  'phaser' | 'three' | 'wood3d' | 'splitting3d' | 'firemaking3d' | 'brewing3d' | 'siege3d';
+  | 'phaser'
+  | 'three'
+  | 'wood3d'
+  | 'splitting3d'
+  | 'firemaking3d'
+  | 'brewing3d'
+  | 'archery3d'
+  | 'siege3d';
 
 /** The shell screen each station screen runs on. */
 const SCREENS: Record<StationScreenId, ScreenId> = {
@@ -23,6 +30,7 @@ const SCREENS: Record<StationScreenId, ScreenId> = {
   splitting3d: 'splitting3d',
   firemaking3d: 'firemaking3d',
   brewing3d: 'brewing3d',
+  archery3d: 'archery3d',
   siege3d: 'siege3d',
 };
 
@@ -57,6 +65,7 @@ const woodcuttingView = () => import('../stations/woodcutting/three/woodcutting3
 const splittingView = () => import('../stations/splitting/three/splitting3dView');
 const firemakingView = () => import('../stations/firemaking/three/firemaking3dView');
 const brewingView = () => import('../stations/brewing/three/brewing3dView');
+const archeryView = () => import('../stations/archery/three/archery3dView');
 const siegeView = () => import('../stations/siege/three/siege3dView');
 const runnerView = () => import('../runner/view');
 const benchScreen = () => import('../bench/view/benchScreen');
@@ -80,6 +89,7 @@ export async function startApp(): Promise<void> {
         booted.feel.splitting,
         booted.feel.firemaking,
         booted.feel.brewing,
+        booted.feel.archery,
         booted.feel.siege,
         booted.feel.runner,
       ],
@@ -131,6 +141,7 @@ export async function startApp(): Promise<void> {
   const splitting3dElement = byId('screen-splitting3d');
   const firemaking3dElement = byId('screen-firemaking3d');
   const brewing3dElement = byId('screen-brewing3d');
+  const archery3dElement = byId('screen-archery3d');
   const siege3dElement = byId('screen-siege3d');
   const backButton = new BackButton(byId('back-button'), () => {
     run(() => navigation.back())();
@@ -235,6 +246,23 @@ export async function startApp(): Promise<void> {
       },
       async () => {
         await (await brewingView()).Brewing3DView.preload();
+      },
+    ),
+    archery3d: lazyScreen(
+      archery3dElement,
+      async () => {
+        const { Archery3DView } = await archeryView();
+        return Archery3DView.create(archery3dElement, {
+          game,
+          logger,
+          feel: feel.archery,
+          graphics,
+          haptics,
+          onLeave: run((): Promise<void> => navigation.back()),
+        });
+      },
+      async () => {
+        await (await archeryView()).Archery3DView.preload();
       },
     ),
     siege3d: lazyScreen(

@@ -20,9 +20,8 @@ import { data, dataWith, editableRawData, testLogger } from './helpers';
 
 const rules = data.archery;
 const feel = rules.feel;
-const fletched = rules.arrows[0];
-const bare = rules.arrows[1];
-if (!fletched || !bare) throw new Error('Two arrow kinds in data');
+const fletched = must(rules.arrows[0]);
+const bare = must(rules.arrows[1]);
 
 /** The value, or a failed test if it's missing. */
 function must<T>(value: T | undefined): T {

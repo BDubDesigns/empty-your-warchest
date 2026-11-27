@@ -1750,7 +1750,10 @@ const archerySchema = z.object({
   starBonus: z.object({ two: nonNegative, three: nonNegative }),
   /**
    * Looks. The camera stands `eyeHeight` up, tilted `pitch` degrees up into the sky; the field is
-   * `distance` away, square on to it; the bow is `bowDistance` in front of it, `bowSize` across.
+   * `distance` away, square on to it; the bow is `bowDistance` in front of it, `bowSize` across,
+   * and a new arrow is on the string `reloadSeconds` after a shot. An arrow in flight is drawn
+   * `arrowLength` field units long; birds are seen `birdTilt` degrees from below, so their wings
+   * show as they beat.
    */
   looks: z.object({
     eyeHeight: positive,
@@ -1758,6 +1761,9 @@ const archerySchema = z.object({
     distance: positive,
     bowDistance: positive,
     bowSize: positive,
+    reloadSeconds: nonNegative,
+    arrowLength: positive,
+    birdTilt: z.number().min(0).max(90),
     /** The forest edge: trees from `treeDistance.min` to `.max` away, `treeHeight` tall. */
     treeDistance: rangeSchema,
     treeHeight: rangeSchema,

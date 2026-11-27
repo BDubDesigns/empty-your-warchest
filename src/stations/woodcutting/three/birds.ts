@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { flapAngle, wingGeometry } from '../../../app/birdWings';
 import type { Rng } from '../../../core';
 
 /**
@@ -27,12 +28,7 @@ export class Birds {
   constructor(seconds: number) {
     this.#seconds = seconds;
     // One wing: a swept triangle from the body out to its tip.
-    this.#wing = new THREE.BufferGeometry();
-    this.#wing.setAttribute(
-      'position',
-      new THREE.Float32BufferAttribute([0, 0, 0.05, 0, 0, -0.04, WING_SPAN / 2, 0, -0.06], 3),
-    );
-    this.#wing.computeVertexNormals();
+    this.#wing = wingGeometry({ span: WING_SPAN / 2, front: 0.05, back: 0.04, sweep: 0.06 });
   }
 
   /**
@@ -85,7 +81,7 @@ export class Birds {
       bird.velocity.y *= Math.exp(-dt * 0.8);
       bird.body.position.addScaledVector(bird.velocity, dt);
       bird.body.lookAt(bird.body.position.clone().add(bird.velocity));
-      const beat = Math.sin(bird.age * bird.flap * Math.PI * 2) * 0.9;
+      const beat = flapAngle(bird.age, bird.flap);
       bird.wings[0].rotation.z = beat;
       bird.wings[1].rotation.z = -beat;
       return true;
