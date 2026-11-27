@@ -5,6 +5,7 @@ import {
   segmentHitsBox,
   insidePolygon,
   GameDataError,
+  castleBreakableKinds,
   castleSchema,
   type GameDataInput,
 } from '../src/data';
@@ -87,31 +88,60 @@ describe('the castle', () => {
     expect(top?.wall).toBe('west');
   });
 
-  it('lays out the parts that can come apart, each named once', () => {
+  it('builds the walls and round towers of chunks, each named once', () => {
     const { parts, walls } = layoutCastle(castle);
     expect(new Set(parts.map((part) => part.id)).size).toBe(parts.length);
     const of = (owner: string, kind: string) =>
       parts.filter((part) => part.owner === owner && part.kind === kind);
+    const rows = castle.wall.chunks.rows;
     for (const wall of walls) {
-      expect(of(wall.id, 'merlon')).toHaveLength(wall.merlons.length);
-      // Its sections cover the stretch it shows, end to end.
-      const sections = of(wall.id, 'wallSection');
-      const covered = sections.reduce((sum, part) => sum + part.size[0], 0);
+      const solid = castle.walls.find((candidate) => candidate.id === wall.id)?.solid;
+      // Columns from tower to tower, each stacked `rows` high, a battlement on each.
+      const covered = wall.columns.reduce((sum, column) => sum + column.length, 0);
       expect(covered).toBeCloseTo(wall.clear[1] - wall.clear[0]);
+      expect(of(wall.id, 'wallChunk')).toHaveLength(solid ? 0 : wall.columns.length * rows);
+      expect(of(wall.id, 'battlement')).toHaveLength(wall.columns.length);
+      expect(wall.merlons).toHaveLength(wall.columns.length * 2);
+      const stacked = of(wall.id, 'wallChunk').reduce((sum, part) => sum + part.size[1], 0);
+      if (!solid) expect(stacked).toBeCloseTo(castle.wall.height * wall.columns.length);
     }
+    const { sectors, rows: towerRows } = castle.towerChunks;
     for (const tower of castle.towers) {
+      const chunked = tower.shape === 'round' && !tower.solid;
+      expect(of(tower.id, 'towerChunk')).toHaveLength(chunked ? sectors * towerRows : 0);
       expect(of(tower.id, 'gate')).toHaveLength(tower.gate ? 1 : 0);
       expect(of(tower.id, 'towerRoof')).toHaveLength(
         tower.shape === 'round' && tower.top === 'roof' ? 1 : 0,
       );
-      if (tower.top === 'battlements') expect(of(tower.id, 'merlon').length).toBeGreaterThan(4);
+      // A solid tower's merlons still come off one by one.
+      if (!chunked && tower.top === 'battlements') {
+        expect(of(tower.id, 'merlon').length).toBeGreaterThan(4);
+      }
     }
     expect(of('keep', 'roof')).toHaveLength(1);
     expect(of(castle.bell.id, 'bell')).toHaveLength(1);
-    // Merlons stand on the parapets, at the wall's or their tower's top.
-    for (const merlon of parts.filter((part) => part.kind === 'merlon')) {
-      expect(merlon.at[1]).toBeGreaterThan(castle.wall.height);
+  });
+
+  it('fixes slits, doorways and ivy to the chunk they are on', () => {
+    const { parts } = layoutCastle(castle);
+    const ids = new Set(parts.map((part) => part.id));
+    const fixed = parts.filter((part) => ['slit', 'doorway', 'vine'].includes(part.kind));
+    expect(fixed.length).toBeGreaterThan(0);
+    for (const part of fixed) {
+      if (part.of !== undefined) expect(ids.has(part.of)).toBe(true);
+      // Only what's on solid stonework has no chunk.
+      const tower = castle.towers.find((candidate) => candidate.id === part.owner);
+      const wall = castle.walls.find((candidate) => candidate.id === part.owner);
+      if (tower && tower.shape === 'round' && !tower.solid) expect(part.of).toBeDefined();
+      if (wall && !wall.solid) expect(part.of).toBeDefined();
     }
+  });
+
+  it('keeps the breakable chunks to a count physics can carry', () => {
+    const { parts } = layoutCastle(castle);
+    const breakable = parts.filter((part) => castleBreakableKinds.includes(part.kind));
+    // Every one becomes a physics body in the siege; the budget phone handled about 200.
+    expect(breakable.length).toBeLessThanOrEqual(250);
   });
 
   it('keeps every vantage point outside the walls', () => {
@@ -229,6 +259,18 @@ describe('a castle that does not hold together', () => {
         ];
       }),
     ).toContain('Walks through a building (point 0)');
+  });
+
+  it('needs columns long enough for their merlons, and square towers solid', () => {
+    expect(problemsWith((c) => (c.wall.chunks.length = 1.5))).toContain(
+      'Wall "front_right"\'s columns are too short for two merlons',
+    );
+    expect(
+      problemsWith((c) => {
+        const gatehouse = c.towers.find((tower) => tower.id === 'gatehouse');
+        if (gatehouse) gatehouse.solid = false;
+      }),
+    ).toContain('A square tower is solid (only round ones come apart yet)');
   });
 
   it('keeps stairs within their wall, and vantage points outside the walls', () => {

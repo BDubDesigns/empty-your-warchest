@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { gpuOf } from '../../app/deviceHints';
 import { capturePointer, releasePointer } from '../../app/pointer';
 import type { EventLogger, GraphicsSettings, GraphicsTier } from '../../core';
-import type { Castle, CastleVantage } from '../../data';
+import { castleBreakableKinds, type Castle, type CastleVantage } from '../../data';
 import { buildCastleScene, type CastleScene } from './castleScene';
 import './castle.css';
 
@@ -210,12 +210,15 @@ class CastlePreview {
       drawCalls: info.calls,
       triangles: info.triangles,
       ...memory,
+      breakable: built.layout.parts.filter((part) => castleBreakableKinds.includes(part.kind))
+        .length,
       loadMs: Number(this.#root.dataset.loadMs ?? 0),
     };
     this.#status.textContent =
       `${this.#tier === 'high' ? 'High' : 'Low'}: ${String(stats.drawCalls)} draws · ` +
       `${(stats.triangles / 1000).toFixed(0)}k tris · ${String(stats.textureMB)} MB textures ` +
-      `(castle ${String(stats.castleTextureMB)} MB, ${(stats.castleTriangles / 1000).toFixed(0)}k tris)`;
+      `(castle ${String(stats.castleTextureMB)} MB, ${(stats.castleTriangles / 1000).toFixed(0)}k tris, ` +
+      `${String(stats.breakable)} parts that break)`;
     Object.assign(this.#root.dataset, {
       state: 'ready',
       drawCalls: String(stats.drawCalls),

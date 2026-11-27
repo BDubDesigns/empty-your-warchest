@@ -198,3 +198,64 @@ export function bell(size: number): THREE.BufferGeometry {
   ].map(([u = 0, v = 0]) => new THREE.Vector2(u * r, v * h));
   return tidy(new THREE.LatheGeometry(outline, 14));
 }
+
+/**
+ * A wedge of a round tower: between `inner` (0 for a solid one) and `outer` radius, from angle 0
+ * to `angle` round the y axis (as three.js turns: angle 0 faces +z), `height` high from `y`, with
+ * `sides` sides round its curve. Its curved faces are textured round by the distance round (like
+ * `drum`), its flat ones across x and z or along their own width.
+ */
+export function wedge(
+  inner: number,
+  outer: number,
+  y: number,
+  height: number,
+  angle: number,
+  sides: number,
+  skin: Skin,
+): THREE.BufferGeometry {
+  // The outline across (x, −z), extruded up: rotated so the extrusion runs along +y.
+  const shape = new THREE.Shape();
+  const at = (radius: number, turn: number) =>
+    new THREE.Vector2(Math.sin(turn) * radius, -Math.cos(turn) * radius);
+  const outerPoints = Array.from({ length: sides + 1 }, (_, i) => at(outer, (angle * i) / sides));
+  const innerPoints =
+    inner > 0
+      ? Array.from({ length: sides + 1 }, (_, i) => at(inner, (angle * (sides - i)) / sides))
+      : [new THREE.Vector2(0, 0)];
+  const [first, ...rest] = [...outerPoints, ...innerPoints];
+  if (!first) throw new Error('A wedge needs points');
+  shape.moveTo(first.x, first.y);
+  for (const point of rest) shape.lineTo(point.x, point.y);
+  shape.closePath();
+  const extruded = new THREE.ExtrudeGeometry(shape, { depth: height, bevelEnabled: false });
+  const geometry = tidy(extruded);
+  extruded.dispose();
+  geometry.rotateX(-Math.PI / 2);
+  geometry.translate(0, y, 0);
+  const position = geometry.getAttribute('position');
+  const normal = geometry.getAttribute('normal');
+  const uv = geometry.getAttribute('uv');
+  for (let i = 0; i < position.count; i++) {
+    const px = position.getX(i);
+    const py = position.getY(i);
+    const pz = position.getZ(i);
+    const nx = normal.getX(i);
+    const ny = normal.getY(i);
+    const nz = normal.getZ(i);
+    const v = skin.band
+      ? skin.band[1] - ((py - y) / height) * (skin.band[1] - skin.band[0])
+      : -py / skin.tile;
+    if (Math.abs(ny) > 0.5) {
+      uv.setXY(i, px / skin.tile, skin.band ? (skin.band[0] + skin.band[1]) / 2 : pz / skin.tile);
+      continue;
+    }
+    const radius = Math.hypot(px, pz);
+    // Curved (its normal points out from the axis, or in) or a flat cut face along a radius.
+    const radial = radius > 1e-6 ? Math.abs(nx * px + nz * pz) / radius : 0;
+    const round = radial > 0.7 ? Math.atan2(px, pz) * radius : radius;
+    uv.setXY(i, round / skin.tile, v);
+  }
+  uv.needsUpdate = true;
+  return geometry;
+}

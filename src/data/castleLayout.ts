@@ -1,3 +1,4 @@
+import { Rng } from '../core/rng';
 import type { Castle, CastleBuilding, CastleSide, CastleTower } from './schema';
 
 // The castle laid out from its data: where each wall runs and where it shows between its towers,
@@ -28,7 +29,13 @@ export interface LaidWall {
   body: [number, number];
   /** The walk: its middle line (at the wall's height) and width, between the towers. */
   walk: { from: Vec3; to: Vec3; width: number };
-  /** Each merlon's middle, along the wall. */
+  /**
+   * The columns it comes apart in, between its towers: each one's middle (along it) and length.
+   * Each column is `wall.chunks.rows` chunks high, with a battlement (a stretch of parapet and two
+   * merlons) on top.
+   */
+  columns: { at: number; length: number }[];
+  /** Each merlon's middle, along the wall: a quarter of a column either side of its middle. */
   merlons: number[];
 }
 
@@ -76,31 +83,67 @@ export interface CaptainWindow {
 }
 
 /**
- * The castle's parts that can come apart (the siege will break them): each merlon on a wall or a
- * tower, each gate's leaves, each tower's tile roof, each building's roof, the bell on its frame,
- * and each wall in sections. Every one is drawn on its own (merlons and tower roofs as instances of
- * their shape), so the siege can turn any of them into a physics body.
+ * The castle's parts that can come apart (the siege will break them; nothing breaks yet). The
+ * curtain walls and round towers are built of chunks: each wall in columns of stacked blocks with
+ * a battlement (parapet and two merlons) on top, each tower in rows of wedges round it, its top row
+ * carrying its parapet and merlons. Then each loose merlon (on a solid tower), each gate's leaves,
+ * each tower's tile roof, each building's roof, and the bell on its frame. Slits, doorways and ivy
+ * are fixed to the chunk they're on (`of`) and go with it. What's `solid` in the data (the
+ * gatehouse; the keep, always) stays whole. Every part is drawn on its own: the parts of a shape as
+ * instances of it, so many cost one draw.
  */
 export const castlePartKinds = [
+  'wallChunk',
+  'battlement',
+  'towerChunk',
   'merlon',
   'gate',
   'towerRoof',
   'roof',
   'bell',
-  'wallSection',
+  'slit',
+  'doorway',
+  'vine',
 ] as const;
 export type CastlePartKind = (typeof castlePartKinds)[number];
+/** The kinds that are pieces in their own right (the rest are fixed to one of these). */
+export const castleBreakableKinds: readonly CastlePartKind[] = [
+  'wallChunk',
+  'battlement',
+  'towerChunk',
+  'merlon',
+  'gate',
+  'towerRoof',
+  'roof',
+  'bell',
+];
 
 export interface CastlePart {
-  /** Unique: its owner's id, its kind and its number ("north.merlon.3"). */
+  /** Unique: its owner's id, its kind and its number ("north.wallChunk.3"). */
   id: string;
   kind: CastlePartKind;
   /** The wall, tower, building or bell it belongs to. */
   owner: string;
-  /** Its foot's middle (a box standing on y), turned `turn` radians about y; its box's size. */
+  /**
+   * Where it stands: its foot's middle, turned `turn` radians about y (a tower's wedge: the
+   * tower's middle at the row's foot, turned to where the wedge starts). Its size: a box's (along,
+   * up, across); a wedge's (radius, height, angle).
+   */
   at: Vec3;
   turn: number;
   size: Vec3;
+  /**
+   * Parts drawn alike share a shape: one instanced mesh draws every part of a shape. A wall's
+   * chunks and battlements are one shape whatever their length (each stretched along to its own).
+   */
+  shape: string;
+  /** A chunk's row from the ground (0 up), and how many rows its wall or tower has. */
+  row?: number;
+  rows?: number;
+  /** For a slit, doorway or vine: the chunk it's fixed to (none if that's solid). */
+  of?: string;
+  /** For a vine: the kit piece. */
+  piece?: string;
 }
 
 export interface CastleLayout {
@@ -328,7 +371,7 @@ function layWall(castle: Castle, index: number, outline: readonly Vec2[]): LaidW
   const side: Vec2 = [dir[1], -dir[0]];
   const middle = along(from.at, dir, length / 2);
   const out: Vec2 = insidePolygon(along(middle, side, 0.5), outline) ? [-side[0], -side[1]] : side;
-  const { thickness, parapet, plinth, merlon, height } = castle.wall;
+  const { thickness, parapet, plinth, height } = castle.wall;
   const half = thickness / 2 + plinth.out;
   const start = towerReach(from, dir, half);
   const end = towerReach(to, [-dir[0], -dir[1]], half);
@@ -341,10 +384,12 @@ function layWall(castle: Castle, index: number, outline: readonly Vec2[]): LaidW
     return [x, height, z];
   };
   const span = clear[1] - clear[0];
-  const pitch = merlon.width + merlon.gap;
-  const count = Math.max(0, Math.floor((span + merlon.gap) / pitch));
-  const used = count * merlon.width + Math.max(0, count - 1) * merlon.gap;
-  const first = clear[0] + (span - used) / 2 + merlon.width / 2;
+  const count = Math.max(1, Math.round(span / castle.wall.chunks.length));
+  const columnLength = span / count;
+  const columns = Array.from({ length: count }, (_, i) => ({
+    at: clear[0] + columnLength * (i + 0.5),
+    length: columnLength,
+  }));
   return {
     id: wall.id,
     from: wall.from,
@@ -356,7 +401,11 @@ function layWall(castle: Castle, index: number, outline: readonly Vec2[]): LaidW
     clear,
     body: [start.body, length - end.body],
     walk: { from: walkPoint(clear[0]), to: walkPoint(clear[1]), width },
-    merlons: Array.from({ length: count }, (_, i) => first + i * pitch),
+    columns,
+    merlons: columns.flatMap((column) => [
+      column.at - column.length / 4,
+      column.at + column.length / 4,
+    ]),
   };
 }
 
@@ -506,49 +555,161 @@ export function layoutCastle(castle: Castle): CastleLayout {
   };
 }
 
+/** A wedge's angle round its tower, and its rows' height, for a round tower that comes apart. */
+function towerChunking(castle: Castle, tower: CastleTower): { angle: number; row: number } {
+  return {
+    angle: (Math.PI * 2) / castle.towerChunks.sectors,
+    row: tower.height / castle.towerChunks.rows,
+  };
+}
+
+const round3 = (value: number) => value.toFixed(3);
+
+/** The middle of the towers' ring. */
+export function middleOf(castle: Castle): Vec2 {
+  const count = castle.towers.length;
+  return castle.towers.reduce<Vec2>(
+    (sum, tower) => [sum[0] + tower.at[0] / count, sum[1] + tower.at[1] / count],
+    [0, 0],
+  );
+}
+
 /** The parts that can come apart, laid out (see `CastlePart`). */
 function layParts(castle: Castle, walls: LaidWall[], buildings: LaidBuilding[]): CastlePart[] {
   const parts: CastlePart[] = [];
   const { wall: w, details } = castle;
-  const merlonSize: Vec3 = [w.merlon.width, w.merlon.height, w.parapet.thickness];
-  const merlonTop = (y: number) => y + w.parapet.height;
-  const add = (owner: string, kind: CastlePartKind, at: Vec3, turn: number, size: Vec3) => {
-    const number = parts.filter((part) => part.owner === owner && part.kind === kind).length;
-    parts.push({ id: `${owner}.${kind}.${String(number)}`, kind, owner, at, turn, size });
+  const counts = new Map<string, number>();
+  const add = (part: Omit<CastlePart, 'id'>): void => {
+    const key = `${part.owner}.${part.kind}`;
+    const number = counts.get(key) ?? 0;
+    counts.set(key, number + 1);
+    parts.push({ id: `${key}.${String(number)}`, ...part });
   };
+  const [cx, cz] = middleOf(castle);
+  const solidWall = (id: string) =>
+    castle.walls.find((candidate) => candidate.id === id)?.solid ?? false;
+
+  // Walls: columns of stacked chunks, a battlement on each.
+  const parapetAt = w.thickness / 2 - w.parapet.thickness / 2;
+  const rowHeight = w.height / w.chunks.rows;
   for (const wall of walls) {
     const turn = Math.atan2(wall.out[0], wall.out[1]);
-    const parapetAt = w.thickness / 2 - w.parapet.thickness / 2;
     const point = (distance: number, sideways: number, y: number): Vec3 => {
       const [x, z] = along(along(wall.origin, wall.dir, distance), wall.out, sideways);
       return [x, y, z];
     };
-    for (const distance of wall.merlons) {
-      add(wall.id, 'merlon', point(distance, parapetAt, merlonTop(w.height)), turn, merlonSize);
-    }
-    // In sections about `w.section` long, along where it shows.
-    const span = wall.clear[1] - wall.clear[0];
-    const count = Math.max(1, Math.round(span / w.section));
-    for (let i = 0; i < count; i++) {
-      const middle = wall.clear[0] + (span / count) * (i + 0.5);
-      add(wall.id, 'wallSection', point(middle, 0, 0), turn, [span / count, w.height, w.thickness]);
+    const rows = w.chunks.rows;
+    for (const column of wall.columns) {
+      if (!solidWall(wall.id)) {
+        for (let row = 0; row < rows; row++) {
+          add({
+            kind: 'wallChunk',
+            owner: wall.id,
+            at: point(column.at, 0, row * rowHeight),
+            turn,
+            size: [column.length, rowHeight, w.thickness],
+            shape: `wall:${round3(rowHeight)}:${String(row)}/${String(rows)}`,
+            row,
+            rows,
+          });
+        }
+      }
+      add({
+        kind: 'battlement',
+        owner: wall.id,
+        at: point(column.at, parapetAt, w.height),
+        turn,
+        size: [column.length, w.parapet.height + w.merlon.height, w.parapet.thickness],
+        shape: 'battlement',
+      });
     }
   }
+  /** The wall chunk at `distance` along a wall and `y` up, if the wall comes apart. */
+  const wallChunkAt = (wall: LaidWall, distance: number, y: number): string | undefined => {
+    if (solidWall(wall.id)) return undefined;
+    const column = wall.columns.findIndex(
+      (candidate) => Math.abs(distance - candidate.at) <= candidate.length / 2 + 1e-9,
+    );
+    if (column < 0) return undefined;
+    const row = Math.max(0, Math.min(w.chunks.rows - 1, Math.floor(y / rowHeight)));
+    return `${wall.id}.wallChunk.${String(column * w.chunks.rows + row)}`;
+  };
+  /** The tower wedge at `angle` round a tower and `y` up, if the tower comes apart. */
+  const towerChunkAt = (tower: CastleTower, angle: number, y: number): string | undefined => {
+    if (tower.solid || tower.shape !== 'round') return undefined;
+    const chunking = towerChunking(castle, tower);
+    const turn = ((angle % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
+    const sector = Math.min(castle.towerChunks.sectors - 1, Math.floor(turn / chunking.angle));
+    const row = Math.max(0, Math.min(castle.towerChunks.rows - 1, Math.floor(y / chunking.row)));
+    return `${tower.id}.towerChunk.${String(row * castle.towerChunks.sectors + sector)}`;
+  };
+
   for (const tower of castle.towers) {
     const [x, z] = tower.at;
     const h = tower.height;
+    const top = h + w.parapet.height;
     if (tower.shape === 'round') {
       const rim = tower.size + details.corbel.out;
-      if (tower.top === 'roof') {
-        const across = (rim + castle.towerRoof.overhang) * 2;
-        add(tower.id, 'towerRoof', [x, merlonTop(h), z], 0, [across, across, across]);
-      } else {
+      if (!tower.solid) {
+        const { angle, row: height } = towerChunking(castle, tower);
+        const rows = castle.towerChunks.rows;
+        for (let row = 0; row < rows; row++) {
+          for (let sector = 0; sector < castle.towerChunks.sectors; sector++) {
+            add({
+              kind: 'towerChunk',
+              owner: tower.id,
+              at: [x, row * height, z],
+              turn: sector * angle,
+              size: [tower.size, height, angle],
+              shape: `tower:${round3(tower.size)}:${round3(h)}:${tower.top}:${String(row)}/${String(rows)}`,
+              row,
+              rows,
+            });
+          }
+        }
+      } else if (tower.top === 'battlements') {
+        // A solid tower's merlons still come off, one by one.
         const ring = rim - w.parapet.thickness / 2;
         const count = Math.floor((Math.PI * 2 * ring) / (w.merlon.width + w.merlon.gap));
         for (let i = 0; i < count; i++) {
           const angle = (i / count) * Math.PI * 2;
-          const at: Vec3 = [x + Math.sin(angle) * ring, merlonTop(h), z + Math.cos(angle) * ring];
-          add(tower.id, 'merlon', at, angle, merlonSize);
+          add({
+            kind: 'merlon',
+            owner: tower.id,
+            at: [x + Math.sin(angle) * ring, top, z + Math.cos(angle) * ring],
+            turn: angle,
+            size: [w.merlon.width, w.merlon.height, w.parapet.thickness],
+            shape: 'merlon',
+          });
+        }
+      }
+      if (tower.top === 'roof') {
+        const across = (rim + castle.towerRoof.overhang) * 2;
+        add({
+          kind: 'towerRoof',
+          owner: tower.id,
+          at: [x, top, z],
+          turn: 0,
+          size: [across, across, across],
+          shape: 'towerRoof',
+        });
+      }
+      // Arrow slits looking out, away from the courtyard.
+      const away = Math.atan2(x - cx, z - cz);
+      for (const offset of [-0.7, 0.7]) {
+        for (const y of [w.height * 0.45, (w.height + h) / 2]) {
+          const angle = away + offset;
+          const reach = tower.size - details.slit[2] / 2 + 0.04;
+          const of = towerChunkAt(tower, angle, y);
+          add({
+            kind: 'slit',
+            owner: tower.id,
+            at: [x + Math.sin(angle) * reach, y, z + Math.cos(angle) * reach],
+            turn: angle,
+            size: details.slit,
+            shape: 'slit',
+            ...(of ? { of } : {}),
+          });
         }
       }
     } else {
@@ -570,36 +731,174 @@ function layParts(castle: Castle, walls: LaidWall[], buildings: LaidBuilding[]):
         const across: Vec2 = [Math.cos(edge.turn), -Math.sin(edge.turn)];
         for (let i = 0; i < count; i++) {
           const offset = -used / 2 + w.merlon.width / 2 + i * pitch;
-          const at: Vec3 = [
-            x + edge.out[0] * reach + across[0] * offset,
-            merlonTop(h),
-            z + edge.out[1] * reach + across[1] * offset,
-          ];
-          add(tower.id, 'merlon', at, edge.turn, merlonSize);
+          add({
+            kind: 'merlon',
+            owner: tower.id,
+            at: [
+              x + edge.out[0] * reach + across[0] * offset,
+              top,
+              z + edge.out[1] * reach + across[1] * offset,
+            ],
+            turn: edge.turn,
+            size: [w.merlon.width, w.merlon.height, w.parapet.thickness],
+            shape: 'merlon',
+          });
+        }
+      }
+      // Arrow slits on the face that looks out, either side of its middle.
+      const outTurn =
+        Math.abs(z - cz) >= Math.abs(x - cx)
+          ? z > cz
+            ? 0
+            : Math.PI
+          : x > cx
+            ? Math.PI / 2
+            : -Math.PI / 2;
+      const facing: Vec2 = [Math.sin(outTurn), Math.cos(outTurn)];
+      const across: Vec2 = [Math.cos(outTurn), -Math.sin(outTurn)];
+      const depthOut = Math.abs(facing[1]) > 0.5 ? sz : sx;
+      const reach = (Math.abs(facing[1]) > 0.5 ? sx : sz) * 0.55;
+      for (const sideways of [-reach, reach]) {
+        for (const y of [w.height * 0.45, (w.height + h) / 2]) {
+          const out = depthOut - details.slit[2] / 2 + 0.04;
+          add({
+            kind: 'slit',
+            owner: tower.id,
+            at: [
+              x + facing[0] * out + across[0] * sideways,
+              y,
+              z + facing[1] * out + across[1] * sideways,
+            ],
+            turn: outTurn,
+            size: details.slit,
+            shape: 'slit',
+          });
         }
       }
       if (tower.gate) {
         const { width, height } = tower.gate;
-        add(tower.id, 'gate', [x, 0, z + sz - details.gateSetBack], 0, [width, height, 0.16]);
+        add({
+          kind: 'gate',
+          owner: tower.id,
+          at: [x, 0, z + sz - details.gateSetBack],
+          turn: 0,
+          size: [width, height, 0.16],
+          shape: 'gate',
+        });
       }
     }
+    // A dark doorway where each wall's walk meets the tower.
+    const joined = walls.filter((wall) => wall.from === tower.id || wall.to === tower.id);
+    for (const wall of joined) {
+      const toward: Vec2 = wall.from === tower.id ? wall.dir : [-wall.dir[0], -wall.dir[1]];
+      const lateral = -w.parapet.thickness / 2;
+      let at: Vec3;
+      let turn: number;
+      if (tower.shape === 'round') {
+        const r = tower.size;
+        const reach = Math.sqrt(Math.max(r * r - lateral * lateral, 0));
+        turn = Math.atan2(
+          toward[0] * reach + wall.out[0] * lateral,
+          toward[1] * reach + wall.out[1] * lateral,
+        );
+        at = [x + Math.sin(turn) * (r - 0.08), w.height, z + Math.cos(turn) * (r - 0.08)];
+      } else {
+        const face = Math.abs(toward[0]) > 0.5 ? tower.size : (tower.depth ?? tower.size);
+        at = [
+          x + toward[0] * (face - 0.08) + wall.out[0] * lateral,
+          w.height,
+          z + toward[1] * (face - 0.08) + wall.out[1] * lateral,
+        ];
+        turn = Math.atan2(toward[0], toward[1]);
+      }
+      const of = towerChunkAt(tower, turn, w.height + 0.01);
+      add({
+        kind: 'doorway',
+        owner: tower.id,
+        at,
+        turn,
+        size: [details.doorway[0], details.doorway[1], 0.24],
+        shape: 'doorway',
+        ...(of ? { of } : {}),
+      });
+    }
   }
+
   for (const building of buildings) {
     const width = building.max[0] - building.min[0] + castle.roof.overhang * 2;
     const depth = building.max[1] - building.min[1] + castle.roof.overhang * 2;
-    const at: Vec3 = [
-      (building.min[0] + building.max[0]) / 2,
-      building.height,
-      (building.min[1] + building.max[1]) / 2,
-    ];
-    add(building.id, 'roof', at, 0, [width, Math.min(width, depth) / 2, depth]);
+    add({
+      kind: 'roof',
+      owner: building.id,
+      at: [
+        (building.min[0] + building.max[0]) / 2,
+        building.height,
+        (building.min[1] + building.max[1]) / 2,
+      ],
+      turn: 0,
+      size: [width, Math.min(width, depth) / 2, depth],
+      shape: `roof:${building.id}`,
+    });
   }
   const bell = castle.bell;
-  add(bell.id, 'bell', [bell.at[0], 0, bell.at[1]], bell.turn * DEG, [
-    bell.size[0],
-    bell.size[1],
-    1,
-  ]);
+  add({
+    kind: 'bell',
+    owner: bell.id,
+    at: [bell.at[0], 0, bell.at[1]],
+    turn: bell.turn * DEG,
+    size: [bell.size[0], bell.size[1], 1],
+    shape: 'bell',
+  });
+
+  // Ivy on the outer faces, scattered by a seeded draw so it's the same every time.
+  const rng = new Rng(castle.vines.seed);
+  const faces: ({ wall: LaidWall } | { tower: CastleTower })[] = [
+    ...walls.map((wall) => ({ wall })),
+    ...castle.towers.filter((tower) => tower.shape === 'round').map((tower) => ({ tower })),
+  ];
+  for (let i = 0; i < castle.vines.count; i++) {
+    const face = faces[Math.floor(rng.next() * faces.length)];
+    const piece = castle.vines.pieces[Math.floor(rng.next() * castle.vines.pieces.length)];
+    const node = piece ? castle.pieces[piece]?.[0]?.node : undefined;
+    if (!face || !node) continue;
+    const y = w.height - w.course.height - rng.range(0.1, 1.4);
+    if ('wall' in face) {
+      const { wall } = face;
+      const distance = rng.range(wall.clear[0] + 1, wall.clear[1] - 1);
+      const [vx, vz] = along(
+        along(wall.origin, wall.dir, distance),
+        wall.out,
+        w.thickness / 2 + 0.02,
+      );
+      const of = wallChunkAt(wall, distance, y);
+      add({
+        kind: 'vine',
+        owner: wall.id,
+        at: [vx, y, vz],
+        turn: Math.atan2(wall.out[0], wall.out[1]),
+        size: [1, 1, 1],
+        shape: `vine:${node}`,
+        piece: node,
+        ...(of ? { of } : {}),
+      });
+    } else {
+      const { tower } = face;
+      const angle = Math.atan2(tower.at[0] - cx, tower.at[1] - cz) + rng.range(-1.2, 1.2);
+      const r = tower.size + 0.02;
+      const vy = y + rng.range(0, 2);
+      const of = towerChunkAt(tower, angle, vy);
+      add({
+        kind: 'vine',
+        owner: tower.id,
+        at: [tower.at[0] + Math.sin(angle) * r, vy, tower.at[1] + Math.cos(angle) * r],
+        turn: angle,
+        size: [1, 1, 1],
+        shape: `vine:${node}`,
+        piece: node,
+        ...(of ? { of } : {}),
+      });
+    }
+  }
   return parts;
 }
 
@@ -650,6 +949,9 @@ export function castleProblems(castle: Castle): CastleProblem[] {
       if (tower.gate.height >= tower.height) {
         issue(['towers', index, 'gate'], 'The gate must be lower than its tower');
       }
+    }
+    if (tower.shape === 'square' && !tower.solid) {
+      issue(['towers', index, 'solid'], 'A square tower is solid (only round ones come apart yet)');
     }
     if (tower.height <= castle.wall.height + castle.wall.parapet.height) {
       issue(['towers', index, 'height'], 'A tower must stand above the wall and its parapet');
@@ -711,6 +1013,12 @@ export function castleProblems(castle: Castle): CastleProblem[] {
 
   // Walls only meet at their towers.
   walls.forEach((wall, index) => {
+    if (wall.columns.some((column) => column.length / 2 <= castle.wall.merlon.width)) {
+      issue(
+        ['wall', 'chunks', 'length'],
+        `Wall "${wall.id}"'s columns are too short for two merlons`,
+      );
+    }
     if (wall.clear[1] - wall.clear[0] < castle.grid) {
       issue(['walls', index], `Wall "${wall.id}" barely shows between its towers`);
     }

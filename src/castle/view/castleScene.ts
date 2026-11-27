@@ -9,6 +9,7 @@ import { Rng } from '../../core';
 import type { GraphicsTier } from '../../core/graphics';
 import {
   layoutCastle,
+  middleOf,
   segmentDistance,
   type Castle,
   type CastleLayout,
@@ -18,14 +19,24 @@ import {
   type LaidWall,
   type Vec2,
 } from '../../data';
-import { archPath, bell, block, drum, slab, stepsShape, tidy, type Skin } from './stonework';
+import {
+  battlement,
+  merlon as merlonShape,
+  solidTower,
+  towerWedge,
+  wallSlice,
+  type Shape,
+} from './chunks';
+import { archPath, bell, block, slab, stepsShape, tidy, type Skin } from './stonework';
 
 // The castle in three.js, built from its layout (src/data/castle.ts through castleLayout.ts): the
 // kit's pieces where the layout puts them, and the stonework the kits don't have (walls, towers,
-// the gatehouse, merlons, stairs) drawn in code in the kits' own materials. Everything that stands
-// still is merged into one mesh per material, so the whole castle is about fifteen draws. The
-// scene round it (sky, haze, sun, meadow, road, trees) is the siege's look. Only looks: the layout
-// says where everything is, and this draws it there.
+// the gatehouse, merlons, stairs) drawn in code in the kits' own materials. What never comes apart
+// (the keep, the gatehouse, the stairs, the props) is merged into one mesh per material. What can
+// (the layout's parts: wall and tower chunks, battlements, merlons, roofs, the gate, the bell) is
+// drawn on its own, the parts of a shape as instances of it, so the siege can hide any one and put
+// a physics body in its place. The scene round it (sky, haze, sun, meadow, road, trees) is the
+// siege's look. Only looks: the layout says where everything is, and this draws it there.
 
 /** A merged mesh's worth: the shapes in one material. */
 class Batch {
@@ -71,7 +82,7 @@ export type CastlePartLook =
 export interface CastleScene {
   scene: THREE.Scene;
   layout: CastleLayout;
-  /** The parts that can come apart, by their ids in `layout.parts` (wall sections aren't: they're merged). */
+  /** How each of the layout's parts is drawn, by its id. */
   parts: Map<string, CastlePartLook>;
   /** The castle's merged meshes (not the ground or trees). */
   castle: THREE.Group;
@@ -91,6 +102,34 @@ export interface CastleScene {
 }
 
 const UP = new THREE.Vector3(0, 1, 0);
+/** Things fixed to the stonework, drawn without shadows. */
+const decorKinds = new Set<CastlePartKind>(['slit', 'doorway', 'vine']);
+
+/** A shape's meshes merged by material: one instanced mesh (one draw) per material. */
+function byMaterial(shape: Shape): Shape {
+  const groups = new Map<THREE.Material, THREE.BufferGeometry[]>();
+  for (const { material, geometry } of shape) {
+    groups.set(material, [...(groups.get(material) ?? []), geometry]);
+  }
+  return [...groups].map(([material, geometries]) => {
+    const merged = mergeGeometries(geometries) as THREE.BufferGeometry | null;
+    if (!merged) throw new Error(`A castle shape's pieces in ${material.name} don't merge`);
+    for (const geometry of geometries) geometry.dispose();
+    return { material, geometry: merged };
+  });
+}
+
+/** The parts drawn as instances of their shape; the rest (gates, roofs, the bell) on their own. */
+const instancedKinds = new Set<CastlePartKind>([
+  'wallChunk',
+  'battlement',
+  'towerChunk',
+  'merlon',
+  'towerRoof',
+  'slit',
+  'doorway',
+  'vine',
+]);
 const DEG = Math.PI / 180;
 
 const textureKeys = ['map', 'alphaMap'] as const;
@@ -262,158 +301,48 @@ export async function buildCastleScene(
   const skinOf = (key: keyof Castle['skins']) => skins[key].skin;
 
   const { wall: w, details } = castle;
-  const {
-    towerSides: TOWER_SIDES,
-    corbel: CORBEL,
-    cap: CAP,
-    slit: SLIT,
-    doorway: DOORWAY,
-  } = details;
-  const [cx, cz] = layout.outline.reduce<Vec2>(
-    (sum, point) => [
-      sum[0] + point[0] / layout.outline.length,
-      sum[1] + point[1] / layout.outline.length,
-    ],
-    [0, 0],
-  );
+  const { corbel: CORBEL, cap: CAP } = details;
+  const [cx, cz] = middleOf(castle);
 
-  // Curtain walls.
+  // Curtain walls: the stretches run into the towers are merged (they never come apart), and a
+  // solid wall's whole length; the rest is chunks, drawn below as instances.
+  const stoneSkins = { skins };
+  const merge = (shape: Shape) => {
+    for (const { material, geometry } of shape) target.add(material, geometry);
+  };
   for (const wall of layout.walls) {
-    const [b0, b1] = wall.body;
-    const [c0, c1] = wall.clear;
-    const bodyMid = (b0 + b1) / 2;
-    const bodyLength = b1 - b0;
-    const clearMid = (c0 + c1) / 2;
-    const clearLength = c1 - c0;
+    const solid = castle.walls.find((candidate) => candidate.id === wall.id)?.solid ?? false;
+    const stretches: [number, number][] = solid
+      ? [[wall.body[0], wall.body[1]]]
+      : [
+          [wall.body[0], wall.clear[0]],
+          [wall.clear[1], wall.body[1]],
+        ];
     const parapetAt = w.thickness / 2 - w.parapet.thickness / 2;
-    stone(
-      'wall',
-      block([bodyLength, w.height, w.thickness], onWall(wall, bodyMid, 0, 0), skinOf('wall')),
-    );
-    const footWidth = w.thickness + w.plinth.out * 2;
-    stone(
-      'wall',
-      block([bodyLength, w.plinth.height, footWidth], onWall(wall, bodyMid, 0, 0), skinOf('wall')),
-    );
-    stone(
-      'trim',
-      block(
-        [bodyLength, CAP.height * 1.5, footWidth + CAP.out],
-        onWall(wall, bodyMid, 0, w.plinth.height),
-        skinOf('trim'),
-      ),
-    );
-    stone(
-      'trim',
-      block(
-        [bodyLength, w.course.height, w.thickness + w.course.out * 2],
-        onWall(wall, bodyMid, 0, w.height - w.course.height),
-        skinOf('trim'),
-      ),
-    );
-    stone(
-      'walk',
-      block(
-        [clearLength, 0.04, wall.walk.width],
-        onWall(wall, clearMid, -w.parapet.thickness / 2, w.height),
-        skinOf('walk'),
-      ),
-    );
-    stone(
-      'wall',
-      block(
-        [bodyLength, w.parapet.height, w.parapet.thickness],
-        onWall(wall, bodyMid, parapetAt, w.height),
-        skinOf('wall'),
-      ),
-    );
+    for (const [a, b] of stretches) {
+      if (b - a <= 0) continue;
+      merge(wallSlice(castle, stoneSkins, b - a, 0, w.height, onWall(wall, (a + b) / 2, 0, 0)));
+      // The parapet into the towers (a battlement stands on each column between them).
+      if (!solid) {
+        stone(
+          'wall',
+          block(
+            [b - a, w.parapet.height, w.parapet.thickness],
+            onWall(wall, (a + b) / 2, parapetAt, w.height),
+            skinOf('wall'),
+          ),
+        );
+      }
+    }
   }
 
   // Towers and the gatehouse.
   for (const tower of castle.towers) {
     const [x, z] = tower.at;
     const h = tower.height;
-    // Arrow slits look out, away from the courtyard; doorways open onto each wall's walk.
-    const away = Math.atan2(x - cx, z - cz);
-    const slitHeights = [w.height * 0.45, (w.height + h) / 2];
-    const joined = layout.walls.filter((wall) => wall.from === tower.id || wall.to === tower.id);
     if (tower.shape === 'round') {
-      const r = tower.size;
-      const tower_ = skinOf('tower');
-      stone('tower', drum(x, z, 0, r, h, TOWER_SIDES, tower_));
-      stone('tower', drum(x, z, 0, r + w.plinth.out, w.plinth.height, TOWER_SIDES, tower_));
-      stone(
-        'trim',
-        drum(
-          x,
-          z,
-          w.plinth.height,
-          r + w.plinth.out + CAP.out,
-          CAP.height * 1.5,
-          TOWER_SIDES,
-          skinOf('trim'),
-        ),
-      );
-      stone(
-        'trim',
-        drum(
-          x,
-          z,
-          w.height - w.course.height,
-          r + w.course.out,
-          w.course.height,
-          TOWER_SIDES,
-          skinOf('trim'),
-        ),
-      );
-      const rim = r + CORBEL.out;
-      stone('trim', drum(x, z, h - CORBEL.height, rim, CORBEL.height, TOWER_SIDES, skinOf('trim')));
-      if (tower.top === 'roof') {
-        stone('tower', drum(x, z, h, rim, w.parapet.height, TOWER_SIDES, tower_));
-      } else {
-        const ring = { tile: tower_.tile };
-        stone('tower', drum(x, z, h, rim, w.parapet.height, TOWER_SIDES, ring, { open: true }));
-        stone(
-          'tower',
-          drum(x, z, h, rim - w.parapet.thickness, w.parapet.height, TOWER_SIDES, ring, {
-            open: true,
-            inside: true,
-          }),
-        );
-        const top = new THREE.RingGeometry(rim - w.parapet.thickness, rim, TOWER_SIDES, 1);
-        top.rotateX(-Math.PI / 2);
-        top.translate(x, h + w.parapet.height, z);
-        stone('cap', tidyTop(top, skinOf('cap')));
-        const floor = new THREE.CircleGeometry(rim - w.parapet.thickness, TOWER_SIDES);
-        floor.rotateX(-Math.PI / 2);
-        floor.translate(x, h + 0.02, z);
-        stone('walk', tidyTop(floor, skinOf('walk')));
-      }
-      for (const offset of [-0.7, 0.7]) {
-        for (const y of slitHeights) {
-          const angle = away + offset;
-          const at: [number, number, number] = [
-            x + Math.sin(angle) * (r - SLIT[2] / 2 + 0.04),
-            y,
-            z + Math.cos(angle) * (r - SLIT[2] / 2 + 0.04),
-          ];
-          target.add(own.dark, block(SLIT, placed(at, angle), { tile: 1 }));
-        }
-      }
-      for (const wall of joined) {
-        // Where the walk's middle line meets the tower's side.
-        const toward = wall.from === tower.id ? wall.dir : ([-wall.dir[0], -wall.dir[1]] as Vec2);
-        const lateral = -w.parapet.thickness / 2;
-        const reach = Math.sqrt(Math.max(r * r - lateral * lateral, 0));
-        const px = x + toward[0] * reach + wall.out[0] * lateral;
-        const pz = z + toward[1] * reach + wall.out[1] * lateral;
-        const angle = Math.atan2(px - x, pz - z);
-        const at: [number, number, number] = [
-          x + Math.sin(angle) * (r - 0.08),
-          w.height,
-          z + Math.cos(angle) * (r - 0.08),
-        ];
-        target.add(own.dark, block([DOORWAY[0], DOORWAY[1], 0.24], placed(at, angle), { tile: 1 }));
+      if (tower.solid) {
+        merge(solidTower(castle, stoneSkins, x, z, tower.size, h, tower.top));
       }
     } else {
       const sx = tower.size;
@@ -525,45 +454,6 @@ export async function buildCastleScene(
             placed([px, h, pz], edge.turn),
             tower_,
           ),
-        );
-      }
-      // Arrow slits on the face that looks out, either side of the gate.
-      const outFace =
-        Math.abs(z - cz) >= Math.abs(x - cx)
-          ? z > cz
-            ? 0
-            : Math.PI
-          : x > cx
-            ? Math.PI / 2
-            : -Math.PI / 2;
-      const facing = new THREE.Vector3(0, 0, 1).applyAxisAngle(UP, outFace);
-      const across = new THREE.Vector3(1, 0, 0).applyAxisAngle(UP, outFace);
-      const depthOut = Math.abs(facing.z) > 0.5 ? sz : sx;
-      const reach = (Math.abs(facing.z) > 0.5 ? sx : sz) * 0.55;
-      for (const sideways of [-reach, reach]) {
-        for (const y of slitHeights) {
-          const at: [number, number, number] = [
-            x + facing.x * (depthOut - SLIT[2] / 2 + 0.04) + across.x * sideways,
-            y,
-            z + facing.z * (depthOut - SLIT[2] / 2 + 0.04) + across.z * sideways,
-          ];
-          target.add(own.dark, block(SLIT, placed(at, outFace), { tile: 1 }));
-        }
-      }
-      for (const wall of joined) {
-        const toward = wall.from === tower.id ? wall.dir : ([-wall.dir[0], -wall.dir[1]] as Vec2);
-        const faceDistance = Math.abs(toward[0]) > 0.5 ? sx : sz;
-        const lateral = -w.parapet.thickness / 2;
-        const at: [number, number, number] = [
-          x + toward[0] * (faceDistance - 0.08) + wall.out[0] * lateral,
-          w.height,
-          z + toward[1] * (faceDistance - 0.08) + wall.out[1] * lateral,
-        ];
-        target.add(
-          own.dark,
-          block([DOORWAY[0], DOORWAY[1], 0.24], placed(at, Math.atan2(toward[0], toward[1])), {
-            tile: 1,
-          }),
         );
       }
     }
@@ -721,121 +611,104 @@ export async function buildCastleScene(
     for (const piece of castle.pieces[dressing.piece] ?? [])
       putPiece(piece, dressing.at, dressing.turn * DEG);
   }
-  const rng = new Rng(castle.vines.seed);
-  const vineFaces = [
-    ...layout.walls.map((wall) => ({ kind: 'wall' as const, wall })),
-    ...castle.towers
-      .filter((tower) => tower.shape === 'round')
-      .map((tower) => ({ kind: 'tower' as const, tower })),
-  ];
-  for (let i = 0; i < castle.vines.count; i++) {
-    const face = vineFaces[Math.floor(rng.next() * vineFaces.length)];
-    const pieceId = castle.vines.pieces[Math.floor(rng.next() * castle.vines.pieces.length)];
-    const piece = pieceId ? castle.pieces[pieceId]?.[0] : undefined;
-    if (!face || !piece) continue;
-    const y = w.height - w.course.height - rng.range(0.1, 1.4);
-    if (face.kind === 'wall') {
-      const { wall } = face;
-      const distance = rng.range(wall.clear[0] + 1, wall.clear[1] - 1);
-      const matrix = onWall(wall, distance, w.thickness / 2 + 0.02, y);
-      put(piece.node, matrix);
-    } else {
-      const { tower } = face;
-      const angle = Math.atan2(tower.at[0] - cx, tower.at[1] - cz) + rng.range(-1.2, 1.2);
-      const r = tower.size + 0.02;
-      put(
-        piece.node,
-        placed(
-          [
-            tower.at[0] + Math.sin(angle) * r,
-            y + rng.range(0, 2),
-            tower.at[1] + Math.cos(angle) * r,
-          ],
-          angle,
-        ),
+
+  // The parts drawn as instances: chunks, battlements, merlons, tower roofs, and what's fixed to
+  // them. Each shape is made once, from its first part; one draw per material draws them all.
+  const roofPiece = castle.towerRoof.piece;
+  const roofBounds = boundsOf(roofPiece.node, roofPiece.turn * DEG);
+  const roofAcross = Math.max(
+    roofBounds.max.x - roofBounds.min.x,
+    roofBounds.max.z - roofBounds.min.z,
+  );
+  const roofCentre = roofBounds.getCenter(new THREE.Vector3());
+  const kitShape = (node: string, turn = 0): Shape =>
+    partsOf(node).map((part) => ({
+      material: part.material,
+      geometry: part.geometry.clone().applyMatrix4(placed([0, 0, 0], turn).multiply(part.matrix)),
+    }));
+  const shapeOf = (part: CastlePart): Shape => {
+    switch (part.kind) {
+      case 'wallChunk':
+        return wallSlice(
+          castle,
+          stoneSkins,
+          part.size[0],
+          part.at[1],
+          part.at[1] + part.size[1],
+          new THREE.Matrix4(),
+        );
+      case 'battlement':
+        return battlement(castle, stoneSkins, part.size[0]);
+      case 'towerChunk':
+        return towerWedge(castle, stoneSkins, part);
+      case 'merlon':
+        return merlonShape(castle, stoneSkins);
+      case 'towerRoof':
+        return kitShape(roofPiece.node, roofPiece.turn * DEG);
+      case 'slit':
+      case 'doorway':
+        return [
+          { material: own.dark, geometry: block(part.size, new THREE.Matrix4(), { tile: 1 }) },
+        ];
+      case 'vine':
+        return kitShape(part.piece ?? '');
+      default:
+        throw new Error(`A castle ${part.kind} isn't drawn as instances`);
+    }
+  };
+  /** Where an instance goes: its part's foot, turned; a tower roof scaled to its tower. */
+  const matrixOf = (part: CastlePart): THREE.Matrix4 => {
+    if (part.kind === 'towerRoof') {
+      const scale = part.size[0] / roofAcross;
+      return placed(
+        [
+          part.at[0] - roofCentre.x * scale,
+          part.at[1] + roofPiece.offset[1],
+          part.at[2] - roofCentre.z * scale,
+        ],
+        0,
+        new THREE.Vector3(scale, scale, scale),
       );
     }
+    // A wall's chunks and battlements share a shape, stretched along to each one's length.
+    const made = madeFrom.get(part.shape);
+    const stretch =
+      (part.kind === 'wallChunk' || part.kind === 'battlement') && made
+        ? new THREE.Vector3(part.size[0] / made.size[0], 1, 1)
+        : undefined;
+    return placed(part.at, part.turn, stretch);
+  };
+  /** The part each shape was made from. */
+  const madeFrom = new Map<string, CastlePart>();
+  const byShape = new Map<string, CastlePart[]>();
+  for (const part of layout.parts) {
+    if (!instancedKinds.has(part.kind)) continue;
+    byShape.set(part.shape, [...(byShape.get(part.shape) ?? []), part]);
   }
-
-  // Merlons and tower roofs: each kind's copies as instances, one draw per material for them all.
-  const instanced = (
-    kind: CastlePartKind,
-    shapes: { geometry: THREE.BufferGeometry; material: THREE.Material; matrix: THREE.Matrix4 }[],
-    matrixOf: (part: CastlePart) => THREE.Matrix4,
-  ) => {
-    const parts = layout.parts.filter((part) => part.kind === kind);
-    if (parts.length === 0) return;
-    const meshes = shapes.map((shape) => {
-      const mesh = new THREE.InstancedMesh(shape.geometry, shape.material, parts.length);
-      mesh.name = kind;
-      mesh.castShadow = mesh.receiveShadow = true;
+  const each = new THREE.Matrix4();
+  for (const [name, parts] of byShape) {
+    const [first] = parts;
+    if (!first) continue;
+    // (Every shape stands on its own foot: its instances go where each part's foot is.)
+    madeFrom.set(name, first);
+    const meshes = byMaterial(shapeOf(first)).map(({ material, geometry }) => {
+      const mesh = new THREE.InstancedMesh(geometry, material, parts.length);
+      mesh.name = name;
+      // Slits, doorways and ivy are too thin to cast a shadow worth its draw.
+      mesh.castShadow = !decorKinds.has(first.kind);
+      mesh.receiveShadow = true;
       return mesh;
     });
-    const each = new THREE.Matrix4();
     parts.forEach((part, index) => {
       const matrix = matrixOf(part);
-      meshes.forEach((mesh, shape) => {
-        const placing = shapes[shape];
-        if (placing) mesh.setMatrixAt(index, each.multiplyMatrices(matrix, placing.matrix));
-      });
-      looks.set(part.id, { kind, instances: meshes, index });
+      for (const mesh of meshes) mesh.setMatrixAt(index, each.copy(matrix));
+      looks.set(part.id, { kind: part.kind, instances: meshes, index });
     });
     for (const mesh of meshes) {
       mesh.instanceMatrix.needsUpdate = true;
       mesh.computeBoundingSphere();
       partGroups.add(mesh);
     }
-  };
-  const merlonSkin = skins.wall;
-  const [mw, mh, mt] = [w.merlon.width, w.merlon.height, w.parapet.thickness];
-  const identity = new THREE.Matrix4();
-  instanced(
-    'merlon',
-    [
-      {
-        geometry: block([mw, mh, mt], identity, merlonSkin.skin),
-        material: merlonSkin.material,
-        matrix: identity,
-      },
-      {
-        geometry: block(
-          [mw + CAP.out * 2, CAP.height, mt + CAP.out * 2],
-          new THREE.Matrix4().makeTranslation(0, mh, 0),
-          skinOf('cap'),
-        ),
-        material: skins.cap.material,
-        matrix: identity,
-      },
-    ],
-    (part) => placed(part.at, part.turn),
-  );
-  // The tower roof piece, scaled to each tower (the part's size is the roof's width).
-  {
-    const roof = castle.towerRoof;
-    const turn = roof.piece.turn * DEG;
-    const bounds = boundsOf(roof.piece.node, turn);
-    const across = Math.max(bounds.max.x - bounds.min.x, bounds.max.z - bounds.min.z);
-    const centre = bounds.getCenter(new THREE.Vector3());
-    instanced(
-      'towerRoof',
-      partsOf(roof.piece.node).map((part) => ({
-        geometry: part.geometry.clone(),
-        material: part.material,
-        matrix: placed([0, 0, 0], turn).multiply(part.matrix),
-      })),
-      (part) => {
-        const scale = part.size[0] / across;
-        return placed(
-          [
-            part.at[0] - centre.x * scale,
-            part.at[1] + roof.piece.offset[1],
-            part.at[2] - centre.z * scale,
-          ],
-          0,
-          new THREE.Vector3(scale, scale, scale),
-        );
-      },
-    );
   }
   // Each gate's leaves, shut, set back in the passage, with iron straps across.
   for (const part of layout.parts.filter((candidate) => candidate.kind === 'gate')) {
@@ -1028,20 +901,4 @@ export async function buildCastleScene(
       });
     },
   };
-}
-
-/** A flat, upward-facing shape's attributes tidied and its texture laid across x and z. */
-function tidyTop(geometry: THREE.BufferGeometry, skin: Skin): THREE.BufferGeometry {
-  const out = tidy(geometry);
-  geometry.dispose();
-  const position = out.getAttribute('position');
-  const uv = out.getAttribute('uv');
-  for (let i = 0; i < position.count; i++) {
-    uv.setXY(
-      i,
-      position.getX(i) / skin.tile,
-      skin.band ? (skin.band[0] + skin.band[1]) / 2 : position.getZ(i) / skin.tile,
-    );
-  }
-  return out;
 }

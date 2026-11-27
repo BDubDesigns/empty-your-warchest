@@ -16,7 +16,7 @@ export const castle = {
     merlon: { width: 1.1, height: 1, gap: 0.8 },
     plinth: { height: 0.9, out: 0.25 },
     course: { height: 0.3, out: 0.12 },
-    section: 4,
+    chunks: { length: 3.8, rows: 2 },
   },
   // The ring, round the courtyard: the back corners have tile roofs (lookouts); the front ones
   // are open on top, with battlements, as is the gatehouse.
@@ -33,9 +33,12 @@ export const castle = {
       height: 10,
       top: 'battlements',
       gate: { width: 3.4, height: 4.6 },
+      // The gatehouse's stonework stays whole: a fixed point the siege can't knock down.
+      solid: true,
     },
     { id: 'south_west', shape: 'round', at: [-18, 16], size: 3.5, height: 10, top: 'battlements' },
   ],
+  towerChunks: { sectors: 6, rows: 3 },
   walls: [
     { id: 'north', from: 'north_west', to: 'north_east' },
     { id: 'east', from: 'north_east', to: 'south_east' },

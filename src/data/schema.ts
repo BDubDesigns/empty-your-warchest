@@ -1657,10 +1657,15 @@ const castleTowerSchema = z.object({
   height: positive,
   top: z.enum(['roof', 'battlements']),
   gate: z.object({ width: positive, height: positive }).optional(),
+  /** Stays whole when the siege breaks things (a round tower comes apart otherwise). */
+  solid: z.boolean().default(false),
 });
 
-/** A stretch of curtain wall from one tower to another, straight along x or z. */
-const castleWallSchema = z.object({ id, from: id, to: id });
+/**
+ * A stretch of curtain wall from one tower to another, straight along x or z. It comes apart in
+ * chunks unless `solid` (its battlements come off either way).
+ */
+const castleWallSchema = z.object({ id, from: id, to: id, solid: z.boolean().default(false) });
 
 /**
  * A building in the courtyard, built from the kit's wall modules: `modules` across (x) and deep
@@ -1763,10 +1768,15 @@ export const castleSchema = z.object({
     plinth: z.object({ height: positive, out: positive }),
     /** A band of trim stone round walls and towers at the walk's level, standing `out` m proud. */
     course: z.object({ height: positive, out: positive }),
-    /** Each wall comes apart in sections about this long (m). */
-    section: positive,
+    /**
+     * A wall that comes apart does so in columns about `length` m long (two merlons on each), each
+     * `rows` chunks high.
+     */
+    chunks: z.object({ length: positive, rows: positiveInt }),
   }),
   towers: z.array(castleTowerSchema).min(3),
+  /** A round tower that comes apart: in `sectors` wedges round it, `rows` high. */
+  towerChunks: z.object({ sectors: z.number().int().min(3), rows: positiveInt }),
   walls: z.array(castleWallSchema).min(3),
   /**
    * The kit's wall module (m): a building's walls are this wide, each storey `storey` high, a
