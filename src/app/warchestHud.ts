@@ -60,7 +60,6 @@ const PIECE_LENGTHS: Record<ItemLook, number> = {
   arrow: 1.6,
   shaft: 1.6,
   duster: 1.6,
-  dowel: 1.5,
   petals: 0.5,
 };
 
@@ -228,16 +227,6 @@ export function pieceModel(
   }
   if (look === 'duster') {
     piece.add(dusterModel(14));
-    return piece;
-  }
-  if (look === 'dowel') {
-    // An arrow shaft: a thin, pale, round length of wood with nothing on it yet.
-    const dowel = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.024, 0.024, 0.95, 6),
-      new THREE.MeshLambertMaterial({ color: 0xe0bd88 }),
-    );
-    dowel.rotation.x = Math.PI / 2;
-    piece.add(dowel);
     return piece;
   }
   if (look === 'petals') {

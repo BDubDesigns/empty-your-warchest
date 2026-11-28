@@ -15,7 +15,9 @@ import type { Fletching, FletchingFeel } from '../../../data';
 import { TreeLine } from '../../archery/three/scenery';
 import {
   FletchingRound,
-  type ArrowInHand,
+  nextBenchSize,
+  pickerSizes,
+  type Batch,
   type FletchingEvent,
   type FletchingResult,
 } from '../logic/round';
@@ -75,11 +77,11 @@ interface CameraViews {
 type Spot = 'hold' | 'dip' | 'jig';
 
 /**
- * The fletcher's bench in 3D: a shaft at a time, dipped in the tar pot (drag it down and hold,
- * lift in the green band), then turned in the jig while you tap a feather onto each mark as it
- * comes to the top, or shoved in the feather bucket for a duster, or left bare. The rules
- * (FletchingRound) decide everything; this draws them, feeds them the player's moves, and pours
- * each arrow into the chest.
+ * The fletcher's bench in 3D: pick a batch (how many arrows, times the hot streak), then one
+ * shaft stands for it: dipped in the tar pot (drag it down and hold, lift in the green band),
+ * then turned in the jig while you tap a feather onto each mark as it comes to the top, or shoved
+ * in the feather bucket for dusters, or left bare. The rules (FletchingRound) decide everything;
+ * this draws them, feeds them the player's moves, and pours the whole batch into the chest.
  */
 export class Fletching3DView implements ScreenView {
   readonly #element: HTMLElement;
@@ -111,9 +113,12 @@ export class Fletching3DView implements ScreenView {
   /** The camera's blend from the bench (0) to the jig (1). */
   #zoom = 0;
   #pointer: { id: number; startY: number; pull: number } | undefined;
-  /** The arrow being shown going off to the chest, and when it pours. */
-  #going:
-    { arrow: ArrowInHand; item: string; xp: number; pourAt: number; bucket: boolean } | undefined;
+  /** The batch being shown going off to the chest, and when it pours. */
+  #going: { item: string; count: number; xp: number; pourAt: number; bucket: boolean } | undefined;
+  /** The hot streak's multiplier on the next batch (it ends on leaving), and the size picked. */
+  #streak = 1;
+  #pickedSize: number | undefined;
+  #levelAtStart = 1;
   #clock = 0;
   #shake = 0;
   #endedAt: number | undefined;
@@ -238,11 +243,17 @@ export class Fletching3DView implements ScreenView {
     });
   }
 
-  /** Back to camp with an arrow half made puts it back as a plain shaft: the tar or feathers are lost. */
+  /**
+   * Back to camp with a batch half made: nothing's used until it's made, so only its beats are
+   * lost, and the hot streak ends (as it does on leaving at any time).
+   */
   leaveCost(): string | undefined {
-    const step = this.#round?.phase === 'make' ? this.#round.arrow?.step : undefined;
-    if (step !== 'dip' && step !== 'feathers') return undefined;
-    return 'The arrow in your hand goes back as a plain shaft.';
+    const round = this.#round;
+    const step = round?.phase === 'make' ? round.arrow.step : undefined;
+    if (!round || (step !== 'dip' && step !== 'feathers')) return undefined;
+    const streak =
+      round.batch.streak > 1 ? `, and your ×${String(round.batch.streak)} streak ends` : '';
+    return `This batch of ${String(round.batch.arrows)} isn't made yet: nothing is used${streak}.`;
   }
 
   stop(): void {
@@ -255,6 +266,7 @@ export class Fletching3DView implements ScreenView {
     this.#hud.settle();
     this.#skillBar.settle();
     this.#bonus = undefined;
+    this.#streak = 1;
     delete document.body.dataset.fletching;
     releaseContext(this.#renderer, this.#deps.logger, 'fletching3d');
   }
@@ -269,31 +281,52 @@ export class Fletching3DView implements ScreenView {
     this.#endedAt = undefined;
     this.#going = undefined;
     this.#zoom = 0;
+    this.#ui.count.hidden = true;
     const count = (item: string) => game.inventory.count(item);
-    if (count(rules.shaft) + count(rules.stave) === 0) {
+    const level = game.level(this.#skill);
+    const sizes = pickerSizes(rules, level, this.#streak, count(rules.stave), count(rules.feather));
+    if (sizes.length === 0) {
       this.#round = undefined;
       this.#shaft.group.visible = false;
       this.#showEmpty();
       this.#updateUi();
       return;
     }
+    this.#levelAtStart = level;
+    // The size picked last time if it's still open, else the biggest.
+    const size = Math.min(this.#pickedSize ?? sizes.length, sizes.length);
     this.#perf = { frames: 0, seconds: 0, worst: 0, calls: 0, triangles: 0 };
-    this.#round = new FletchingRound(rules, this.#deps.feel.values, {
-      logger: this.#deps.logger,
-      level: game.level(this.#skill),
-      count,
-      spend: (item, amount) => {
-        game.removeItems(item, amount);
+    const round = new FletchingRound(
+      rules,
+      this.#deps.feel.values,
+      {
+        logger: this.#deps.logger,
+        level,
+        count,
+        spend: (item, amount) => {
+          game.removeItems(item, amount);
+        },
+        bank: (items, xp) => {
+          for (const stack of items) if (stack.count > 0) game.addItems(stack.item, stack.count);
+          if (xp > 0) game.addXp(this.#skill, xp);
+        },
+        onEvent: (event) => {
+          this.#onEvent(event);
+        },
       },
-      bank: (items, xp) => {
-        for (const stack of items) if (stack.count > 0) game.addItems(stack.item, stack.count);
-        if (xp > 0) game.addXp(this.#skill, xp);
-      },
-      onEvent: (event) => {
-        this.#onEvent(event);
-      },
-    });
+      { size, streak: this.#streak },
+    );
+    this.#round = round;
+    this.#showSizes(sizes, round.batch, level);
+    // The shaft comes up from the bench, with the tar's green band on it.
+    const feel = round.feel;
+    this.#shaft.reset();
+    this.#shaft.showBand(round.bareOnly ? undefined : { low: feel.tarLow, high: feel.tarHigh });
+    this.#placeAt('hold');
+    this.#pose.position.y -= 0.12;
+    this.#moveTo('hold');
     this.#ui.hint.hidden = false;
+    this.#shown = '';
     this.#updateUi();
   }
 
@@ -301,15 +334,6 @@ export class Fletching3DView implements ScreenView {
     const feel = this.#deps.feel.values;
     const { haptics } = this.#deps;
     const round = this.#round;
-    if (event.type === 'ready') {
-      this.#shaft.reset();
-      this.#shaft.showBand({ low: feel.tarLow, high: feel.tarHigh });
-      this.#placeAt('hold');
-      // It comes up from the bench.
-      this.#pose.position.y -= 0.12;
-      this.#moveTo('hold');
-      return;
-    }
     if (event.type === 'dip') {
       haptics.pulse(feel.buzzDipMs);
       this.#sfx.play('dip', 0.35, -200);
@@ -346,47 +370,49 @@ export class Fletching3DView implements ScreenView {
       return;
     }
     if (event.type === 'made') {
-      const { arrow } = event;
-      const bucket = arrow.way === 'bucket';
+      const { result } = event;
+      const bucket = result.way === 'bucket';
       if (bucket) {
         haptics.pulse(feel.buzzBucketMs);
         this.#sfx.play('bucket', 0.45, 500);
       }
-      if (arrow.way === 'careful' && arrow.lost > 0) this.#shaft.slideVanes();
+      if (result.lost > 0) this.#shaft.slideVanes();
       const messages = {
         fletched: '🏹 Fletched!',
-        duster: bucket ? '🪶 Feather duster!' : '🪶 Lopsided: a duster',
-        bare: arrow.lost > 0 ? 'The feathers slid off: bare' : 'Bare arrow',
+        duster: bucket ? '🪶 Feather dusters!' : '🪶 Lopsided: dusters',
+        bare: result.lost > 0 ? 'The feathers slid off: bare' : 'Bare arrows',
       } as const;
-      if (arrow.made) this.#flash(messages[arrow.made], arrow.made === 'fletched' ? 'good' : 'meh');
+      this.#flash(messages[result.made], result.made === 'fletched' ? 'good' : 'meh');
+      // The batch's count, big: one shaft shown, but this many made.
+      this.#showCount(result);
       // It goes off to the chest at the end of its beat (after the bucket's plunge).
       const beat = round?.feel.finishSeconds ?? 0;
       this.#going = {
-        arrow,
         item: event.item,
-        xp: event.xp,
+        count: result.arrows,
+        xp: result.xp,
         pourAt: this.#clock + Math.max(beat * 0.8, 0.05),
         bucket,
       };
       this.#move = bucket ? { from: this.#copyPose(), to: 'jig', at: this.#clock } : this.#move;
+      if (result.bonus > 0) {
+        this.#bonus = {
+          result,
+          deposit: this.#hud.hold(result.bonus, undefined, this.#rules.arrows.fletched.item),
+        };
+      }
       return;
     }
     // The end.
     this.#endedAt = this.#clock;
-    if (event.bonus > 0) {
-      this.#bonus = {
-        result: event,
-        deposit: this.#hud.hold(event.bonus, undefined, this.#rules.arrows.fletched.item),
-      };
-    }
     this.#logPerf(event);
   }
 
-  /** Pours a made arrow into the chest from where it is, with its XP ticking in as it lands. */
-  #pour(item: string, xp: number): void {
+  /** Pours the made batch into the chest from where the shaft is, its XP ticking in as it lands. */
+  #pour(item: string, count: number, xp: number): void {
     const deposit = xp > 0 ? this.#skillBar.hold(xp) : undefined;
     const held = this.#hud.hold(
-      1,
+      count,
       deposit
         ? (share: number) => {
             deposit.arrive(share);
@@ -409,9 +435,8 @@ export class Fletching3DView implements ScreenView {
     const going = this.#going;
     if (going && this.#clock >= going.pourAt) {
       this.#going = undefined;
-      this.#pour(going.item, going.xp);
-      if (round?.arrow === going.arrow || round?.phase === 'done')
-        this.#shaft.group.visible = false;
+      this.#pour(going.item, going.count, going.xp);
+      this.#shaft.group.visible = false;
     }
     this.#drawShaft(dt);
     this.#drawCamera(dt);
@@ -439,7 +464,7 @@ export class Fletching3DView implements ScreenView {
   /** Where the shaft is, as the rules have it: its tar, its turn, its place on the bench. */
   #drawShaft(dt: number): void {
     const round = this.#round;
-    const arrow = round?.arrow ?? this.#going?.arrow;
+    const arrow = round?.arrow;
     const shaft = this.#shaft;
     shaft.update(dt);
     if (!round || !arrow) {
@@ -448,21 +473,20 @@ export class Fletching3DView implements ScreenView {
       return;
     }
     const feel = round.feel;
-    const live = round.arrow === arrow;
-    const tar = live ? round.tar : (arrow.tar ?? 0);
+    const tar = round.tar;
     shaft.setTar(tar, tar > feel.tarHigh && arrow.way !== 'bucket');
-    if (arrow.step === 'feathers' && live) shaft.setTurn(round.turn);
+    if (arrow.step === 'feathers') shaft.setTurn(round.turn);
     // The shaft's place: following the finger down to the pot, in it, in the jig, or (the
     // bucket) plunged in and out of the feathers.
     const going = this.#going;
-    if (going?.bucket && going.arrow === arrow) {
+    if (going?.bucket) {
       this.#bucketPlunge(going);
     } else {
       const pull = arrow.step === 'shaft' ? (this.#pointer?.pull ?? 0) : 0;
       this.#follow(pull);
     }
     // The jig's pointer and the feather in hand, while feathers go on.
-    const fletching = arrow.step === 'feathers' && live;
+    const fletching = arrow.step === 'feathers';
     shaft.showCollar(arrow.liftAt !== undefined && arrow.way !== 'bucket');
     const pointer = this.#bench.pointer;
     pointer.visible = fletching;
@@ -507,8 +531,7 @@ export class Fletching3DView implements ScreenView {
 
   /** Eases the shaft toward its step's spot (or down with the finger, over the pot). */
   #follow(pull: number): void {
-    const round = this.#round;
-    const arrow = round?.arrow ?? this.#going?.arrow;
+    const arrow = this.#round?.arrow;
     if (!arrow) return;
     const spot: Spot =
       arrow.step === 'shaft'
@@ -591,7 +614,8 @@ export class Fletching3DView implements ScreenView {
 
   /** The camera: the bench, moving in on the jig while the feathers go on. */
   #drawCamera(dt: number): void {
-    const arrow = this.#round?.arrow;
+    const round = this.#round;
+    const arrow = round?.phase === 'make' ? round.arrow : undefined;
     const close = arrow?.step === 'feathers' || (arrow?.step === 'made' && arrow.way === 'careful');
     const target = close ? 1 : 0;
     this.#zoom += (target - this.#zoom) * (1 - Math.exp(-dt * 7));
@@ -661,10 +685,14 @@ export class Fletching3DView implements ScreenView {
       const arrow = round?.arrow;
       if (!round || round.phase !== 'make' || !arrow || this.#pointer) return;
       if (arrow.step === 'feathers') {
-        if (!round.tap()) this.#flash(`Needs ${String(this.#rules.feathers.careful)} 🪶`, 'bad');
+        if (!round.tap()) this.#flash(`Needs ${String(round.carefulFeathers)} 🪶`, 'bad');
         return;
       }
       if (arrow.step !== 'shaft') return;
+      if (round.bareOnly) {
+        this.#flash('No feathers: bare arrows only', 'bad');
+        return;
+      }
       if (!capturePointer(canvas, event.pointerId)) return;
       this.#pointer = { id: event.pointerId, startY: event.clientY, pull: 0 };
     });
@@ -674,7 +702,7 @@ export class Fletching3DView implements ScreenView {
       if (!pointer || event.pointerId !== pointer.id || !round) return;
       const feel = round.feel;
       pointer.pull = Math.max(event.clientY - pointer.startY, 0) / feel.dipPx;
-      if (pointer.pull >= 1 && round.arrow?.step === 'shaft') {
+      if (pointer.pull >= 1 && round.arrow.step === 'shaft') {
         round.dip();
         this.#ui.hint.hidden = true;
         if (!this.#deps.game.hasDone('tutorial.fletching')) {
@@ -687,7 +715,7 @@ export class Fletching3DView implements ScreenView {
       if (!pointer || event.pointerId !== pointer.id) return;
       this.#pointer = undefined;
       const round = this.#round;
-      if (round?.arrow?.step === 'dip') round.lift();
+      if (round?.arrow.step === 'dip') round.lift();
     };
     canvas.addEventListener('pointerup', release);
     canvas.addEventListener('pointercancel', release);
@@ -795,24 +823,30 @@ export class Fletching3DView implements ScreenView {
     };
     const root = el('div', 'fl-ui');
     const status = el('div', 'fl-status');
+    const streak = el('div', 'fl-streak');
+    streak.hidden = true;
     const supplies = el('div', 'fl-supplies');
+    // The batch picker: a button per size open, and the next size locked with its level.
+    const sizes = el('div', 'fl-sizes');
+    sizes.setAttribute('role', 'radiogroup');
+    sizes.setAttribute('aria-label', 'Arrows to make');
     const flash = el('div', 'fl-flash');
     flash.hidden = true;
+    // The made batch's count, big, as it goes to the chest.
+    const count = el('div', 'fl-count');
+    count.hidden = true;
     const hint = el('div', 'fl-hint');
     hint.hidden = true;
     const tools = el('div', 'fl-tools');
     const bare = button('Bare', 'fl-tool fl-bare', () => {
       this.#round?.bare();
     });
-    const bucket = button(
-      `🪣 Bucket · ${String(this.#rules.feathers.bucket)} 🪶`,
-      'fl-tool fl-bucket',
-      () => {
-        if (this.#round && !this.#round.bucket() && !this.#round.canBucket) {
-          this.#flash(`The bucket takes ${String(this.#rules.feathers.bucket)} 🪶`, 'bad');
-        }
-      },
-    );
+    const bucket = button('🪣 Bucket', 'fl-tool fl-bucket', () => {
+      const round = this.#round;
+      if (round && !round.bucket() && !round.canBucket) {
+        this.#flash(`The bucket takes ${String(round.bucketFeathers)} 🪶`, 'bad');
+      }
+    });
     tools.append(bare, bucket);
     const card = el('div', 'fm-card fl-card');
     const cardStars = el('div', 'w3d-stars fm-card-stars');
@@ -830,13 +864,17 @@ export class Fletching3DView implements ScreenView {
     cardButtons.append(leave, next);
     card.append(cardStars, cardTitle, cardText, cardButtons);
     card.hidden = true;
-    root.append(status, supplies, flash, hint, tools, card);
+    root.append(status, streak, supplies, sizes, flash, count, hint, tools, card);
     this.#element.append(root);
     return {
+      button,
       root,
       status,
+      streak,
       supplies,
+      sizes,
       flash,
+      count,
       hint,
       tools,
       bare,
@@ -847,6 +885,79 @@ export class Fletching3DView implements ScreenView {
       cardText,
       next,
     };
+  }
+
+  /**
+   * The batch picker: a button per size open (with the arrows it makes at this streak), the one
+   * in use picked, and the next size, locked, with the level it opens at. Picking one before the
+   * dip starts the round again at that size (nothing's used until the batch is made).
+   */
+  #showSizes(sizes: readonly Batch[], picked: Batch, level: number): void {
+    const ui = this.#ui;
+    const next = nextBenchSize(this.#rules, level);
+    const entries = [
+      ...sizes.map((batch) => ({ batch, needs: undefined as number | undefined })),
+      ...(next && next.arrows > sizes.length
+        ? [{ batch: { size: next.arrows, streak: picked.streak, arrows: 0 }, needs: next.level }]
+        : []),
+    ];
+    ui.sizes.replaceChildren(
+      ...entries.map(({ batch, needs }) => {
+        const chosen = needs === undefined && batch.size === picked.size;
+        const element = ui.button('', 'fm-size fl-size', () => {
+          if (needs !== undefined) {
+            this.#flash(
+              `${String(batch.size)} at a time opens at Fletching ${String(needs)}`,
+              'meh',
+            );
+            return;
+          }
+          const round = this.#round;
+          if (!round || round.begun || batch.size === round.batch.size) return;
+          this.#pickedSize = batch.size;
+          this.#sfx.play('lift', 0.3, 200 - batch.size * 40);
+          this.#deps.haptics.pulse(6);
+          this.#startRound();
+        });
+        element.setAttribute('role', 'radio');
+        element.setAttribute('aria-checked', String(chosen));
+        element.dataset.size = String(batch.size);
+        const label =
+          needs !== undefined
+            ? `Lv ${String(needs)}`
+            : batch.streak > 1
+              ? `→ ${String(batch.arrows)} 🏹`
+              : batch.size === 1
+                ? 'arrow'
+                : 'arrows';
+        element.setAttribute(
+          'aria-label',
+          needs !== undefined
+            ? `${String(batch.size)} arrows, opens at level ${String(needs)}`
+            : `${String(batch.size)} × ${String(batch.streak)}: ${String(batch.arrows)} arrows`,
+        );
+        if (needs !== undefined) element.classList.add('fm-size-locked');
+        const sizeCount = document.createElement('span');
+        sizeCount.className = 'fm-size-count';
+        sizeCount.textContent = String(batch.size);
+        const sizeLabel = document.createElement('span');
+        sizeLabel.className = 'fm-size-label';
+        sizeLabel.textContent = label;
+        element.append(sizeCount, sizeLabel);
+        return element;
+      }),
+    );
+  }
+
+  /** The made batch's count, big over the bench: "×12 fletched arrows". */
+  #showCount(result: FletchingResult): void {
+    const count = this.#ui.count;
+    count.textContent = `×${String(result.arrows)} ${arrowName(result.made, result.arrows)}`;
+    count.dataset.made = result.made;
+    count.hidden = false;
+    count.classList.remove('fl-count-show');
+    count.getBoundingClientRect();
+    count.classList.add('fl-count-show');
   }
 
   #flashTimer: number | undefined;
@@ -874,16 +985,19 @@ export class Fletching3DView implements ScreenView {
     if (document.body.dataset.fletching !== phase) document.body.dataset.fletching = phase;
     const arrow = round?.arrow;
     const step = round?.phase === 'make' ? (arrow?.step ?? 'none') : 'none';
-    const made = round?.made ?? { fletched: 0, duster: 0, bare: 0 };
-    const status = round
-      ? `⏱ ${String(Math.ceil(round.left))} s · 🏹 ${String(made.fletched)} fletched`
-      : '';
-    const supplies = round
-      ? `Shafts ${String(round.shaftsLeft + (arrow && arrow.step !== 'made' ? 1 : 0))} · 🪶 ${String(round.feathersLeft)}`
-      : '';
+    const batch = round?.batch;
+    const making = round?.phase === 'make' && step !== 'made';
+    const status = batch && making ? `🏹 Making ${String(batch.arrows)}` : '';
+    const streak = batch && batch.streak > 1 && making ? `🔥 ×${String(batch.streak)} streak` : '';
+    const supplies =
+      round && making
+        ? `🪵 ${String(this.#deps.game.inventory.count(this.#rules.stave))} staves · 🪶 ${String(round.feathersLeft)}`
+        : '';
     const hint =
       step === 'shaft'
-        ? 'Drag the shaft down into the tar · hold'
+        ? round?.bareOnly
+          ? 'No feathers: tap Bare to make bare arrows'
+          : 'Pick how many, then drag the shaft down into the tar · hold'
         : step === 'dip'
           ? 'Let go in the green band'
           : step === 'feathers'
@@ -891,34 +1005,45 @@ export class Fletching3DView implements ScreenView {
               ? 'Tap as each yellow mark comes to the top'
               : 'Not enough feathers: the bucket, or bare'
             : '';
-    const key = [status, supplies, hint, step, made.fletched, made.duster, made.bare].join('|');
+    const bucketLabel = `🪣 Bucket · ${String(round?.bucketFeathers ?? 0)} 🪶`;
+    const made = round?.result;
+    const key = [status, streak, supplies, hint, step, bucketLabel, made?.made ?? ''].join('|');
     if (key !== this.#shown) {
       this.#shown = key;
       ui.status.textContent = status;
-      ui.status.hidden = !round;
+      ui.status.hidden = status === '';
+      ui.streak.textContent = streak;
+      ui.streak.hidden = streak === '';
       ui.supplies.textContent = supplies;
-      ui.supplies.hidden = !round;
+      ui.supplies.hidden = supplies === '';
+      ui.sizes.hidden = step !== 'shaft';
       ui.hint.textContent = hint;
-      // The hint stays for the first dip, and always when it's out of feathers.
+      // The hint stays for the first dip, and always when it's short of feathers.
       ui.hint.hidden =
         hint === '' ||
         (this.#deps.game.hasDone('tutorial.fletching') &&
-          !(step === 'feathers' && !round?.canFletch));
+          !(step === 'feathers' && !round?.canFletch) &&
+          !(step === 'shaft' && round?.bareOnly));
       ui.tools.hidden = step !== 'shaft' && step !== 'feathers';
       ui.bucket.hidden = step !== 'feathers';
       ui.bucket.disabled = !round?.canBucket;
-      this.#element.dataset.step = step;
-      this.#element.dataset.fletched = String(made.fletched);
-      this.#element.dataset.dusters = String(made.duster);
-      this.#element.dataset.bares = String(made.bare);
+      ui.bucket.textContent = bucketLabel;
+      const element = this.#element;
+      element.dataset.step = step;
+      element.dataset.arrows = String(batch?.arrows ?? 0);
+      element.dataset.size = String(batch?.size ?? 0);
+      element.dataset.streak = String(batch?.streak ?? this.#streak);
+      element.dataset.made = made?.made ?? '';
+      element.dataset.madeCount = String(made?.arrows ?? 0);
     }
   }
 
-  /** The end card: stars, what was made, and what a star more would take. */
+  /** The end card: stars, the batch made, why the stars, and the hot streak. */
   #showCard(result: FletchingResult): void {
     this.#cardShown = true;
     const ui = this.#ui;
     const rules = this.#rules;
+    ui.count.hidden = true;
     ui.cardStars.replaceChildren(
       ...[0, 1, 2].map((index) => {
         const star = document.createElement('span');
@@ -938,29 +1063,60 @@ export class Fletching3DView implements ScreenView {
     }
     const plural = (count: number, word: string) =>
       `${String(count)} ${word}${count === 1 ? '' : 's'}`;
+    const arrow = this.#round?.arrow;
     const lines: string[] = [];
-    const { made } = result;
-    lines.push(
-      `🏹 ${String(made.fletched)} fletched · 🪶 ${plural(made.duster, 'duster')} · ${String(made.bare)} bare`,
-    );
-    const thresholds = [rules.stars.one, rules.stars.two, rules.stars.three];
-    const need = thresholds[result.stars];
-    if (need !== undefined) {
+    // Why the stars.
+    if (result.way === 'bucket') lines.push('The bucket: quick, but dusters');
+    else if (result.way === 'bare') lines.push('No feathers: bare arrows');
+    else if (result.made === 'fletched') lines.push('Tar just right, every feather on its mark');
+    else {
+      const why: string[] = [];
+      if (arrow?.tarState === 'thin') why.push('too little tar, the feathers slid off');
+      if (arrow?.tarState === 'thick') why.push('too much tar');
+      const off = arrow?.taps.filter((tap) => !tap.onMark).length ?? 0;
+      if (off > 0) why.push(`${plural(off, 'feather')} off the mark`);
+      const text = why.join(', ');
       lines.push(
-        `${plural(need - made.fletched, 'fletched arrow')} more for ${'★'.repeat(result.stars + 1)}`,
+        `${result.stars >= 2 ? 'So close: ' : ''}${text.charAt(0).toUpperCase()}${text.slice(1)}`,
       );
     }
-    if (result.bonus > 0)
+    if (result.bonus > 0) {
       lines.push(`${'★'.repeat(result.stars)} bonus +${plural(result.bonus, 'fletched arrow')}`);
-    if (result.feathers > 0) {
-      lines.push(
-        `${plural(result.feathers, 'feather')} used${result.lost > 0 ? `, ${String(result.lost)} slid off` : ''}`,
-      );
     }
-    if (result.bucket > 0) lines.push(`${plural(result.bucket, 'trip')} to the bucket`);
-    const left = this.#round?.shaftsLeft ?? 0;
-    if (left === 0) lines.push('Out of shafts: split more staves at the Workbench');
-    ui.cardTitle.textContent = plural(result.arrows, 'arrow');
+    const used = [plural(result.staves, 'stave')];
+    if (result.feathers > 0) used.push(plural(result.feathers, 'feather'));
+    lines.push(
+      `${used.join(' · ')} used${result.lost > 0 ? ` (${String(result.lost)} slid off)` : ''}`,
+    );
+    // The hot streak.
+    const before = result.batch.streak;
+    const after = result.streakAfter;
+    if (after > before) lines.push(`🔥 Hot streak! Next batch ×${String(after)}`);
+    else if (after === before && after > 1) lines.push(`🔥 Hot streak holds: ×${String(after)}`);
+    else if (after < before) {
+      lines.push(after > 1 ? `The streak drops to ×${String(after)}` : 'The streak is over');
+    }
+    this.#streak = after;
+    // A level up that opens a bigger bench: the next batch is its size.
+    const level = this.#deps.game.level(this.#skill);
+    const opened = rules.batch.sizes.filter(
+      (size) => size.level > this.#levelAtStart && size.level <= level,
+    );
+    const bigger = opened[opened.length - 1];
+    if (bigger) {
+      lines.push(`🔓 Bigger bench: ${String(bigger.arrows)} arrows a batch from now on`);
+      this.#pickedSize = undefined;
+    }
+    const game = this.#deps.game;
+    const left = pickerSizes(
+      rules,
+      level,
+      this.#streak,
+      game.inventory.count(rules.stave),
+      game.inventory.count(rules.feather),
+    ).length;
+    if (left === 0) lines.push('Out of staves: split more logs at the Workbench');
+    ui.cardTitle.textContent = `×${String(result.arrows)} ${arrowName(result.made, result.arrows)}`;
     ui.cardText.textContent = lines.join('\n');
     ui.next.hidden = left === 0;
     ui.card.hidden = false;
@@ -977,11 +1133,17 @@ export class Fletching3DView implements ScreenView {
   #showEmpty(): void {
     const ui = this.#ui;
     ui.cardStars.replaceChildren();
-    ui.cardTitle.textContent = 'No shafts';
+    ui.cardTitle.textContent = 'No staves';
     ui.cardText.textContent =
-      'Arrows are made from staves (a stave is two shafts). Split some logs at the Workbench.';
+      'Arrows are made from staves (a stave is two arrows). Split some logs at the Workbench.';
     ui.next.hidden = true;
     ui.card.hidden = false;
     this.#cardShown = true;
   }
+}
+
+/** "fletched arrows", "dusters", "bare arrow" … for a count of one kind. */
+function arrowName(made: FletchingResult['made'], count: number): string {
+  const names = { fletched: 'fletched arrow', duster: 'duster', bare: 'bare arrow' } as const;
+  return `${names[made]}${count === 1 ? '' : 's'}`;
 }

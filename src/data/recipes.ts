@@ -55,9 +55,9 @@ export const recipes = [
     xp: 32,
   },
   {
-    // A worker's fletching at the bench: a stave split into 2 shafts, each fletched with 3
-    // feathers, for the XP of 2 fletched arrows played. It must agree with the fletching data
-    // (checked at startup), which makes arrows one at a time from the same numbers.
+    // A worker's fletching at the bench: a stave's 2 arrows (the bench's 1 stave per 2 arrows),
+    // each fletched with 3 feathers, for the XP of 2 fletched arrows played. It must agree with
+    // the fletching data (checked at startup), which makes batches from the same numbers.
     id: 'fletch_arrows',
     station: 'fletchers_bench',
     inputs: [

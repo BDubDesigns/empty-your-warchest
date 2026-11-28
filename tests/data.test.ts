@@ -26,7 +26,6 @@ describe('game data', () => {
       'feather',
       'fletched_arrow',
       'bare_arrow',
-      'arrow_shaft',
       'duster_arrow',
       'sunflower_petals',
     ]);
