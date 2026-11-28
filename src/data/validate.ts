@@ -597,7 +597,7 @@ function checkFletching(
   issue: (path: Path, message: string) => void,
 ): void {
   const fletching = data.fletching;
-  for (const key of ['stave', 'shaft', 'feather'] as const) {
+  for (const key of ['stave', 'feather'] as const) {
     if (!itemIds.has(fletching[key])) issue(['fletching', key], `Unknown item "${fletching[key]}"`);
   }
   const shootable = new Set(data.archery.arrows.map((arrow) => arrow.item));
@@ -610,8 +610,20 @@ function checkFletching(
     if (made.has(item)) issue(path, 'Twice');
     made.add(item);
   }
-  const { one, two, three } = fletching.stars;
-  if (one > two || two > three) issue(['fletching', 'stars'], 'More stars must not need less');
+  const sizes = fletching.batch.sizes;
+  if (sizes[0]?.level !== 1) {
+    issue(['fletching', 'batch', 'sizes'], 'The first batch size must be open from level 1');
+  }
+  sizes.forEach((size, index) => {
+    const before = sizes[index - 1];
+    if (before && (size.arrows <= before.arrows || size.level <= before.level)) {
+      issue(['fletching', 'batch', 'sizes', index], 'Sizes must grow, in level order');
+    }
+  });
+  // A feather on its mark is always near it.
+  if (fletching.stars.nearTapMs < fletching.feel.markWindowMs) {
+    issue(['fletching', 'stars', 'nearTapMs'], 'A near miss must reach past the mark window');
+  }
   if (fletching.feel.tarLow >= fletching.feel.tarHigh) {
     issue(['fletching', 'feel', 'tarLow'], 'The green band must start under where it ends');
   }
@@ -624,8 +636,8 @@ function checkFletching(
   if (recipe.station !== station?.id) {
     issue(['fletching', 'recipe'], 'Must be made at the fletching station');
   }
-  // A stave's worth of careful fletching: its shafts, each with its feathers, for their XP.
-  const shafts = fletching.shaftsPerStave;
+  // A stave's worth of careful fletching: its arrows, each with its feathers, for their XP.
+  const shafts = fletching.arrowsPerStave;
   const count = (stacks: readonly { item: string; count: number }[], item: string) =>
     stacks.filter((stack) => stack.item === item).reduce((sum, stack) => sum + stack.count, 0);
   const expected = [

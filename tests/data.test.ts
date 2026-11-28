@@ -26,7 +26,6 @@ describe('game data', () => {
       'feather',
       'fletched_arrow',
       'bare_arrow',
-      'arrow_shaft',
       'duster_arrow',
     ]);
     expect(data.stations.map((station) => station.id)).toEqual([

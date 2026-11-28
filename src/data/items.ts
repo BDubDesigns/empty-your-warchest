@@ -21,8 +21,6 @@ export const items = [
   { id: 'feather', name: 'Feather', look: 'feather' },
   { id: 'fletched_arrow', name: 'Fletched arrow', look: 'arrow' },
   { id: 'bare_arrow', name: 'Bare arrow', look: 'shaft' },
-  // Fletching: a stave splits into two shafts (one left over waits in the warchest), and the
-  // bench's shortcut, the feather bucket, makes a feather duster of an arrow.
-  { id: 'arrow_shaft', name: 'Arrow shaft', look: 'dowel' },
+  // Fletching: the bench's shortcut, the feather bucket, makes a feather duster of an arrow.
   { id: 'duster_arrow', name: 'Duster arrow', look: 'duster' },
 ] satisfies GameDataInput['items'];
