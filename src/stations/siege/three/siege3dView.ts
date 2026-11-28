@@ -36,6 +36,7 @@ import { loadPhysics, type Physics } from '../logic/physics';
 import {
   SiegeRound,
   type GuardState,
+  type GuardMood,
   type MaterialKind,
   type PartMode,
   type Pose,
@@ -51,7 +52,7 @@ import {
   type ThrowMode,
   type Vec3,
 } from '../logic/throw';
-import { puffTexture, stageTint, whooshUrl } from './looks';
+import { bellUrl, puffTexture, stageTint, whooshUrl } from './looks';
 
 export interface Siege3DDeps {
   game: Game;
@@ -128,6 +129,11 @@ const WHERE_TEXT: Record<Where, string> = {
   down: ' ▼ look down',
   hidden: ' · out of sight',
 };
+/** How long the alarm bell keeps tolling once it's rung (real seconds between tolls, and how many). */
+const TOLL_SECONDS = 1.1;
+const TOLLS = 4;
+/** The mark over the guard running for the bell. */
+const RUNNER_MARK = '#ff5a3c';
 const COLORS = {
   sense: 0xff2a2a,
   stone: 0x9b978d,
@@ -142,7 +148,7 @@ const COLORS = {
  */
 const ANISOTROPY = 4;
 
-type SiegeGuardClips = Siege['skins']['guard']['clips'];
+type SiegeGuardClips = Siege['skins']['guard']['clips'] | Siege['skins']['captain']['clips'];
 
 /** The models the siege's things wear (`skins` in the data), loaded. */
 interface Skins {
@@ -163,8 +169,13 @@ interface GuardLook {
   mark: THREE.Sprite;
   /** His own materials (they glow gold while his objective's live), freed with him. */
   owned: THREE.MeshLambertMaterial[];
-  /** His hit box (Debug → Options: Siege hit boxes), as the rules have it. */
+  /** His own meshes (hidden while the captain's in the keep; his Sense outline still shows). */
+  meshes: THREE.Mesh[];
+  /** His hit box (Debug → Options: Siege hit boxes), as the rules have it, and its height built. */
   box: THREE.LineSegments;
+  boxHeight: number;
+  /** The mark over him while he runs for the bell. */
+  runnerMark: THREE.Sprite;
 }
 
 /** The spear rack's gold: its mark, and its own materials (they glow while it stands). */
@@ -331,6 +342,7 @@ export class Siege3DView implements ScreenView {
   /** The guards' and the captain's characters on the castle's tier, and that tier. */
   #kit: CharacterKit;
   readonly #markTexture: THREE.CanvasTexture;
+  readonly #runnerTexture: THREE.CanvasTexture;
   readonly #gold: THREE.Color;
   readonly #puffTexture: THREE.Texture;
   readonly #pose: Pose = { position: { x: 0, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0, w: 1 } };
@@ -388,6 +400,8 @@ export class Siege3DView implements ScreenView {
   /** Parts broken lately (real seconds, and where), to tell a big collapse. */
   #breaks: { at: number; point: Vec3 }[] = [];
   #title: { text: string; at: number } | undefined;
+  /** The bell's tolls still to sound (real seconds). */
+  #tolls: number[] = [];
   #bankedXp: XpDeposit | undefined;
   #finished: { result: SiegeResult; at: number } | undefined;
   #lastPhase = '';
@@ -417,6 +431,7 @@ export class Siege3DView implements ScreenView {
     const rules = deps.game.data.siege;
     this.#gold = new THREE.Color(rules.looks.objective.color);
     this.#markTexture = textSprite('▼', rules.looks.objective.color);
+    this.#runnerTexture = textSprite('!', RUNNER_MARK);
     const station = deps.game.data.stations.find((entry) => entry.mechanic === 'siege');
     this.#skill = station?.skill ?? siegeWeapon(rules).skill;
     this.#skillBar = new SkillBar(element, { game: deps.game, skill: this.#skill });
@@ -439,7 +454,7 @@ export class Siege3DView implements ScreenView {
     this.#ghost.frustumCulled = false;
     this.#puffTexture = puffTexture();
     this.#ui = this.buildUi();
-    this.#sfx.load({ ...SOUNDS, whoosh: whooshUrl() });
+    this.#sfx.load({ ...SOUNDS, whoosh: whooshUrl(), bell: bellUrl() });
     this.#listen();
     deps.graphics.onTier(({ tier: next }) => {
       this.#applyTier(next);
@@ -676,6 +691,7 @@ export class Siege3DView implements ScreenView {
     this.#targetsAt = -Infinity;
     this.#breaks = [];
     this.#title = undefined;
+    this.#tolls = [];
     this.#perf = newPerf();
     if (game.inventory.count(rules.item) < 1) this.#showNoSpears();
   }
@@ -698,6 +714,7 @@ export class Siege3DView implements ScreenView {
       look.box.geometry.dispose();
       for (const material of look.owned) material.dispose();
       look.mark.material.dispose();
+      look.runnerMark.material.dispose();
     }
     this.#guards = [];
     const rack = this.#rack;
@@ -930,6 +947,12 @@ export class Siege3DView implements ScreenView {
     root.add(placed.root);
     const mark = this.#markSprite();
     root.add(mark);
+    const runnerMark = new THREE.Sprite(
+      new THREE.SpriteMaterial({ map: this.#runnerTexture, depthWrite: false }),
+    );
+    runnerMark.renderOrder = 21;
+    runnerMark.visible = false;
+    root.add(runnerMark);
     const [width, height, depth] = guard.size;
     const box = new THREE.LineSegments(
       new THREE.EdgesGeometry(new THREE.BoxGeometry(width, height, depth)),
@@ -938,7 +961,30 @@ export class Siege3DView implements ScreenView {
     box.renderOrder = 22;
     box.frustumCulled = false;
     box.visible = false;
-    return { root, placed, clips, down: false, downAt: 0, sense, mark, owned, box };
+    return {
+      root,
+      placed,
+      clips,
+      down: false,
+      downAt: 0,
+      sense,
+      mark,
+      owned,
+      meshes,
+      box,
+      boxHeight: height,
+      runnerMark,
+    };
+  }
+
+  /** The clip a standing guard plays for what he's about. */
+  #clipFor(look: GuardLook, state: GuardState): string {
+    const clips = look.clips;
+    const alerted: Partial<Record<GuardMood, string>> =
+      'panic' in clips
+        ? { panic: clips.panic, hide: clips.hide, run: clips.run, ring: clips.ring }
+        : {};
+    return alerted[state.mood] ?? (state.walking ? clips.patrol : clips.stand);
   }
 
   /**
@@ -1114,6 +1160,37 @@ export class Siege3DView implements ScreenView {
         };
         break;
       }
+      case 'runner':
+        if (event.what === 'start') {
+          this.#title = { text: 'A guard runs for the bell!', at: this.#now };
+          this.#play('creak', 0.45, 900);
+          this.#deps.haptics.pulse(feel.buzzGuardMs);
+        } else if (event.what === 'killed') {
+          this.#title = { text: 'The runner is down!', at: this.#now + 0.3 };
+        }
+        break;
+      case 'bell':
+        if (event.rang) {
+          // It tolls on a while, loud: the whole castle hears it.
+          this.#tolls = Array.from(
+            { length: TOLLS },
+            (_, index) => this.#now + index * TOLL_SECONDS,
+          );
+          this.#deps.haptics.rumble(feel.buzzWinMs, 2);
+          this.#shake = Math.max(this.#shake, 0.04 * feel.shakeStrength);
+          this.#title = {
+            text: `The bell!\nReinforcements in ${clock(feel.reinforcementSeconds)}`,
+            at: this.#now,
+          };
+        } else {
+          this.#title = { text: 'The bell is down:\nno alarm now', at: this.#now + 0.3 };
+        }
+        break;
+      case 'reinforcements':
+        this.#play('rumble', 0.7, -300);
+        this.#deps.haptics.rumble(feel.buzzWinMs, 3);
+        this.#title = { text: 'Reinforcements!', at: this.#now };
+        break;
       case 'vantage':
         this.#play('wind', 0.35, -400);
         // From its new place the list may point another way.
@@ -1395,7 +1472,10 @@ export class Siege3DView implements ScreenView {
       if (!state) return;
       round.guardPose(index, pose);
       const { x, y, z } = pose.position;
-      const target = !state.down && live(state.objective);
+      // In the keep, the captain's out of reach: no gold, only his Sense outline.
+      const inside = state.mood === 'inside';
+      const target = !state.down && !inside && live(state.objective);
+      for (const mesh of look.meshes) mesh.visible = !inside;
       for (const material of look.owned) {
         material.emissive.copy(this.#gold).multiplyScalar(target ? lit * figureGlow : 0);
       }
@@ -1406,23 +1486,29 @@ export class Siege3DView implements ScreenView {
         look.root.position.set(x, y - state.feet, z);
         look.root.rotation.y = state.facing;
       }
-      const clips = look.clips;
-      this.#playClip(look, state.down ? clips.down : state.walking ? clips.patrol : clips.stand);
+      this.#playClip(look, state.down ? look.clips.down : this.#clipFor(look, state));
       for (const overlay of look.sense) overlay.visible = sensing && !state.down;
-      // His hit box, as the rules have it (tumbling with him once he's down).
-      look.box.visible = boxes;
+      // His hit box, as the rules have it (ducked, it's lower; tumbling with him once he's down).
+      look.box.visible = boxes && !inside;
       if (boxes) {
         look.box.position.set(x, y, z);
         look.box.quaternion.set(pose.rotation.x, pose.rotation.y, pose.rotation.z, pose.rotation.w);
+        look.box.scale.set(1, state.size[1] / look.boxHeight, 1);
       }
       look.mark.visible = target;
-      // Over his head; the captain's out in front of him (his window's wall would hide it).
-      look.mark.position.set(
-        0,
-        state.height + feel.markSize * 0.5,
-        state.role === 'captain' ? MARK_OUT : 0,
-      );
+      // Over his head (ducked, over the parapet); the captain's out in front of him (his window's
+      // wall would hide it).
+      const top = state.role === 'captain' ? state.height : state.size[1];
+      look.mark.position.set(0, top + feel.markSize * 0.5, state.role === 'captain' ? MARK_OUT : 0);
       markSize(look.mark);
+      // The runner: a red mark over him, over the gold, through walls (he must be found).
+      const running = !state.down && state.mood === 'run';
+      look.runnerMark.visible = running;
+      if (running) {
+        look.runnerMark.position.set(0, top + feel.markSize * (target ? 1.4 : 0.5), 0);
+        look.runnerMark.scale.set(feel.markSize, feel.markSize, 1);
+        look.runnerMark.material.depthTest = false;
+      }
     });
     const rack = this.#rack;
     const rackState = rack ? round.parts[rack.part] : undefined;
@@ -1613,6 +1699,11 @@ export class Siege3DView implements ScreenView {
   }
 
   #updateEffects(dt: number): void {
+    // The bell's tolls, each as its moment comes.
+    while (this.#tolls.length > 0 && (this.#tolls[0] ?? Infinity) <= this.#now) {
+      this.#tolls.shift();
+      this.#sfx.play('bell', 0.9, (Math.random() - 0.5) * 30);
+    }
     const gravity = this.#deps.game.data.siege.physics.gravity;
     const { debrisSeconds } = this.#look;
     this.#puffs = this.#puffs.filter((puff) => {
@@ -1989,6 +2080,11 @@ export class Siege3DView implements ScreenView {
       return element;
     });
     const status = el('div', 'sg-status');
+    // Once the bell has rung: the time left until reinforcements arrive, big, at the top.
+    const timer = el('div', 'sg-timer');
+    timer.setAttribute('role', 'timer');
+    timer.setAttribute('aria-label', 'Reinforcements');
+    timer.hidden = true;
     // The round's objectives, each ticked off as it's done.
     const objectives = el('ul', 'sg-objectives');
     objectives.setAttribute('aria-label', 'Objectives');
@@ -2072,13 +2168,25 @@ export class Siege3DView implements ScreenView {
     confirmButtons.append(keepFighting, confirmWithdraw);
     confirm.append(confirmTitle, confirmText, confirmButtons);
     confirm.hidden = true;
-    root.append(crosshair, vantages, status, objectives, title, hint, controls, card, confirm);
+    root.append(
+      crosshair,
+      vantages,
+      status,
+      timer,
+      objectives,
+      title,
+      hint,
+      controls,
+      card,
+      confirm,
+    );
     this.#element.append(root);
     return {
       root,
       vantages,
       vantageButtons,
       status,
+      timer,
       objectives,
       title,
       hint,
@@ -2156,6 +2264,9 @@ export class Siege3DView implements ScreenView {
     const left = this.#deps.game.inventory.count(rules.item);
     this.#element.dataset.thrown = String(round?.used ?? 0);
     this.#element.dataset.done = String(round?.done ?? 0);
+    // How far the alarm's got, for the e2e tests and screenshots.
+    this.#element.dataset.alarm = round?.alarm ?? 'quiet';
+    this.#element.dataset.runner = round?.runner === undefined ? '' : String(round.runner);
     this.#element.dataset.aim = `${this.#view.yaw.toFixed(1)} ${this.#view.pitch.toFixed(1)}`;
     const look = this.#gaze;
     this.#element.dataset.camera = look
@@ -2204,8 +2315,18 @@ export class Siege3DView implements ScreenView {
       // A short volley: fewer spears left than the shot takes.
       element.dataset.short = String(spears < volleySize(mode, round.aimed, round.weapon));
     }
-    ui.status.hidden = !ui.card.hidden;
-    ui.status.textContent = `Throws ${String(round.throws)} / par ${String(rules.par)} · ${String(round.used)} spears`;
+    const reinforcements = round.reinforcementsIn;
+    const alarmed = reinforcements !== undefined;
+    ui.root.dataset.alarm = alarmed ? 'rang' : '';
+    ui.status.hidden = !ui.card.hidden || alarmed;
+    ui.status.textContent = `Throws ${String(round.throws)} · ${String(round.used)} spears`;
+    ui.timer.hidden = !ui.card.hidden || !alarmed;
+    if (alarmed) {
+      const text = `Reinforcements in ${clock(reinforcements)}`;
+      if (ui.timer.textContent !== text) ui.timer.textContent = text;
+      ui.timer.dataset.urgent = String(reinforcements <= 30);
+      this.#element.dataset.reinforcements = String(Math.ceil(reinforcements));
+    } else delete this.#element.dataset.reinforcements;
     ui.objectives.hidden = !ui.card.hidden;
     const items = round.plan.objectives.map((objective, index) => {
       const progress = round.progress[index] ?? { done: 0, needed: 1 };
@@ -2215,7 +2336,7 @@ export class Siege3DView implements ScreenView {
       // Out of view from here: which way to turn, or that this spot can't see it.
       const where = done ? '' : (this.#where[index] ?? '');
       return {
-        text: `${done ? '✓' : '○'} ${objectiveText(objective)}${count}`,
+        text: `${done ? '✓' : '○'} ${objectiveText(objective)}${count}${done ? '' : this.#hidingNote(round, index)}`,
         done,
         where,
       };
@@ -2251,11 +2372,25 @@ export class Siege3DView implements ScreenView {
   }
 
   /**
+   * What an objective's targets are about, when it changes how to get them: guards ducked behind
+   * the parapet, the captain hiding in the keep.
+   */
+  #hidingNote(round: SiegeRound, objective: number): string {
+    const standing = round.guards.filter((guard) => !guard.down && guard.objective === objective);
+    const captain = standing.find((guard) => guard.role === 'captain');
+    if (captain) return captain.mood === 'inside' ? ' · hiding in the keep' : '';
+    const hiding = standing.filter((guard) => guard.mood === 'hide').length;
+    return hiding > 0 ? ` · ${String(hiding)} hiding` : '';
+  }
+
+  /**
    * Where the round's targets are on screen (px in the view, off its edges too, `on` if they're
    * in it): its guards' and the captain's chests and the spear rack, and each tower's foot (a
    * landmark, `tower:<id>`). For the e2e tests and screenshots to aim at, as a player would by eye.
    */
-  #targetsOnScreen(round: SiegeRound): { kind: string; x: number; y: number; on: boolean }[] {
+  #targetsOnScreen(
+    round: SiegeRound,
+  ): { kind: string; x: number; y: number; on: boolean; mood?: GuardMood }[] {
     const { clientWidth: width, clientHeight: height } = this.#element;
     const onScreen = (kind: string, at: THREE.Vector3) => {
       const point = at.project(this.#aimCamera);
@@ -2271,10 +2406,13 @@ export class Siege3DView implements ScreenView {
         : [];
     };
     const guards = round.guards.flatMap((guard, index) => {
-      if (guard.down) return [];
+      if (guard.down || guard.mood === 'inside') return [];
       round.guardPose(index, this.#pose);
       const { x, y, z } = this.#pose.position;
-      return onScreen(guard.role, new THREE.Vector3(x, y, z));
+      return onScreen(guard.role, new THREE.Vector3(x, y, z)).map((target) => ({
+        ...target,
+        mood: guard.mood,
+      }));
     });
     const rack = round.parts.flatMap((part) => {
       if (part.kind !== 'rack' || part.mode === 'broken') return [];
@@ -2311,7 +2449,7 @@ export class Siege3DView implements ScreenView {
       });
     } else {
       round.guards.forEach((guard, at) => {
-        if (guard.down || guard.objective !== index) return;
+        if (guard.down || guard.objective !== index || guard.mood === 'inside') return;
         round.guardPose(at, this.#pose);
         const { x, y, z } = this.#pose.position;
         targets.push([
@@ -2343,7 +2481,7 @@ export class Siege3DView implements ScreenView {
     return best?.where ?? '';
   }
 
-  /** The end card: how it ended, the objectives, throws against par, stars, XP and spears back. */
+  /** The end card: how it ended, why it got its stars, the objectives and throws, XP and spears back. */
   #showCard(result: SiegeResult): void {
     const ui = this.#ui;
     ui.cardStars.replaceChildren(
@@ -2363,15 +2501,26 @@ export class Siege3DView implements ScreenView {
         50 + index * 180,
       );
     }
-    const titles = {
+    const titles: Record<SiegeResult['ending'], string> = {
       all: 'Every objective done!',
       withdrew: result.won ? 'Withdrawn' : 'Withdrawn empty-handed',
       spears: result.won ? 'Out of spears' : 'The castle holds',
+      reinforcements: 'Reinforcements arrived',
     };
     ui.cardTitle.textContent = titles[result.ending];
+    const stars = `${String(result.stars)} star${result.stars === 1 ? '' : 's'}`;
+    // Why it got its stars.
+    const why = {
+      quiet: `Every objective, and the bell never rang: ${stars}`,
+      bell: `The bell rang: ${stars}`,
+      some: `${String(result.done)} of ${String(result.total)} objectives: ${stars}`,
+      none: 'Nothing done: no stars',
+    }[result.starsWhy];
     const lines = [
+      why,
+      ...(result.rang && result.starsWhy !== 'bell' ? ['The bell rang'] : []),
       `Objectives: ${String(result.done)} of ${String(result.total)}`,
-      `Throws: ${String(result.throws)} / par ${String(result.par)}`,
+      `Throws: ${String(result.throws)}`,
       `Spears shot: ${String(result.used)}`,
       `Guards down: ${String(result.guardsDown)} · parts down: ${String(result.partsDown)}`,
       `+${String(result.xp)} Command XP${result.starXp > 0 ? ` (★ bonus +${String(result.starXp)})` : ''}`,
@@ -2518,3 +2667,9 @@ function quantile(values: readonly number[], share: number): number {
 }
 
 const round1 = (value: number): number => Math.round(value * 10) / 10;
+
+/** Seconds as minutes and seconds ("1:05"), rounded up. */
+function clock(seconds: number): string {
+  const whole = Math.max(Math.ceil(seconds), 0);
+  return `${String(Math.floor(whole / 60))}:${String(whole % 60).padStart(2, '0')}`;
+}

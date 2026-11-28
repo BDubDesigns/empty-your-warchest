@@ -2710,6 +2710,39 @@ body:not([data-view='camp']) #build-label {
   text-shadow: 0 1px 3px rgb(0 0 0 / 0.85);
 }
 
+/* Once the bell has rung: the time left until reinforcements arrive, where the throws were. */
+.sg-timer {
+  position: absolute;
+  top: calc(var(--safe-top) + 148px);
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 5px 14px;
+  border: 2px solid #ff8a6a;
+  border-radius: 999px;
+  background: rgb(120 18 10 / 0.85);
+  color: #fff;
+  white-space: nowrap;
+  font:
+    800 16px system-ui,
+    sans-serif;
+  font-variant-numeric: tabular-nums;
+  text-shadow: 0 1px 3px rgb(0 0 0 / 0.8);
+}
+
+.sg-timer[data-urgent='true'] {
+  animation: sg-urgent 1s ease-in-out infinite;
+}
+
+@keyframes sg-urgent {
+  50% {
+    background: rgb(200 30 16 / 0.95);
+  }
+}
+
+.sg-ui[data-alarm='rang'] .sg-objectives {
+  top: calc(var(--safe-top) + 186px);
+}
+
 /* Just over the spot and shot buttons: up top it would cover the fort. */
 .sg-hint {
   position: absolute;
@@ -2722,7 +2755,7 @@ body:not([data-view='camp']) #build-label {
   text-shadow: 0 1px 4px rgb(0 0 0 / 0.9);
 }
 
-/* The round's objectives, just under the throws and par, each ticked off as it's done. */
+/* The round's objectives, just under the throws (or the reinforcements' timer), each ticked off. */
 .sg-objectives {
   position: absolute;
   top: calc(var(--safe-top) + 170px);
