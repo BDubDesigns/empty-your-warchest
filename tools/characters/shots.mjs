@@ -1,6 +1,7 @@
 // Screenshots of Debug → Character preview at a phone's size (Playwright's Pixel 7), to judge the
-// characters' looks: the guard and captain on High and on Low, mid-way through the die and cower
-// clips, close up, and the crowd on each tier. Prints what each costs to draw.
+// characters' looks: each guard look beside the captain on High and on Low, mid-way through the
+// die and cower clips, close up, and the crowd (every look) on each tier. Prints what each costs
+// to draw.
 // usage: node tools/characters/shots.mjs <the game's URL, e.g. http://localhost:5173/> <out dir>
 import { mkdir } from 'node:fs/promises';
 import { chromium, devices } from '@playwright/test';
@@ -63,6 +64,15 @@ for (const tier of ['High', 'Low']) {
   }
   await settled();
   await shot(`${tier.toLowerCase()}-pair`);
+  // Each of the guards' looks beside the captain (Look goes round them all, back to the first).
+  const look = preview.getByRole('button', { name: /^Look / });
+  const looks = Number(/\/(\d+)/.exec((await look.textContent()) ?? '')?.[1] ?? 1);
+  for (let index = 1; index <= looks; index++) {
+    await look.click();
+    if (index === looks) break;
+    await settled();
+    await shot(`${tier.toLowerCase()}-look-${String(index + 1)}`);
+  }
   if (tier === 'High') {
     // Mid-way through a fall and a cower (the clips' frames move on in software: about a second).
     await clip('Die');

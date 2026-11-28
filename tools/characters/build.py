@@ -1,14 +1,17 @@
 """Builds the game's characters (public/models/characters/) from four Quaternius Source kits, read as
 data only (their glTF exports; never their .blend files or engine projects):
 
-- Universal Base Characters: the regular male's head, his slicked-back hair and beard.
-- Modular Character Outfits - Fantasy: the knight's parts (tabard, armet, armour, pauldrons, scarf)
-  and the knight's three colourways.
+- Universal Base Characters: the regular male's head, and his hair and beards.
+- Modular Character Outfits - Fantasy: the knight's parts, the man's and the woman's (tabard or
+  plate, armet or horned helmet, arms and legs, pauldrons, scarf) and the knight's three colourways.
 - Universal Animation Library 1 and 2: the clips, on the same skeleton.
 
 Each character is its parts merged into one skinned mesh, one primitive (one draw) per colour map:
-the guard is one (the knight's map), the captain two (his gold knight's map, and his head, hair and
-eyes packed into one). Only colour maps ship (normal, roughness and ORM maps dropped, and the kits'
+a helmeted guard is one (a knight's map), a bare-headed one or the captain two (a knight's map, and
+the heads' map: skin, hair and eyes packed into one, shared by every bare head). The guards' five
+looks share two knight maps (the red and dark colourways); the gold one is the captain's. Each
+character's body (without its decoration: horns, pauldrons, scarf, hair) is measured through the
+idle clip, for the siege's hit box. Only colour maps ship (normal, roughness and ORM maps dropped, and the kits'
 vertex colours and extra UV sets), at 1024, 512 and 256 px (tex-1024/, tex-512/, tex-256/); the
 GLBs point each image at tex/<name> and the view sends it to the folder its tier asks for. Each
 character is cut to two triangle budgets (meshoptimizer, through simplify.mjs): <name>-high.glb and
@@ -45,51 +48,109 @@ TIERS = ('high', 'low')
 # An atlas's regions are inset this far (as a share of it) so a smaller copy's texels don't bleed.
 INSET = 2 / 1024
 
+KNIGHT = os.path.join(OUTFIT_TEXTURES, 'Knight')
+HEAD = os.path.join(BASE, 'Regular_Male_OnlyHead.gltf')
+
+
+def knight(sex, *names):
+    """The knight's parts (Male_Knight_* or Female_Knight_*), by the rest of their names."""
+    return [os.path.join(PARTS, f'{sex}_Knight_{name}.gltf') for name in names]
+
+
+def knight_map(map_name, colourway):
+    """The knight's material in one of its colourways (1 red, 2 gold, 3 dark), as a whole map."""
+    suffix = '' if colourway == 1 else f'_{colourway}'
+    return {'map': map_name, 'region': (0, 0, 1, 1),
+            'image': os.path.join(KNIGHT, f'T_Knight{suffix}_BaseColor.png')}
+
+
+# The heads' map, one for every bare head (the captain's and a guard's): skin down the left half,
+# grey hair top right, eyes below it, and in the corner beside them the guard's brown hair (only
+# the part of the hair map his buzzed hair and beard use, tinted: the kit's hair map is grey, for
+# an engine to tint).
+HEADS = {
+    'MI_Regular_Male': {'map': 'heads', 'region': (0, 0, 0.5, 1)},
+    'MI_Hair_1': {'map': 'heads', 'region': (0.5, 0, 1, 0.75),
+                  'image': os.path.join(HAIR, 'T_Hair_1_BaseColor.png')},
+    'MI_Eyes': {'map': 'heads', 'region': (0.5, 0.75, 0.75, 1)},
+}
+BROWN_HAIR = {'map': 'heads', 'region': (0.75, 0.75, 1, 1),
+              'image': os.path.join(HAIR, 'T_Hair_1_BaseColor.png'),
+              'crop': (0.33, 0.24, 0.68, 0.70), 'tint': ('#140c06', '#7a5030')}
+
 # Each character: its parts (glTF files), and where each of their materials' colour maps goes: an
 # output map (one draw each) and the region of it (u0, v0, u1, v1; v down, as glTF's UVs), from the
-# part's own image or `image` instead (another colourway). `triangles`: the budget on each tier.
+# part's own image or `image` instead (another colourway), or only its `crop` (u0, v0, u1, v1),
+# `tint`ed (its greys running from the first colour to the second). A map several characters share
+# is packed once, from all their regions. `triangles`: the budget on each tier. A woman's parts
+# (their own skeleton: her proportions) are scaled to the man's hip height, so the shared clips'
+# hip motion fits her as it does him.
+#
+# The guards come in five looks, all from the knight's parts that share its colour maps: the red
+# colourway (1) or the dark one (3); the man's outfit or the woman's; a closed armet, the horned
+# helmet or a bare head (the heads' map, shared with the captain); spiked or round pauldrons; a
+# scarf or none. The gold colourway (2) is the captain's alone.
+GUARD_TRIANGLES = {'high': 5000, 'low': 2500}
 CHARACTERS = {
-    # A castle guard: the knight's tabard (red, with a gold cross) over his arms and leg armour, a
-    # closed armet helmet, spiked pauldrons and the red scarf. No head: the armet and the scarf
-    # cover it.
+    # The knight's tabard (red, with a gold cross) over his arms and leg armour, a closed armet,
+    # spiked pauldrons and the red scarf. No head: the armet and the scarf cover it.
     'guard': {
-        'parts': [
-            os.path.join(PARTS, name + '.gltf') for name in (
-                'Male_Knight_Body_Cloth', 'Male_Knight_Head_Armet', 'Male_Knight_Arms',
-                'Male_Knight_Legs_Armor', 'Male_Knight_Feet_Armor', 'Male_Knight_Acc_Pauldron_Spike',
-                'Male_Knight_Acc_Scarf')
-        ],
-        'materials': {
-            'MI_Knight': {'map': 'guard', 'region': (0, 0, 1, 1),
-                          'image': os.path.join(OUTFIT_TEXTURES, 'Knight', 'T_Knight_BaseColor.png')},
-        },
-        'triangles': {'high': 5000, 'low': 2500},
+        'parts': knight('Male', 'Body_Cloth', 'Head_Armet', 'Arms', 'Legs_Armor', 'Feet_Armor',
+                        'Acc_Pauldron_Spike', 'Acc_Scarf'),
+        'materials': {'MI_Knight': knight_map('guard', 1)},
+        'triangles': GUARD_TRIANGLES,
+    },
+    # The dark tabard, the horned helmet (closed, as the armet), round pauldrons, no scarf.
+    'guard_horns': {
+        'parts': knight('Male', 'Body_Cloth', 'Head_Horns', 'Arms', 'Legs_Armor', 'Feet_Armor',
+                        'Acc_Pauldron_Round'),
+        'materials': {'MI_Knight': knight_map('guard_dark', 3)},
+        'triangles': GUARD_TRIANGLES,
+    },
+    # The red tabard, bare headed (brown buzzed hair and a beard), round pauldrons and the scarf.
+    'guard_bare': {
+        'parts': knight('Male', 'Body_Cloth', 'Arms', 'Legs_Armor', 'Feet_Armor',
+                        'Acc_Pauldron_Round', 'Acc_Scarf')
+        + [HEAD, os.path.join(HAIR, 'Hair_Buzzed.gltf'), os.path.join(HAIR, 'Hair_Beard.gltf')],
+        'materials': {'MI_Knight': knight_map('guard', 1), **HEADS, 'MI_Hair_1': BROWN_HAIR},
+        # His face keeps a little more than its share (it's what makes him this look).
+        'weights': {'Regular_Male_OnlyHead': 1.3, 'Male_Knight_Arms': 0.7},
+        'triangles': GUARD_TRIANGLES,
+    },
+    # The woman's outfit: the dark tabard, a closed armet, spiked pauldrons and the scarf.
+    'guard_woman': {
+        'parts': knight('Female', 'Body_Cloth', 'Head_Armet', 'Arms', 'Legs', 'Feet',
+                        'Acc_Pauldrons_Spike', 'Acc_Scarf'),
+        'materials': {'MI_Knight': knight_map('guard_dark', 3)},
+        'weights': {'Female_Knight_Arms': 0.7},
+        'triangles': GUARD_TRIANGLES,
+    },
+    # The woman's full plate (steel, in the red colourway), the horned helmet, round pauldrons.
+    'guard_woman_plate': {
+        'parts': knight('Female', 'Body_Armor', 'Head_Horns', 'Arms', 'Legs', 'Feet',
+                        'Acc_Pauldrons_Round'),
+        'materials': {'MI_Knight': knight_map('guard', 1)},
+        'weights': {'Female_Knight_Body_Armor': 1.5, 'Female_Knight_Arms': 0.7},
+        'triangles': GUARD_TRIANGLES,
     },
     # The captain: the knight's full plate in its gold colourway (round pauldrons, a scarf), bare
     # headed, grey hair slicked back and a beard: a face to see at the keep's windows.
     'captain': {
-        'parts': [
-            os.path.join(PARTS, name + '.gltf') for name in (
-                'Male_Knight_Body_Armor', 'Male_Knight_Acc_Pauldron_Round', 'Male_Knight_Acc_Scarf',
-                'Male_Knight_Arms', 'Male_Knight_Legs_Armor', 'Male_Knight_Feet_Armor')
-        ] + [
-            os.path.join(BASE, 'Regular_Male_OnlyHead.gltf'),
-            os.path.join(HAIR, 'Hair_SlickBack.gltf'),
-            os.path.join(HAIR, 'Hair_Beard.gltf'),
-        ],
-        'materials': {
-            'MI_Knight': {'map': 'captain', 'region': (0, 0, 1, 1),
-                          'image': os.path.join(OUTFIT_TEXTURES, 'Knight', 'T_Knight_2_BaseColor.png')},
-            # The head's map: his skin down the left half, hair top right, eyes below it.
-            'MI_Regular_Male': {'map': 'captain_head', 'region': (0, 0, 0.5, 1)},
-            'MI_Hair_1': {'map': 'captain_head', 'region': (0.5, 0, 1, 0.75)},
-            'MI_Eyes': {'map': 'captain_head', 'region': (0.5, 0.75, 0.75, 1)},
-        },
+        'parts': knight('Male', 'Body_Armor', 'Acc_Pauldron_Round', 'Acc_Scarf', 'Arms',
+                        'Legs_Armor', 'Feet_Armor')
+        + [HEAD, os.path.join(HAIR, 'Hair_SlickBack.gltf'), os.path.join(HAIR, 'Hair_Beard.gltf')],
+        'materials': {'MI_Knight': knight_map('captain', 2), **HEADS},
         # His breastplate's many facets need more than their share; his gauntlets' fingers less.
         'weights': {'Male_Knight_Body_Armor': 1.8, 'Male_Knight_Arms': 0.6},
         'triangles': {'high': 8000, 'low': 5000},
     },
 }
+# Parts left out of a character's body (what the siege's hit box is measured round): decoration.
+DECORATION = ('_Acc_', '_Head_Horns', 'Hair_')
+# The body is measured in the idle clip, at this many moments through it.
+BODY_SAMPLES = 12
+# His trunk, arms and head: what's over his knees (m).
+BODY_ABOVE = 0.5
 
 # The clips (UAL1 and UAL2, without root motion: they play in place), by the names they ship as.
 CLIPS = {
@@ -122,23 +183,30 @@ def is_leaf(name):
 
 
 class Skeleton:
-    """The kit's shared skeleton, as the first part has it: its bones' names, rest poses (local
-    translation and rotation), parents and inverse bind matrices; `kept` without the leaf bones."""
+    """A character's skeleton (the kit's man's or woman's), as the first of its parts has it: its
+    bones' names, rest poses (local translation and rotation), parents and inverse bind matrices;
+    `kept` without the leaf bones. With `hip`, it's scaled (by `scale`) so its hips stand that high;
+    `bind` keeps the inverse bind matrices as the parts have them, to check them against."""
 
-    def __init__(self, path):
+    def __init__(self, path, hip=None):
         src = Source(path)
         nodes = src.json['nodes']
         skin = src.json['skins'][0]
         self.names = [nodes[i]['name'] for i in skin['joints']]
         _, ibm = src.values(skin['inverseBindMatrices'])
-        self.ibm = {name: list(ibm[i * 16:(i + 1) * 16]) for i, name in enumerate(self.names)}
+        self.bind = {name: list(ibm[i * 16:(i + 1) * 16]) for i, name in enumerate(self.names)}
+        own_hip = next(n for n in nodes if n.get('name') == 'pelvis')['translation'][2]
+        self.scale = 1 if hip is None else hip / own_hip
+        # Scaled evenly about the feet: every bone's offset, and each inverse bind's translation.
+        self.ibm = {name: m[:12] + [v * self.scale for v in m[12:15]] + m[15:] for name, m in self.bind.items()}
         self.rest = {}
         self.children = {}
         self.top = None
         for node in nodes:
             if 'name' not in node:
                 continue
-            self.rest[node['name']] = (node.get('translation', [0, 0, 0]), node.get('rotation', [0, 0, 0, 1]))
+            translation = [v * self.scale for v in node.get('translation', [0, 0, 0])]
+            self.rest[node['name']] = (translation, node.get('rotation', [0, 0, 0, 1]))
             self.children[node['name']] = [nodes[c]['name'] for c in node.get('children', [])]
         for i in src.json['scenes'][src.json.get('scene', 0)]['nodes']:
             if nodes[i].get('name') == 'Armature':
@@ -182,9 +250,9 @@ def read_part(path, skeleton):
     names = [j['nodes'][i]['name'] for i in skin['joints']]
     _, ibm = src.values(skin['inverseBindMatrices'])
     for i, name in enumerate(names):
-        if name not in skeleton.ibm:
+        if name not in skeleton.bind:
             raise SystemExit(f'{path}: unknown bone {name}')
-        if max(abs(a - b) for a, b in zip(ibm[i * 16:(i + 1) * 16], skeleton.ibm[name])) > 1e-4:
+        if max(abs(a - b) for a, b in zip(ibm[i * 16:(i + 1) * 16], skeleton.bind[name])) > 1e-4:
             raise SystemExit(f'{path}: bone {name} binds differently')
     # A leaf bone's weights (a fingertip's) go to the bone it hangs off.
     remap = {i: skeleton.kept.index(name if name in skeleton.kept else skeleton.parent[name])
@@ -213,7 +281,7 @@ def read_part(path, skeleton):
             prims.append({
                 'material': mat['name'],
                 'image': os.path.join(src.dir, uri),
-                'position': floats(src, a['POSITION']),
+                'position': array('f', [v * skeleton.scale for v in floats(src, a['POSITION'])]),
                 'normal': floats(src, a['NORMAL']),
                 'uv': floats(src, a['TEXCOORD_0']),
                 'joints': out_joints,
@@ -236,16 +304,18 @@ class Group:
     def count(self):
         return len(self.position) // 3
 
-    def add(self, prim, region, weight=1):
+    def add(self, prim, region, weight=1, crop=(0, 0, 1, 1)):
+        """A part's primitive, its UVs (only its `crop` of its map) moved into `region`."""
         base = self.count
         u0, v0, u1, v1 = region
         u0, v0, u1, v1 = u0 + INSET, v0 + INSET, u1 - INSET, v1 - INSET
+        c0, d0, c1, d1 = crop
         self.position += prim['position']
         self.normal += prim['normal']
         uv = prim['uv']
         for i in range(0, len(uv), 2):
-            u = min(1, max(0, uv[i]))
-            v = min(1, max(0, uv[i + 1]))
+            u = min(1, max(0, (uv[i] - c0) / (c1 - c0)))
+            v = min(1, max(0, (uv[i + 1] - d0) / (d1 - d0)))
             self.uv.append(u0 + u * (u1 - u0))
             self.uv.append(v0 + v * (v1 - v0))
         self.joints += prim['joints']
@@ -336,13 +406,23 @@ def write_character(name, groups, kept, skeleton, path):
 
 
 def atlas(map_name, regions):
-    """A colour map packed from its regions' images, saved at each size."""
+    """A colour map packed from its regions' images (each its crop, tinted), saved at each size."""
     size = SIZES[0]
     args = ['magick', '-size', f'{size}x{size}', 'xc:black']
-    for (u0, v0, u1, v1), image in regions:
+    for (u0, v0, u1, v1), (image, crop, tint) in regions:
         w, h = round((u1 - u0) * size), round((v1 - v0) * size)
-        args += ['(', image, '-alpha', 'off', '-resize', f'{w}x{h}!', ')',
-                 '-geometry', f'+{round(u0 * size)}+{round(v0 * size)}', '-composite']
+        args += ['(', image, '-alpha', 'off']
+        if crop:
+            done = subprocess.run(['magick', 'identify', '-format', '%w %h', image],
+                                  capture_output=True, check=True)
+            iw, ih = (int(n) for n in done.stdout.split())
+            c0, d0, c1, d1 = crop
+            args += ['-crop', f'{round((c1 - c0) * iw)}x{round((d1 - d0) * ih)}'
+                     f'+{round(c0 * iw)}+{round(d0 * ih)}', '+repage']
+        if tint:
+            args += ['-colorspace', 'gray', '-colorspace', 'sRGB', '+level-colors', ','.join(tint)]
+        args += ['-resize', f'{w}x{h}!', ')', '-geometry', f'+{round(u0 * size)}+{round(v0 * size)}',
+                 '-composite']
     for s in SIZES:
         folder = os.path.join(OUT, f'tex-{s}')
         os.makedirs(folder, exist_ok=True)
@@ -350,26 +430,129 @@ def atlas(map_name, regions):
                                os.path.join(folder, f'{map_name}.jpg')], check=True)
 
 
-def build_character(name, spec, skeleton):
+def quat_matrix(t, q):
+    """A translation and rotation (x, y, z, w) as a 4x4 matrix, column by column (as glTF)."""
+    x, y, z, w = q
+    return [1 - 2 * (y * y + z * z), 2 * (x * y + z * w), 2 * (x * z - y * w), 0,
+            2 * (x * y - z * w), 1 - 2 * (x * x + z * z), 2 * (y * z + x * w), 0,
+            2 * (x * z + y * w), 2 * (y * z - x * w), 1 - 2 * (x * x + y * y), 0,
+            t[0], t[1], t[2], 1]
+
+
+def mat_mul(a, b):
+    return [sum(a[k * 4 + r] * b[c * 4 + k] for k in range(4)) for c in range(4) for r in range(4)]
+
+
+def sample(times, values, width, blend, t):
+    """A track's value at `t` (s): a straight blend between the keys either side."""
+    if t <= times[0]:
+        return list(values[0:width])
+    for i in range(1, len(times)):
+        if t <= times[i]:
+            share = (t - times[i - 1]) / (times[i] - times[i - 1])
+            return blend(values[(i - 1) * width:i * width], values[i * width:(i + 1) * width], share)
+    return list(values[(len(times) - 1) * width:len(times) * width])
+
+
+def pose(skeleton, clip, share, hip):
+    """Each bone's matrix in the scene `share` of the way through `clip` ((file, name)), played as
+    the game plays it: rotations from the clip, translation only on the pelvis (scaled to `hip`)."""
+    path, name = clip
+    src = Source(path)
+    nodes = src.json['nodes']
+    anim = next(a for a in src.json['animations'] if a.get('name') == name)
+    their_hip = next(n for n in nodes if n.get('name') == 'pelvis')['translation'][2]
+    tracks = []
+    for ch in anim['channels']:
+        sampler = anim['samplers'][ch['sampler']]
+        tracks.append((nodes[ch['target']['node']].get('name'), ch['target']['path'],
+                       list(floats(src, sampler['input'])), floats(src, sampler['output'])))
+    start = min(times[0] for _, _, times, _ in tracks)
+    end = max(times[-1] for _, _, times, _ in tracks)
+    at = start + (end - start) * share
+    local = {bone: [list(t), list(q)] for bone, (t, q) in skeleton.rest.items()}
+    for bone, kind, times, values in tracks:
+        if bone not in local or kind == 'scale' or (kind == 'translation' and bone != 'pelvis'):
+            continue
+        if kind == 'rotation':
+            local[bone][1] = sample(times, values, 4, slerp, at)
+        else:
+            local[bone][0] = [v * hip / their_hip for v in sample(times, values, 3, lerp, at)]
+    world = {}
+
+    def visit(bone, parent):
+        world[bone] = mat_mul(parent, quat_matrix(*local[bone]))
+        for kid in skeleton.children.get(bone, []):
+            if kid in local:
+                visit(kid, world[bone])
+
+    visit(skeleton.top, [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1])
+    return world
+
+
+def body_bounds(prims, skeleton, hip):
+    """The box round the body's vertices (min and max xyz, m) through the idle clip, skinned, and
+    the box round only what's above BODY_ABOVE: his trunk, arms and head (his stance puts his feet
+    wide apart, but over a parapet or a sill only this shows)."""
+    low, high = [math.inf] * 3, [-math.inf] * 3
+    upper_low, upper_high = [math.inf] * 3, [-math.inf] * 3
+    for n in range(BODY_SAMPLES):
+        world = pose(skeleton, CLIPS['idle'], n / BODY_SAMPLES, hip)
+        skin = [mat_mul(world[bone], skeleton.ibm[bone]) for bone in skeleton.kept]
+        for prim in prims:
+            position, joints, weights = prim['position'], prim['joints'], prim['weights']
+            for v in range(len(position) // 3):
+                x, y, z = position[v * 3:v * 3 + 3]
+                out = [0, 0, 0]
+                for k in range(4):
+                    w = weights[v * 4 + k]
+                    if w <= 0:
+                        continue
+                    m = skin[joints[v * 4 + k]]
+                    for r in range(3):
+                        out[r] += w * (m[r] * x + m[4 + r] * y + m[8 + r] * z + m[12 + r])
+                for r in range(3):
+                    low[r] = min(low[r], out[r])
+                    high[r] = max(high[r], out[r])
+                    if out[1] >= BODY_ABOVE:
+                        upper_low[r] = min(upper_low[r], out[r])
+                        upper_high[r] = max(upper_high[r], out[r])
+    return low, high, upper_low, upper_high
+
+
+def build_character(name, spec, skeleton, hip, maps):
+    """A character's GLB on each tier; its regions of the colour maps go into `maps` (by map)."""
     groups = {}
-    regions = {}
+    body = []
     for path in spec['parts']:
+        part = os.path.basename(path).rsplit('.', 1)[0]
         for prim in read_part(path, skeleton):
             where = spec['materials'].get(prim['material'])
             if where is None:
                 raise SystemExit(f'{path}: no map for {prim["material"]}')
-            weight = spec.get('weights', {}).get(os.path.basename(path).rsplit('.', 1)[0], 1)
-            groups.setdefault(where['map'], Group()).add(prim, where['region'], weight)
-            regions.setdefault(where['map'], {})[where['region']] = where.get('image', prim['image'])
-    for map_name, parts in regions.items():
-        atlas(map_name, sorted(parts.items()))
+            weight = spec.get('weights', {}).get(part, 1)
+            groups.setdefault(where['map'], Group()).add(prim, where['region'], weight,
+                                                         where.get('crop', (0, 0, 1, 1)))
+            source = (where.get('image', prim['image']), where.get('crop'), where.get('tint'))
+            regions = maps.setdefault(where['map'], {})
+            if regions.setdefault(where['region'], source) != source:
+                raise SystemExit(f'{name}: map {where["map"]} has two images for {where["region"]}')
+            if not any(mark in part for mark in DECORATION):
+                body.append(prim)
+    low, high, upper_low, upper_high = body_bounds(body, skeleton, hip)
     total = sum(len(g.indices) // 3 for g in groups.values())
     # Each part's share of the budget grows slower than its triangles (as their SHARE_POWER), so
     # the small pieces (a pauldron, a scarf) keep more of theirs than the big ones (the arms, all
     # fingers): cut as hard, they fall apart first. A part's `weights` scales its share.
     share = lambda a, b, w: w * ((b - a) // 3) ** SHARE_POWER
     weight = sum(share(*part) for g in groups.values() for part in g.parts)
-    report = {'source triangles': total}
+    report = {'source triangles': total, 'scale': round(skeleton.scale, 4),
+              # The body (without its decoration) through the idle clip: across, up, deep (m).
+              'body': [round(high[r] - low[r], 3) for r in range(3)],
+              'body min': [round(v, 3) for v in low], 'body max': [round(v, 3) for v in high],
+              # Only over his knees: across and deep, and its middle (x, z).
+              'upper body': [round(upper_high[r] - upper_low[r], 3) for r in (0, 2)],
+              'upper middle': [round((upper_high[r] + upper_low[r]) / 2, 3) for r in (0, 2)]}
     for tier in TIERS:
         budget = spec['triangles'][tier]
         kept = {}
@@ -496,8 +679,17 @@ def build_clips(skeleton):
 
 
 os.makedirs(OUT, exist_ok=True)
+# The man's skeleton: the clips are fitted to it, and every other character's hips stand as high.
 skeleton = Skeleton(CHARACTERS['guard']['parts'][0])
+hip = skeleton.rest['pelvis'][0][2]
 print('bones', len(skeleton.kept), 'of', len(skeleton.names))
+maps = {}
 for character, spec in CHARACTERS.items():
-    print(character, json.dumps(build_character(character, spec, skeleton)))
+    own = Skeleton(spec['parts'][0], hip)
+    if own.kept != skeleton.kept:
+        raise SystemExit(f'{character}: its skeleton has other bones')
+    print(character, json.dumps(build_character(character, spec, own, hip, maps)))
+for map_name, regions in maps.items():
+    atlas(map_name, sorted(regions.items()))
+print('maps', sorted(maps))
 print('clips', json.dumps(build_clips(skeleton), indent=1))
