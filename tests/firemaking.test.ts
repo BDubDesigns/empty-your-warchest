@@ -310,11 +310,17 @@ describe('stars and the hot streak', () => {
     expect(starsFor(rules, 7, 18)).toBe(1);
   });
 
-  it('stacks deeper after 3 stars, up to the cap, and starts again after less', () => {
-    expect(nextLayers(1, 3, 3)).toBe(2);
-    expect(nextLayers(2, 3, 3)).toBe(3);
-    expect(nextLayers(3, 3, 3)).toBe(3);
-    expect(nextLayers(3, 2, 3)).toBe(1);
-    expect(nextLayers(1, 3, 1)).toBe(1);
+  it('stacks a layer deeper after 3 stars, up to the cap', () => {
+    expect(nextLayers(1, 3, 3, 1)).toBe(2);
+    expect(nextLayers(2, 3, 3, 1)).toBe(3);
+    expect(nextLayers(3, 3, 3, 1)).toBe(3);
+    expect(nextLayers(1, 3, 1, 1)).toBe(1);
+  });
+
+  it('drops one layer after less than 3 stars, never below 1', () => {
+    expect(nextLayers(3, 2, 3, 1)).toBe(2);
+    expect(nextLayers(2, 0, 3, 1)).toBe(1);
+    expect(nextLayers(1, 1, 3, 1)).toBe(1);
+    expect(nextLayers(3, 2, 3, 2)).toBe(1);
   });
 });

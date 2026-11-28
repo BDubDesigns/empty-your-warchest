@@ -1,4 +1,4 @@
-import { starBonus, type EventLogger } from '../../../core';
+import { nextStreak, starBonus, type EventLogger } from '../../../core';
 import type { Firemaking, FiremakingFeel } from '../../../data';
 import {
   bestPull,
@@ -328,10 +328,16 @@ export function starBonusSpears(
 
 /**
  * The hot streak after a rack: a 3-star rack stacks the next one a layer deeper (up to
- * `streakCap` layers); anything less starts again from one. Returns the next rack's layers.
+ * `streakCap` layers); anything less drops it `streakDrop` layers (never below one), so one miss
+ * doesn't throw a long streak away. Returns the next rack's layers.
  */
-export function nextLayers(layers: number, stars: number, streakCap: number): number {
-  return stars >= 3 ? Math.min(layers + 1, Math.max(streakCap, 1)) : 1;
+export function nextLayers(
+  layers: number,
+  stars: number,
+  streakCap: number,
+  streakDrop: number,
+): number {
+  return nextStreak(layers, stars >= 3, streakCap, streakDrop);
 }
 
 function round2(value: number): number {
