@@ -7,6 +7,7 @@ import { camp } from './camp';
 import { castle } from './castle';
 import { characters } from './characters';
 import { firemaking } from './firemaking';
+import { farming } from './farming';
 import { fletching } from './fletching';
 import { graphics } from './graphics';
 import { items } from './items';
@@ -30,6 +31,7 @@ export * from './schema';
 export { GameDataError, parseGameData } from './validate';
 export * from './castleLayout';
 export * from './characterSchema';
+export * from './farmingSchema';
 
 export const rawGameData: GameDataInput = {
   skills,
@@ -48,6 +50,7 @@ export const rawGameData: GameDataInput = {
   brewing,
   archery,
   fletching,
+  farming,
   siege,
   warchest,
   workers,

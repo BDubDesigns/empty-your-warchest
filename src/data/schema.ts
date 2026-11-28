@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { charactersSchema } from './characterSchema';
+import { farmingSchema } from './farmingSchema';
 
 /** lower_snake_case id used to reference one piece of data from another. */
 const id = z.string().regex(/^[a-z][a-z0-9_]*$/, 'Use a lower_snake_case id');
@@ -19,7 +20,7 @@ export const skillSchema = z.object({ id, name });
  * (a spear), a bottle, a green tuft (moss), a mushroom cap, a little grey heap (ash), a blue leaf
  * (woad), a striped sunflower seed, a dark woad seed pod, a puff of mushroom spores, a feather, a
  * fletched arrow and a bare one (a shaft with no feathers), a feather duster of an arrow (feathers
- * stuck on every which way), and a plain round arrow shaft.
+ * stuck on every which way), a plain round arrow shaft, and a handful of yellow petals.
  */
 export const itemLooks = [
   'round',
@@ -38,6 +39,7 @@ export const itemLooks = [
   'shaft',
   'duster',
   'dowel',
+  'petals',
 ] as const;
 
 /** A colour as '#rrggbb'. */
@@ -1739,15 +1741,20 @@ const workersSchema = z.object({
   }),
   jobs: z
     .array(
-      z.object({
-        recipe: id,
-        perMinute: positive,
-        batches: positiveInt.default(1),
-        yield: positiveInt.default(1),
-        extra: z.array(z.object({ item: id, count: positiveInt })).default([]),
-        /** Workers here in a new game. */
-        start: z.number().int().nonnegative(),
-      }),
+      z.union([
+        z.object({
+          recipe: id,
+          perMinute: positive,
+          batches: positiveInt.default(1),
+          yield: positiveInt.default(1),
+          extra: z.array(z.object({ item: id, count: positiveInt })).default([]),
+          /** Workers here in a new game. */
+          start: z.number().int().nonnegative(),
+        }),
+        // The farm's: no recipe. Each worker tends `perMinute` plots a minute (src/core/farm.ts):
+        // harvests a ripe one onto the pile and replants what was there.
+        z.object({ plots: id, perMinute: positive, start: z.number().int().nonnegative() }),
+      ]),
     )
     .min(1),
 });
@@ -2144,6 +2151,7 @@ export const gameDataShape = z.object({
   brewing: brewingSchema,
   archery: archerySchema,
   fletching: fletchingSchema,
+  farming: farmingSchema,
   siege: siegeSchema,
   runner: runnerSchema,
   warchest: warchestSchema,
@@ -2187,6 +2195,10 @@ export type SplittingLog = Splitting['tutorialLog'];
 export type SplittingFeel = Splitting['feel'];
 export type Workers = GameData['workers'];
 export type WorkerJob = Workers['jobs'][number];
+/** A worker job that runs a recipe (every station's but the farm's). */
+export type RecipeJob = Extract<WorkerJob, { recipe: string }>;
+/** The farm's worker job: tending its plots. */
+export type PlotJob = Extract<WorkerJob, { plots: string }>;
 export type Firemaking = GameData['firemaking'];
 export type FiremakingFeel = Firemaking['feel'];
 export type Brewing = GameData['brewing'];
@@ -2199,6 +2211,10 @@ export type ArrowKind = Archery['arrows'][number];
 export type BirdShape = (typeof birdShapes)[number];
 export type Fletching = GameData['fletching'];
 export type FletchingFeel = Fletching['feel'];
+export type Farming = GameData['farming'];
+export type FarmingFeel = Farming['feel'];
+export type Crop = Farming['crops'][number];
+export type CropShape = Crop['look']['shape'];
 export type WoodcuttingForage = GameData['woodcutting']['forage'];
 export type WoodcuttingFellRest = GameData['woodcutting']['fellRest'];
 export type Gate = z.output<typeof gateSchema>;
