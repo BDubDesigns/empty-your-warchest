@@ -15,7 +15,7 @@ async function tapCampSpot(page: Page, spot: { x: number; y: number }): Promise<
 }
 
 test('every station and the chest can be entered and exited by touch', async ({ page }) => {
-  // Five 3D stations to open, rendered in software on CI.
+  // Six 3D stations to open, rendered in software on CI.
   test.setTimeout(150_000);
   const errors: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));
@@ -39,6 +39,7 @@ test('every station and the chest can be entered and exited by touch', async ({ 
       splitting: 'splitting3d',
       firemaking: 'firemaking3d',
       brewing: 'brewing3d',
+      archery: 'archery3d',
     };
     const screen = screens[station.mechanic] ?? 'phaser';
     await expect(page.locator('body')).toHaveAttribute('data-screen', screen);

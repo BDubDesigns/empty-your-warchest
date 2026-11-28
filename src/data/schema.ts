@@ -16,7 +16,8 @@ export const skillSchema = z.object({ id, name });
 /**
  * How an item looks as a piece flying into a warchest: a round log, a split stave, a pointed shaft
  * (a spear), a bottle, a green tuft (moss), a mushroom cap, a little grey heap (ash), a blue leaf
- * (woad).
+ * (woad), a striped sunflower seed, a dark woad seed pod, a puff of mushroom spores, a feather, a
+ * fletched arrow and a bare one (a shaft with no feathers).
  */
 export const itemLooks = [
   'round',
@@ -27,6 +28,12 @@ export const itemLooks = [
   'cap',
   'heap',
   'leaf',
+  'seed',
+  'pod',
+  'spores',
+  'feather',
+  'arrow',
+  'shaft',
 ] as const;
 
 /** A colour as '#rrggbb'. */
@@ -1341,6 +1348,193 @@ const siegeSchema = z.object({
   feel: siegeFeelSchema,
 });
 
+/** Feel numbers for the bird hunt. The debug menu can override them live. */
+export const archeryFeelSchema = z.object({
+  /**
+   * The flight, fixed when a round starts (so sliders apply from the next round): gravity on the
+   * arrows (field units a second, every second), every arrow kind's speed and every bird's speed
+   * multiplied by `arrowSpeed` and `birdSpeed`, and every bird's hit radius by `hitRadius`. An
+   * arrow that grazes a bird, passing through the thin ring `graze` field units wide just outside
+   * its hit radius, scares it (a skill shot: the ring is small, so missing on purpose isn't easy).
+   */
+  gravity: positive,
+  arrowSpeed: positive,
+  birdSpeed: positive,
+  hitRadius: positive,
+  graze: positive,
+  /**
+   * The draw: dragging back `fullDrawPx` (CSS px) is a full draw, the bow's full power; less is
+   * that share of it. A release under `minDraw` of a full draw lets the string down: no shot.
+   */
+  fullDrawPx: positive,
+  minDraw: fraction,
+  /** The aim preview: how much of the arrow's path shows while drawing, in seconds of flight. */
+  previewSeconds: nonNegative,
+  /** On a hit: the freeze (ms) and how hard the screen shakes. */
+  hitStopMs: nonNegative,
+  shakeStrength: nonNegative,
+  /**
+   * Vibration (ms): a tick as the draw passes each quarter, the release, a hit, and a scared
+   * bird's poop.
+   */
+  buzzDrawMs: nonNegative,
+  buzzReleaseMs: nonNegative,
+  buzzHitMs: nonNegative,
+  buzzPoopMs: nonNegative,
+});
+
+/** The shapes of the code-built birds: a plump finch, a crested jay, a long crow. */
+export const birdShapes = ['finch', 'jay', 'crow'] as const;
+
+/** How a bird's height changes as it crosses: a bob up and down, or swooping dives. */
+export const birdPaths = ['straight', 'swoop'] as const;
+
+/** How the hunting stand draws on a graphics tier (only looks: the rules are the same on both). */
+const archeryTierLookSchema = z.object({
+  /** The most device pixels drawn per CSS pixel. */
+  pixelRatio: positive,
+  /** Clouds in the sky and trees along the forest edge. */
+  clouds: z.number().int().nonnegative(),
+  trees: z.number().int().nonnegative(),
+  /** Feathers puffing out of a hit bird. */
+  featherPuff: z.number().int().nonnegative(),
+});
+
+/**
+ * The bird hunt at the hunting stand (2.5D): the world is 3D, but the play is on one flat field
+ * facing the camera, `width` across and `height` up from the bow (field units). Flocks of birds
+ * cross it; you draw the bow (drag back) and release, and the arrow flies in an arc in the same
+ * plane. A hit downs the bird: its seeds, some feathers and (unless it broke) the arrow come back.
+ * An arrow passing close scares a bird into dropping a seed. Stars come from birds hit per arrow.
+ */
+const archerySchema = z.object({
+  /**
+   * The field: `width` × `height` field units, the bow at the middle of its bottom edge. Birds
+   * enter and leave `margin` past its sides. The camera frames it with `frame` more below (the
+   * bow), above (under the HUD) and each side, and fits that box to the screen.
+   */
+  field: z.object({ width: positive, height: positive, margin: nonNegative }),
+  frame: z.object({ bottom: nonNegative, top: nonNegative, side: nonNegative }),
+  /** Seconds per step of the rules, whatever the frame rate (so a round replays the same). */
+  step: positive,
+  /**
+   * A round: `seconds` long, a flock setting off at each of `flockAt` (seconds in), its birds
+   * entering `birdGap` seconds apart. It ends early once every bird has gone and no arrow flies,
+   * or when the quiver's empty.
+   */
+  round: z.object({
+    seconds: positive,
+    flockAt: z.array(nonNegative).min(1),
+    birdGap: rangeSchema,
+  }),
+  /**
+   * The flocks, by Archery level: the last entry at or under the level is used. Each flock has
+   * `birds` birds, each one's kind picked by the `mix` weights.
+   */
+  flocks: z
+    .array(
+      z.object({
+        level: positiveInt,
+        birds: countRange,
+        mix: z.array(z.object({ bird: id, weight: positive })).min(1),
+      }),
+    )
+    .min(1),
+  /**
+   * The birds. A hit one drops `seeds` of its `seed` item and pays `xp`. Its body is `radius`
+   * field units round (the hit radius, and what the model is sized to); it flies at `speed`
+   * (field units a second) at `altitude` (field units up), bobbing (`straight`) or swooping
+   * (`swoop`: dives `amplitude` down and back up) at `hz`. `look` is only looks.
+   */
+  birds: z
+    .array(
+      z.object({
+        id,
+        name,
+        seed: id,
+        seeds: countRange,
+        xp: nonNegative,
+        radius: positive,
+        speed: rangeSchema,
+        altitude: rangeSchema,
+        path: z.object({ kind: z.enum(birdPaths), amplitude: nonNegative, hz: nonNegative }),
+        look: z.object({
+          shape: z.enum(birdShapes),
+          body: hexColor,
+          wing: hexColor,
+          belly: hexColor,
+          beak: hexColor,
+          /** Wing beats a second. */
+          flapHz: positive,
+        }),
+      }),
+    )
+    .min(1),
+  /** Feathers a hit bird drops, whatever its kind. */
+  feathers: z.object({ item: id, count: countRange }),
+  /** A scared bird poops out `seeds` of its seed, and flies on `speedUp` times as fast. */
+  scare: z.object({ seeds: positiveInt, speedUp: z.number().min(1) }),
+  /**
+   * The arrow kinds, best first: the quiver starts on the first you have. Each is the warchest
+   * `item` it spends, and flies at `speed` (a full draw, field units a second), slowed by `drag`
+   * (a share of its speed a second), and pushed sideways by `drift` (most, a steady push that's
+   * different every shot) and a `wobble` (field units a second, every second) at `wobbleHz`. Only
+   * looks: it visibly fishtails `fishtail` degrees as it wobbles. A hit arrow comes back with the
+   * bird unless it breaks (`breakChance`); a miss is lost.
+   */
+  arrows: z
+    .array(
+      z.object({
+        item: id,
+        speed: positive,
+        drag: nonNegative,
+        drift: nonNegative,
+        wobble: nonNegative,
+        wobbleHz: nonNegative,
+        fishtail: nonNegative,
+        breakChance: fraction,
+      }),
+    )
+    .min(1),
+  /** The steepest and flattest shots, in degrees from the right (90 is straight up). */
+  aim: z.object({ min: z.number().min(0).max(180), max: z.number().min(0).max(180) }),
+  /** An arrow still flying after this long (seconds) is lost. */
+  arrowSeconds: positive,
+  /**
+   * Stars from points against par (Brandon, Nov 27): a hit is a point and a scare is a point, so
+   * a bird is worth 2 at most (graze it, then hit it as it flees). Par is every bird that flew by
+   * in the round, shot at or not. 3 stars at par or more, 2 from `two` of par, 1 from `one` of
+   * it, else none.
+   */
+  stars: z.object({ one: fraction, two: fraction }),
+  /** Bonus seeds for 2 and 3 stars, a share of the seeds the round earned, as at every station. */
+  starBonus: z.object({ two: nonNegative, three: nonNegative }),
+  /**
+   * Looks. The camera stands `eyeHeight` up, tilted `pitch` degrees up into the sky; the field is
+   * `distance` away, square on to it; the bow is `bowDistance` in front of it, `bowSize` across,
+   * and a new arrow is on the string `reloadSeconds` after a shot. An arrow in flight is drawn
+   * `arrowLength` field units long; birds are seen `birdTilt` degrees from below, so their wings
+   * show as they beat.
+   */
+  looks: z.object({
+    eyeHeight: positive,
+    pitch: z.number().min(0).max(80),
+    distance: positive,
+    bowDistance: positive,
+    bowSize: positive,
+    reloadSeconds: nonNegative,
+    arrowLength: positive,
+    birdTilt: z.number().min(0).max(90),
+    /** The forest edge: trees from `treeDistance.min` to `.max` away, `treeHeight` tall. */
+    treeDistance: rangeSchema,
+    treeHeight: rangeSchema,
+    /** Seed for where the trees and clouds go: the same every round. */
+    seed: z.number().int(),
+    tiers: z.object({ high: archeryTierLookSchema, low: archeryTierLookSchema }),
+  }),
+  feel: archeryFeelSchema,
+});
+
 /**
  * Workers: how many you have (`start` at level 1 of `skill`, one more every `everyLevels`), and
  * the job each does at a station: its recipe run `perMinute` times a minute (with `batches` and
@@ -1738,6 +1932,7 @@ export const gameDataShape = z.object({
   splitting: splittingSchema,
   firemaking: firemakingSchema,
   brewing: brewingSchema,
+  archery: archerySchema,
   siege: siegeSchema,
   runner: runnerSchema,
   warchest: warchestSchema,
@@ -1785,6 +1980,11 @@ export type FiremakingFeel = Firemaking['feel'];
 export type Brewing = GameData['brewing'];
 export type BrewingFeel = Brewing['feel'];
 export type BrewPotion = Brewing['potions'][number];
+export type Archery = GameData['archery'];
+export type ArcheryFeel = Archery['feel'];
+export type ArcheryBird = Archery['birds'][number];
+export type ArrowKind = Archery['arrows'][number];
+export type BirdShape = (typeof birdShapes)[number];
 export type WoodcuttingForage = GameData['woodcutting']['forage'];
 export type Gate = z.output<typeof gateSchema>;
 export type Roll = z.output<typeof rollSchema>;

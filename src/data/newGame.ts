@@ -9,5 +9,7 @@ export const newGame = {
     { item: 'woad', count: 24 },
     { item: 'moss', count: 6 },
     { item: 'ash', count: 12 },
+    // A starter quiver for the bird hunt (Brandon, Nov 27); fletching makes more later.
+    { item: 'fletched_arrow', count: 20 },
   ],
 } satisfies GameDataInput['newGame'];

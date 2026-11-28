@@ -285,6 +285,7 @@ function checkReferences(data: GameData, ctx: z.RefinementCtx): void {
   }
 
   checkSiege(data, issue);
+  checkArchery(data, itemIds, issue);
   // The castle holds together: its wall closes round the courtyard, its anchors are where they say.
   for (const problem of castleProblems(data.castle)) issue(problem.path, problem.message);
 
@@ -486,6 +487,77 @@ function checkSiege(data: GameData, issue: (path: Path, message: string) => void
       );
     }
   });
+}
+
+/** The bird hunt: its birds, flocks and arrows point at real things, and its ranges make sense. */
+function checkArchery(
+  data: GameData,
+  itemIds: ReadonlySet<string>,
+  issue: (path: Path, message: string) => void,
+): void {
+  const archery = data.archery;
+  const range = (path: Path, value: { min: number; max: number }) => {
+    if (value.min > value.max) issue(path, 'min must not be more than max');
+  };
+  const birds = new Set<string>();
+  archery.birds.forEach((bird, index) => {
+    const path = ['archery', 'birds', index];
+    if (birds.has(bird.id)) issue([...path, 'id'], `Duplicate id "${bird.id}"`);
+    birds.add(bird.id);
+    if (!itemIds.has(bird.seed)) issue([...path, 'seed'], `Unknown item "${bird.seed}"`);
+    range([...path, 'seeds'], bird.seeds);
+    range([...path, 'speed'], bird.speed);
+    range([...path, 'altitude'], bird.altitude);
+    if (bird.altitude.max > archery.field.height) {
+      issue([...path, 'altitude', 'max'], 'Above the field');
+    }
+    if (bird.speed.min <= 0) issue([...path, 'speed', 'min'], 'A bird must move');
+  });
+  archery.flocks.forEach((flock, index) => {
+    const path = ['archery', 'flocks', index];
+    const before = archery.flocks[index - 1];
+    if (before && flock.level <= before.level)
+      issue([...path, 'level'], 'Flocks must be in level order');
+    range([...path, 'birds'], flock.birds);
+    flock.mix.forEach((entry, mixIndex) => {
+      if (!birds.has(entry.bird)) {
+        issue([...path, 'mix', mixIndex, 'bird'], `Unknown bird "${entry.bird}"`);
+      }
+    });
+  });
+  if (archery.flocks[0]?.level !== 1) {
+    issue(['archery', 'flocks'], 'The first flock must be open from level 1');
+  }
+  const arrows = new Set<string>();
+  archery.arrows.forEach((arrow, index) => {
+    const path = ['archery', 'arrows', index, 'item'];
+    if (!itemIds.has(arrow.item)) issue(path, `Unknown item "${arrow.item}"`);
+    if (arrows.has(arrow.item)) issue(path, 'Twice');
+    arrows.add(arrow.item);
+  });
+  if (!itemIds.has(archery.feathers.item)) {
+    issue(['archery', 'feathers', 'item'], `Unknown item "${archery.feathers.item}"`);
+  }
+  range(['archery', 'feathers', 'count'], archery.feathers.count);
+  range(['archery', 'round', 'birdGap'], archery.round.birdGap);
+  range(['archery', 'looks', 'treeDistance'], archery.looks.treeDistance);
+  range(['archery', 'looks', 'treeHeight'], archery.looks.treeHeight);
+  archery.round.flockAt.forEach((at, index) => {
+    const before = archery.round.flockAt[index - 1];
+    if (before !== undefined && at < before) {
+      issue(['archery', 'round', 'flockAt', index], 'Flocks must set off in order');
+    }
+    if (at >= archery.round.seconds) {
+      issue(['archery', 'round', 'flockAt', index], 'After the round is over');
+    }
+  });
+  if (archery.aim.min >= archery.aim.max) issue(['archery', 'aim'], 'min must be under max');
+  const { one, two } = archery.stars;
+  if (one > two) issue(['archery', 'stars'], 'More stars must not need less');
+  // The trees stand behind the field, so they never hide a bird or an arrow.
+  if (archery.looks.treeDistance.min <= archery.looks.distance) {
+    issue(['archery', 'looks', 'treeDistance', 'min'], 'The trees must stand behind the field');
+  }
 }
 
 export const gameDataSchema = gameDataShape.superRefine(checkReferences);

@@ -2940,3 +2940,145 @@ body:not([data-view='camp']) #build-label {
   color: var(--accent);
   font-size: 18px;
 }
+
+/* The bird hunt (src/stations/archery/three/archery3dView.ts). Buttons and the end card share the
+ * fire pit's (.fm-button, .fm-card). */
+.ar-canvas {
+  display: block;
+  touch-action: none;
+}
+
+.ar-ui {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  font-family: system-ui, sans-serif;
+  color: var(--fg);
+}
+
+.ar-ui button {
+  pointer-events: auto;
+}
+
+.ar-ui [hidden] {
+  display: none !important;
+}
+
+/* Time left, and birds hit of arrows shot. */
+.ar-status {
+  position: absolute;
+  top: calc(var(--safe-top) + 70px);
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: rgb(18 30 44 / 0.55);
+  font:
+    700 14px system-ui,
+    sans-serif;
+  white-space: nowrap;
+}
+
+.ar-flash {
+  position: absolute;
+  top: calc(var(--safe-top) + 104px);
+  left: 0;
+  right: 0;
+  text-align: center;
+  font:
+    800 20px system-ui,
+    sans-serif;
+  text-shadow: 0 1px 4px rgb(0 0 0 / 0.7);
+}
+
+.ar-flash-show {
+  animation: ar-flash 1.2s ease-out forwards;
+}
+
+@keyframes ar-flash {
+  0% {
+    transform: scale(0.6);
+    opacity: 0;
+  }
+  15% {
+    transform: scale(1.1);
+    opacity: 1;
+  }
+  70% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(-14px);
+    opacity: 0;
+  }
+}
+
+.ar-hint {
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  bottom: calc(var(--safe-bottom) + 34%);
+  text-align: center;
+  font-size: 15px;
+  text-shadow: 0 1px 3px rgb(0 0 0 / 0.85);
+  animation: ar-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes ar-pulse {
+  0%,
+  100% {
+    opacity: 0.6;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+/* The quiver: one button per arrow kind, bottom left beside the bow. */
+.ar-quiver {
+  position: absolute;
+  left: calc(var(--safe-left) + 10px);
+  bottom: calc(var(--safe-bottom) + 14px);
+  display: flex;
+  gap: 6px;
+}
+
+.ar-kind {
+  display: grid;
+  justify-items: center;
+  min-width: 56px;
+  min-height: 52px;
+  padding: 3px 6px;
+  border: 2px solid transparent;
+  border-radius: 12px;
+  background: rgb(22 18 12 / 0.62);
+  color: var(--fg);
+  touch-action: manipulation;
+}
+
+.ar-kind:active {
+  transform: scale(0.92);
+}
+
+.ar-kind[aria-checked='true'] {
+  border-color: var(--accent);
+  background: rgb(60 44 20 / 0.82);
+}
+
+.ar-kind-none {
+  opacity: 0.45;
+}
+
+.ar-kind-count {
+  font:
+    800 18px system-ui,
+    sans-serif;
+}
+
+.ar-kind-name {
+  font:
+    600 11px system-ui,
+    sans-serif;
+  color: var(--muted);
+}

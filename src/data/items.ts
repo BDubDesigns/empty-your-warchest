@@ -13,4 +13,12 @@ export const items = [
   { id: 'ash', name: 'Ash', look: 'heap' },
   // Blue for brewing: from farming one day; for now the starting stock and the debug menu.
   { id: 'woad', name: 'Woad', look: 'leaf' },
+  // From the bird hunt (Archery): each bird's seeds (woad's seed is its own item, for farming
+  // later), feathers for fletching, and the arrows it spends.
+  { id: 'sunflower_seed', name: 'Sunflower seed', look: 'seed' },
+  { id: 'woad_seed', name: 'Woad seed', look: 'pod' },
+  { id: 'mushroom_spores', name: 'Mushroom spores', look: 'spores' },
+  { id: 'feather', name: 'Feather', look: 'feather' },
+  { id: 'fletched_arrow', name: 'Fletched arrow', look: 'arrow' },
+  { id: 'bare_arrow', name: 'Bare arrow', look: 'shaft' },
 ] satisfies GameDataInput['items'];

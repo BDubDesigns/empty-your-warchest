@@ -39,4 +39,19 @@ export const recipes = [
     outputs: [{ item: 'sense_potion', count: 1 }],
     xp: 75,
   },
+  {
+    // A worker's hunt at the hunting stand: a bird of each kind down, for an arrow each (a
+    // worker's misses are lost too), and 3 feathers a bird. XP is the three birds' (8 + 10 + 14).
+    // Playing pays per bird hit, from the birds in the archery data; this is only the workers'.
+    id: 'hunt_flock',
+    station: 'hunting_stand',
+    inputs: [{ item: 'fletched_arrow', count: 3 }],
+    outputs: [
+      { item: 'feather', count: 9 },
+      { item: 'sunflower_seed', count: 1 },
+      { item: 'woad_seed', count: 1 },
+      { item: 'mushroom_spores', count: 1 },
+    ],
+    xp: 32,
+  },
 ] satisfies GameDataInput['recipes'];
