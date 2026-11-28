@@ -50,7 +50,7 @@ async function openTent(page: Page, spears: number, potions = 0) {
   await expect(page.locator('body')).toHaveAttribute('data-screen', 'siege3d');
 }
 
-test('Siege: the castle from its vantage points, drag the crosshair, Fire, and Sense', async ({
+test('Siege: the castle from its vantage points, drag to look, Fire and follow, and Sense', async ({
   page,
 }) => {
   test.setTimeout(150_000);
@@ -72,10 +72,12 @@ test('Siege: the castle from its vantage points, drag the crosshair, Fire, and S
   await expect(page.getByRole('radio', { name: /Barrage/ })).toContainText(
     `${String(volley * (ballista?.barrageTimes ?? 0))} spears`,
   );
-  // Every objective listed.
-  await expect(page.getByRole('list', { name: 'Objectives' }).getByRole('listitem')).toHaveCount(
-    siege.objectives.count,
-  );
+  // Every objective listed, each saying where it is from here (in view, a way to turn, or hidden).
+  const objectives = page.getByRole('list', { name: 'Objectives' }).getByRole('listitem');
+  await expect(objectives).toHaveCount(siege.objectives.count);
+  for (const line of await objectives.all()) {
+    await expect(line).toHaveAttribute('data-where', /^(|left|right|up|down|hidden)$/);
+  }
 
   // The vantage points: the first to start, and a tap moves to another.
   const [first, second] = castle.vantages;
@@ -88,7 +90,8 @@ test('Siege: the castle from its vantage points, drag the crosshair, Fire, and S
   await page.getByRole('radio', { name: second.name }).tap();
   await expect(view).toHaveAttribute('data-vantage', second.id);
 
-  // A drag moves the crosshair over the view (the camera stays put).
+  // A drag turns the view under the crosshair (the camera stays where it stands): the aim goes
+  // the way the finger does, right and up.
   await expect(page.locator('#screen-siege3d .sg-crosshair')).toBeVisible();
   const aim = async () =>
     ((await view.getAttribute('data-aim')) ?? '0 0').split(' ').map(Number) as [number, number];
@@ -108,16 +111,36 @@ test('Siege: the castle from its vantage points, drag the crosshair, Fire, and S
   }
   await touch('touchEnd', []);
   const [x1, y1] = await aim();
-  expect(x1).toBeCloseTo(x0 + 40 * feel.aimPerPx, 0);
-  expect(y1).toBeCloseTo(y0 - 20 * feel.aimPerPx, 0);
+  const perPx = (second.fov / box.height) * feel.aimPerPx;
+  expect(x1).toBeCloseTo(x0 + 40 * perPx, 0);
+  expect(y1).toBeCloseTo(y0 + 20 * perPx, 0);
   await expect(view).toHaveAttribute('data-camera', 'vantage');
+  // It turns no further than the vantage point lets it.
+  for (let stroke = 0; stroke < 8; stroke++) {
+    await touch('touchStart', [{ x: x + 150, y }]);
+    for (let step = 1; step <= 6; step++) {
+      await touch('touchMove', [{ x: x + 150 - step * 50, y }]);
+    }
+    await touch('touchEnd', []);
+  }
+  expect((await aim())[0]).toBeCloseTo(-second.yaw, 0);
+  // The buttons are still there to use.
+  await expect(page.getByRole('radio', { name: first.name })).toBeVisible();
+  await expect(objectives.first()).toBeVisible();
 
-  // Fire: an aimed volley, out of the warchest.
+  // Fire: an aimed volley, out of the warchest, and the camera goes after its lead spear.
   const fire = page.getByRole('button', { name: 'Fire' });
   await expect(fire).toBeEnabled();
   await fire.tap();
+  await expect(view).toHaveAttribute('data-camera', 'follow', { timeout: 20_000 });
   await expect(count).toHaveText(String(60 - volley));
   await expect(view).toHaveAttribute('data-thrown', String(volley));
+  await expect(page.locator('#screen-siege3d .sg-crosshair')).toBeHidden();
+  // A tap skips back to the vantage point.
+  await touch('touchStart', [{ x, y }]);
+  await touch('touchEnd', []);
+  await expect(view).toHaveAttribute('data-camera', 'vantage', { timeout: 30_000 });
+  await expect(page.locator('#screen-siege3d .sg-crosshair')).toBeVisible();
 
   // A Sense potion: guards in red through walls, counting down.
   const sense = page.getByRole('button', { name: /Sense/ });
@@ -154,6 +177,9 @@ test('Siege: the castle from its vantage points, drag the crosshair, Fire, and S
     'siege.roundStart',
     'siege.vantage',
     'siege.throw',
+    'siege.look',
+    'siege.follow',
+    'siege.throwDone',
     'siege.potion',
     'siege.ghost',
     'siege.end',
@@ -172,6 +198,18 @@ test('Siege: the castle from its vantage points, drag the crosshair, Fire, and S
     power: ballista?.speed,
   });
   expect(thrown?.data?.aim).toMatchObject({ yaw: expect.any(Number), tilt: expect.any(Number) });
+  // How far the view was turned for the shot, whether its follow shot was skipped, and what it
+  // broke.
+  const looked = exported.events.find((event) => event.type === 'siege.look');
+  expect(looked?.data).toMatchObject({ vantage: second.id, yaw: -second.yaw });
+  expect(exported.events.find((event) => event.type === 'siege.follow')?.data).toMatchObject({
+    throw: 1,
+    skipped: expect.any(Boolean),
+  });
+  expect(exported.events.find((event) => event.type === 'siege.throwDone')?.data).toMatchObject({
+    throw: 1,
+    partsBroken: expect.any(Number),
+  });
   expect(exported.events.find((event) => event.type === 'siege.end')?.data).toMatchObject({
     ending: expect.stringMatching(/withdrew|all/),
   });
