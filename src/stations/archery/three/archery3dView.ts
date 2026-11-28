@@ -978,7 +978,7 @@ export class Archery3DView implements ScreenView {
     lines.push(
       `🎯 ${plural(result.hits, 'hit')} + 💩 ${plural(result.scares, 'graze')} · par ${String(result.par)}, every bird that flew by`,
     );
-    lines.push('A hit or a graze is a point: graze a bird, then hit it as it flees, for 2');
+    lines.push('A hit or a graze is a point, and a bird can be grazed again and again as it flees');
     const { one, two } = this.#rules.stars;
     const nextShare = result.stars === 0 ? one : result.stars === 1 ? two : 1;
     if (result.stars < 3) {

@@ -1596,8 +1596,8 @@ export const archeryFeelSchema = z.object({
    * The flight, fixed when a round starts (so sliders apply from the next round): gravity on the
    * arrows (field units a second, every second), every arrow kind's speed and every bird's speed
    * multiplied by `arrowSpeed` and `birdSpeed`, and every bird's hit radius by `hitRadius`. An
-   * arrow that grazes a bird, passing through the thin ring `graze` field units wide just outside
-   * its hit radius, scares it (a skill shot: the ring is small, so missing on purpose isn't easy).
+   * arrow that grazes a bird, passing within `graze` field units outside its hit radius (about a
+   * bird's width), scares it.
    */
   gravity: positive,
   arrowSpeed: positive,
@@ -1623,6 +1623,19 @@ export const archeryFeelSchema = z.object({
   buzzReleaseMs: nonNegative,
   buzzHitMs: nonNegative,
   buzzPoopMs: nonNegative,
+  /**
+   * The release, only looks: the string snaps `snapOvershoot` of a full draw past rest and rings
+   * out over `snapSeconds`; the view kicks up `kickDegrees` and settles over `kickSeconds`; a
+   * streak `trailWidth` field units wide follows each arrow, as long as the last `trailSeconds` of
+   * its flight (0 for none); and a whoosh at `whooshVolume` (0 for none).
+   */
+  snapOvershoot: nonNegative,
+  snapSeconds: positive,
+  kickDegrees: nonNegative,
+  kickSeconds: positive,
+  trailSeconds: nonNegative,
+  trailWidth: nonNegative,
+  whooshVolume: z.number().min(0).max(1),
 });
 
 /** The shapes of the code-built birds: a plump finch, a crested jay, a long crow. */
@@ -1647,7 +1660,7 @@ const archeryTierLookSchema = z.object({
  * facing the camera, `width` across and `height` up from the bow (field units). Flocks of birds
  * cross it; you draw the bow (drag back) and release, and the arrow flies in an arc in the same
  * plane. A hit downs the bird: its seeds, some feathers and (unless it broke) the arrow come back.
- * An arrow passing close scares a bird into dropping a seed. Stars come from birds hit per arrow.
+ * An arrow passing close scares a bird into dropping a seed. Stars come from points against par.
  */
 const archerySchema = z.object({
   /**
@@ -1714,8 +1727,18 @@ const archerySchema = z.object({
     .min(1),
   /** Feathers a hit bird drops, whatever its kind. */
   feathers: z.object({ item: id, count: countRange }),
-  /** A scared bird poops out `seeds` of its seed, and flies on `speedUp` times as fast. */
-  scare: z.object({ seeds: positiveInt, speedUp: z.number().min(1) }),
+  /**
+   * A scared bird poops out `seeds` of its seed and flies on `speedUp` times as fast. It can be
+   * scared again (even by the same arrow, on its way up and back down), but not within `cooldown`
+   * seconds of the last time; each scare speeds it up again, to at most `maxSpeedUp` times its own
+   * speed, so a bird scared again and again flees but never vanishes.
+   */
+  scare: z.object({
+    seeds: positiveInt,
+    speedUp: z.number().min(1),
+    cooldown: nonNegative,
+    maxSpeedUp: z.number().min(1),
+  }),
   /**
    * The arrow kinds, best first: the quiver starts on the first you have. Each is the warchest
    * `item` it spends, and flies at `speed` (a full draw, field units a second), slowed by `drag`
@@ -1743,9 +1766,8 @@ const archerySchema = z.object({
   /** An arrow still flying after this long (seconds) is lost. */
   arrowSeconds: positive,
   /**
-   * Stars from points against par (Brandon, Nov 27): a hit is a point and a scare is a point, so
-   * a bird is worth 2 at most (graze it, then hit it as it flees). Par is every bird that flew by
-   * in the round, shot at or not. 3 stars at par or more, 2 from `two` of par, 1 from `one` of
+   * Stars from points against par (Brandon, Nov 27): a hit is a point and every scare is a point.
+   * Par is every bird that flew by in the round, shot at or not. 3 stars at par or more, 2 from `two` of par, 1 from `one` of
    * it, else none.
    */
   stars: z.object({ one: fraction, two: fraction }),

@@ -325,18 +325,54 @@ describe('a round of the bird hunt', () => {
     const graze = (shot?.data?.graze as number[] | undefined)?.[0] ?? -1;
     expect(graze).toBeGreaterThan(0);
     expect(graze).toBeLessThanOrEqual(feel.graze);
-    // A bird is only scared once.
+    // It can be scared again: another seed and another point.
     played.round.shoot(
       'fletched_arrow',
       aimPast({ x: finch?.x ?? 0, y: finch?.y ?? 0 }, (finchRadius + grazeEdge) / 2),
       1,
     );
     untilLanded(played);
-    expect(banked(played, 'sunflower_seed')).toBe(rules.scare.seeds);
-    expect(played.round.points).toBe(1);
+    expect(finch?.scares).toBe(2);
+    expect(banked(played, 'sunflower_seed')).toBe(rules.scare.seeds * 2);
+    expect(played.round.points).toBe(2);
   });
 
-  it('the graze ring is thin: an arrow just past it does nothing', () => {
+  it('one arrow can scare a bird on its way up and again on its way back down', () => {
+    const played = play(stillBird());
+    untilBirdIn(played);
+    const finch = must(played.round.birds[0]);
+    // Hanging just off the line of a shot straight up: passed going up, and coming down.
+    finch.x = (finchRadius + grazeEdge) / 2;
+    played.round.shoot('fletched_arrow', 90, 1);
+    untilLanded(played);
+    expect(finch.scares).toBe(2);
+    expect(played.round.arrows[0]?.scared).toHaveLength(2);
+    expect(played.round.points).toBe(2);
+    expect(finch.speed).toBeCloseTo(finch.baseSpeed * rules.scare.speedUp ** 2);
+  });
+
+  it('scares a bird at most once a cooldown, and caps how fast it flees', () => {
+    const played = play(stillBird());
+    untilBirdIn(played);
+    const finch = must(played.round.birds[0]);
+    finch.x = (finchRadius + grazeEdge) / 2;
+    // Two arrows side by side pass it together: one scare.
+    played.round.shoot('fletched_arrow', 90, 1);
+    played.round.shoot('fletched_arrow', 90, 1);
+    run(played, 0.6);
+    expect(finch.scares).toBe(1);
+    untilLanded(played);
+    // Arrow after arrow, well apart: scared every pass, but never past the cap.
+    for (let shot = 0; shot < 3; shot++) {
+      played.round.shoot('fletched_arrow', 90, 1);
+      run(played, rules.scare.cooldown + 0.3);
+    }
+    untilLanded(played);
+    expect(finch.scares).toBeGreaterThanOrEqual(5);
+    expect(finch.speed).toBeCloseTo(finch.baseSpeed * rules.scare.maxSpeedUp);
+  });
+
+  it('an arrow passing wider than the scare zone does nothing', () => {
     const played = play(stillBird());
     const bird = untilBirdIn(played);
     played.round.shoot('fletched_arrow', aimPast(bird, grazeEdge + 0.3), 1);
@@ -346,7 +382,7 @@ describe('a round of the bird hunt', () => {
     expect(played.round.points).toBe(0);
   });
 
-  it('a bird is worth 2 points at most: graze it, then hit it as it flees', () => {
+  it('a graze and a hit on the same bird both count: graze it, then hit it as it flees', () => {
     const played = play(stillBird((raw) => (must(raw.archery.arrows[0]).breakChance = 0)));
     const bird = untilBirdIn(played);
     played.round.shoot('fletched_arrow', aimPast(bird, (finchRadius + grazeEdge) / 2), 1);
@@ -496,6 +532,12 @@ describe('archery data', () => {
     invalid((raw) => {
       raw.archery.stars = { one: 0.8, two: 0.5 };
     }, 'More stars must not need less');
+  });
+
+  it('fails loudly on a speed cap under one scare’s speed-up', () => {
+    invalid((raw) => {
+      raw.archery.scare.maxSpeedUp = 1.2;
+    }, 'Must not be under one scare’s speed-up');
   });
 
   it('fails loudly on a flock with an unknown bird', () => {
