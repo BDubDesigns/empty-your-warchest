@@ -3182,7 +3182,7 @@ body:not([data-view='camp']) #build-label {
   display: none !important;
 }
 
-/* Time left and fletched arrows made; under it, the shafts and feathers there are. */
+/* The batch being made; under it, the staves and feathers there are. */
 .fl-status,
 .fl-supplies {
   position: absolute;
@@ -3209,9 +3209,86 @@ body:not([data-view='camp']) #build-label {
   color: var(--muted);
 }
 
+/* The hot streak's multiplier, beside the batch (the fire pit's look). */
+.fl-streak {
+  position: absolute;
+  top: calc(var(--safe-top) + 130px);
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, #f39a3b, #c0471c);
+  box-shadow: 0 0 14px rgb(243 154 59 / 0.55);
+  font:
+    800 15px system-ui,
+    sans-serif;
+  white-space: nowrap;
+}
+
+/* The batch picker (its buttons are the fire pit's rack sizes, .fm-size). */
+.fl-sizes {
+  position: absolute;
+  top: calc(var(--safe-top) + 166px);
+  left: 0;
+  right: 0;
+  display: flex;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 12px;
+}
+
+.fl-size {
+  min-width: 48px;
+}
+
+/* The made batch's count, big, as it pours into the chest. */
+.fl-count {
+  position: absolute;
+  top: 38%;
+  left: 0;
+  right: 0;
+  text-align: center;
+  font:
+    900 34px system-ui,
+    sans-serif;
+  color: #ffe9a8;
+  text-shadow:
+    0 2px 6px rgb(0 0 0 / 0.8),
+    0 0 18px rgb(243 154 59 / 0.6);
+}
+
+.fl-count[data-made='fletched'] {
+  color: #b8ffb0;
+}
+
+.fl-count-show {
+  animation: fl-count-pop 1.2s ease-out forwards;
+}
+
+@keyframes fl-count-pop {
+  0% {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+  18% {
+    opacity: 1;
+    transform: scale(1.12);
+  }
+  30% {
+    transform: scale(1);
+  }
+  80% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-40px);
+  }
+}
+
 .fl-flash {
   position: absolute;
-  top: calc(var(--safe-top) + 134px);
+  top: calc(var(--safe-top) + 228px);
   left: 0;
   right: 0;
   text-align: center;
