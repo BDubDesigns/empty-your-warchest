@@ -23,7 +23,7 @@ import type {
   LiveChoice,
   LiveTuning,
 } from '../../../core';
-import type { Castle, Siege, SiegeFeel } from '../../../data';
+import type { Siege, SiegeFeel } from '../../../data';
 import type { GhostLine } from '../feel';
 import type { BodyShape } from '../logic/castleBodies';
 import { objectiveText } from '../logic/objectives';
@@ -112,28 +112,6 @@ const COLORS = {
  * How sharp the castle's textures are at a slant (three.js keeps it to what the GPU can do).
  */
 const ANISOTROPY = 4;
-
-/**
- * The castle built ahead of time (at the camp, by `preload`), and the tier it's built for: the
- * siege takes it when it opens, so the War tent opens without building it then.
- */
-let early: { tier: GraphicsTier; scene: Promise<CastleScene> } | undefined;
-
-/** The castle at `tier`: the one built ahead of time if it's for that tier, or built now. */
-function castleFor(castle: Castle, tier: GraphicsTier): Promise<CastleScene> {
-  const ready = early;
-  early = undefined;
-  if (ready?.tier === tier) return ready.scene;
-  if (ready) {
-    void ready.scene.then(
-      (scene) => {
-        scene.dispose();
-      },
-      () => undefined,
-    );
-  }
-  return buildCastleScene(castle, tier, ANISOTROPY);
-}
 
 /** The models the siege's things wear (`skins` in the data), loaded. */
 interface Skins {
@@ -241,7 +219,11 @@ export class Siege3DView implements ScreenView {
   readonly #effects = new THREE.Group();
   readonly #ghost: THREE.InstancedMesh;
   readonly #skins: Skins;
-  #castle: CastleScene;
+  /** The castle's scene, once it's built (until then, `#waiting`: the sky). */
+  #castle: CastleScene | undefined;
+  readonly #waiting = new THREE.Scene();
+  /** On screen (between `start` and `stop`). */
+  #started = false;
   /** The tier the castle was built for (its textures and trees); its shadows follow the tier's. */
   #castleTier: GraphicsTier;
   #sun: THREE.DirectionalLight | undefined;
@@ -249,7 +231,8 @@ export class Siege3DView implements ScreenView {
   #built = new Map<string, THREE.Matrix4>();
   /** Materials the siege made for the castle's parts (their damage tint), freed with it. */
   #partMaterials: THREE.Material[] = [];
-  #rebuilding = false;
+  /** The castle is being built (when the siege first opens, or again for another tier). */
+  #rebuilding = true;
   /**
    * Frames drawn this round, to log how smoothly: all, and while looking at a collapse; and the
    * rules' physics time each frame (ms), to tell physics from drawing.
@@ -332,7 +315,7 @@ export class Siege3DView implements ScreenView {
     physics: Physics,
     hud: WarchestHud,
     skins: Skins,
-    castle: CastleScene,
+    castle: Promise<CastleScene>,
     renderer: THREE.WebGLRenderer,
     tier: GraphicsTier,
   ) {
@@ -342,8 +325,8 @@ export class Siege3DView implements ScreenView {
     this.#physics = physics;
     this.#hud = hud;
     this.#renderer = renderer;
-    this.#castle = castle;
     this.#castleTier = tier;
+    this.#waiting.background = new THREE.Color(deps.game.data.castle.colors.sky);
     const rules = deps.game.data.siege;
     const station = deps.game.data.stations.find((entry) => entry.mechanic === 'siege');
     this.#skill = station?.skill ?? siegeWeapon(rules).skill;
@@ -366,8 +349,8 @@ export class Siege3DView implements ScreenView {
     this.#ghost.count = 0;
     this.#ghost.frustumCulled = false;
     this.#puffTexture = puffTexture();
-    this.#useCastle(castle);
     this.#ui = this.buildUi();
+    void this.#arrive(castle, tier);
     this.#sfx.load({ ...SOUNDS, whoosh: whooshUrl() });
     this.#listen();
     deps.graphics.onTier(({ tier: next }) => {
@@ -383,7 +366,9 @@ export class Siege3DView implements ScreenView {
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     deps.graphics.noteGpu(gpuOf(renderer.getContext()).gpu);
     const tier = deps.graphics.tier;
-    const [physics, hud, skins, castle] = await Promise.all([
+    // The castle is built while the siege opens: it shows the sky (and says so) until it's there.
+    const castle = buildCastleScene(deps.game.data.castle, tier, ANISOTROPY);
+    const [physics, hud, skins] = await Promise.all([
       loadPhysics(),
       WarchestHud.create(element, {
         game: deps.game,
@@ -392,38 +377,25 @@ export class Siege3DView implements ScreenView {
         logger: deps.logger,
       }),
       loadSkins(deps.game.data.siege.skins),
-      castleFor(deps.game.data.castle, tier),
     ]);
     return new Siege3DView(element, deps, physics, hud, skins, castle, renderer, tier);
   }
 
-  /**
-   * Loads the physics engine (and starts its wasm) and the models, and builds the castle at
-   * `tier`, ahead of time.
-   */
-  static async preload(
-    skins?: Siege['skins'],
-    castle?: { castle: Castle; tier: GraphicsTier },
-  ): Promise<void> {
-    if (castle && !early) {
-      const scene = buildCastleScene(castle.castle, castle.tier, ANISOTROPY);
-      early = { tier: castle.tier, scene };
-      // A failed build only costs the head start: the siege builds it again when it opens.
-      scene.catch(() => {
-        if (early?.scene === scene) early = undefined;
-      });
-    }
+  /** Loads the physics engine (and starts its wasm), the models and the castle's kit ahead of time. */
+  static async preload(skins?: Siege['skins'], kit?: string): Promise<void> {
     await Promise.all([
       loadPhysics(),
       WarchestHud.preload(),
       ...(skins ? [loadSkins(skins)] : []),
-      ...(early ? [early.scene] : []),
+      // Into the browser's cache: the castle's own loader fetches it again from there.
+      ...(kit ? [fetch(kit).then((response) => response.arrayBuffer())] : []),
     ]);
   }
 
   // ScreenView
 
   start(): void {
+    this.#started = true;
     restoreContext(this.#renderer);
     this.#hud.wake();
     this.#resize();
@@ -431,12 +403,15 @@ export class Siege3DView implements ScreenView {
     this.#renderer.setAnimationLoop((time) => {
       this.#loop(time);
     });
+    // Still being built: the round starts once it's there.
+    if (!this.#castle) return;
     // Built for another tier (the phone was moved to Low as it played): build it again first.
-    if (this.#deps.graphics.tier !== this.#castleTier) void this.#rebuild(this.#deps.graphics.tier);
+    if (this.#deps.graphics.tier !== this.#castleTier) this.#rebuild(this.#deps.graphics.tier);
     else this.#startRound();
   }
 
   stop(): void {
+    this.#started = false;
     this.#renderer.setAnimationLoop(null);
     this.#endRound();
     this.#hud.sleep();
@@ -497,24 +472,40 @@ export class Siege3DView implements ScreenView {
   }
 
   /** Builds the castle again at `tier` (its textures and trees), then starts a round. */
-  async #rebuild(tier: GraphicsTier): Promise<void> {
+  #rebuild(tier: GraphicsTier): void {
     if (this.#rebuilding) return;
-    this.#rebuilding = true;
     this.#endRound();
-    this.#ui.hint.textContent = 'Building the castle…';
+    const old = this.#castle;
+    if (old) {
+      old.scene.remove(this.#figures, this.#spearGroup, this.#effects, this.#ghost);
+      old.dispose();
+    }
+    for (const material of this.#partMaterials) material.dispose();
+    this.#partMaterials = [];
+    this.#castle = undefined;
+    void this.#arrive(buildCastleScene(this.#deps.game.data.castle, tier, ANISOTROPY), tier);
+  }
+
+  /** The castle, once it's built: drawn from now on, and a round starts if the siege is open. */
+  async #arrive(build: Promise<CastleScene>, tier: GraphicsTier): Promise<void> {
+    this.#rebuilding = true;
+    const started = performance.now();
     try {
-      const castle = await buildCastleScene(this.#deps.game.data.castle, tier, ANISOTROPY);
-      this.#castle.scene.remove(this.#figures, this.#spearGroup, this.#effects, this.#ghost);
-      this.#castle.dispose();
-      for (const material of this.#partMaterials) material.dispose();
-      this.#partMaterials = [];
+      const castle = await build;
       this.#castleTier = tier;
       this.#useCastle(castle);
-      this.#deps.logger.log('siege.castleBuilt', { tier });
+      this.#deps.logger.log('siege.castleBuilt', {
+        tier,
+        ms: Math.round(performance.now() - started),
+      });
+    } catch (error) {
+      this.#deps.logger.log('siege.castleFailed', { tier, error: String(error) });
+      this.#ui.hint.textContent = `Couldn't build the castle: ${String(error)}`;
+      return;
     } finally {
       this.#rebuilding = false;
     }
-    this.#startRound();
+    if (this.#started) this.#startRound();
   }
 
   // Rounds
@@ -523,6 +514,7 @@ export class Siege3DView implements ScreenView {
     const { game } = this.#deps;
     const rules = game.data.siege;
     this.#endRound();
+    if (!this.#castle) return;
     this.#ui.card.hidden = true;
     this.#finished = undefined;
     const weapon = siegeWeapon(rules);
@@ -604,6 +596,7 @@ export class Siege3DView implements ScreenView {
    */
   #buildRound(round: SiegeRound): void {
     const castle = this.#castle;
+    if (!castle) return;
     // Everything back as built.
     for (const [id, look] of castle.parts) {
       const built = this.#built.get(id);
@@ -718,7 +711,7 @@ export class Siege3DView implements ScreenView {
     if (this.#sun) this.#sun.castShadow = map;
     if (this.#blobs) this.#blobs.mesh.visible = !map;
     // Every look is built again, with or without the shadows.
-    this.#castle.scene.traverse((child) => {
+    this.#castle?.scene.traverse((child) => {
       if (!(child instanceof THREE.Mesh)) return;
       for (const material of [child.material as THREE.Material | THREE.Material[]].flat()) {
         material.needsUpdate = true;
@@ -1126,7 +1119,8 @@ export class Siege3DView implements ScreenView {
     this.#updateEffects(dt);
     this.#updateUi();
     this.#updateCamera(realDt);
-    this.#renderer.render(this.#castle.scene, this.#camera);
+    this.#renderer.render(this.#castle?.scene ?? this.#waiting, this.#camera);
+    if (!this.#castle) return;
     const info = this.#renderer.info.render;
     perf.calls = Math.max(perf.calls, info.calls);
     perf.triangles = Math.max(perf.triangles, info.triangles);
@@ -1135,6 +1129,7 @@ export class Siege3DView implements ScreenView {
 
   /** What it costs to draw (for the logs, and the preview's screenshots), once it's all loaded. */
   #measure(): void {
+    if (!this.#castle) return;
     const info = this.#renderer.info.render;
     const memory = this.#castle.measure();
     Object.assign(this.#element.dataset, {
@@ -1787,7 +1782,13 @@ export class Siege3DView implements ScreenView {
       this.#targetsAt = this.#now;
       this.#element.dataset.targets = JSON.stringify(this.#targetsOnScreen(round));
     }
-    if (!round) return;
+    if (!round) {
+      // The castle is still being built: no controls yet, and it says so.
+      ui.controls.hidden = ui.status.hidden = ui.objectives.hidden = true;
+      if (this.#rebuilding) ui.hint.textContent = 'Building the castle…';
+      ui.hint.hidden = false;
+      return;
+    }
     const title = this.#title;
     const showing =
       title !== undefined && this.#now >= title.at && this.#now - title.at < TITLE_SECONDS;

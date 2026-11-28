@@ -257,13 +257,8 @@ export async function startApp(): Promise<void> {
       },
       async () => {
         // The physics engine's wasm starts here too, so the first throw never waits for it, and
-        // the castle is built, so the War tent opens without building it.
-        await (
-          await siegeView()
-        ).Siege3DView.preload(game.data.siege.skins, {
-          castle: game.data.castle,
-          tier: graphics.tier,
-        });
+        // the castle's kit is fetched.
+        await (await siegeView()).Siege3DView.preload(game.data.siege.skins, game.data.castle.kit);
       },
     ),
     three: lazyScreen(
