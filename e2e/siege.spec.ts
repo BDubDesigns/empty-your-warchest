@@ -265,17 +265,17 @@ test('Siege: with no spears in the warchest, it says so', async ({ page }) => {
 test('Siege: a spear alerts the guards, a runner rings the bell, and reinforcements end it', async ({
   page,
 }) => {
-  test.setTimeout(150_000);
+  test.setTimeout(240_000);
   const errors: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));
   // Every guard hears the first spear and reacts at once; the runner is quick, and so are the
-  // reinforcements.
+  // reinforcements (a second of round time: CI draws in software, where round time runs slow).
   await openTent(page, 60, 0, {
     alertSpearRadius: 500,
     reactSeconds: 0,
     runnerDelaySeconds: 0,
     runnerSpeed: 40,
-    reinforcementSeconds: 6,
+    reinforcementSeconds: 1,
   });
   await expect(page.locator('body')).toHaveAttribute('data-siege', 'aim', { timeout: 90_000 });
   const view = page.locator('#screen-siege3d');
@@ -288,7 +288,7 @@ test('Siege: a spear alerts the guards, a runner rings the bell, and reinforceme
   await expect(timer).toHaveText(/^Reinforcements in 0:0\d$/);
   // They arrive: the round is lost, and the card says why it got its stars.
   const card = page.locator('#screen-siege3d .sg-card:not(.sg-confirm)');
-  await expect(card).toBeVisible({ timeout: 60_000 });
+  await expect(card).toBeVisible({ timeout: 120_000 });
   await expect(card).toContainText('Reinforcements arrived');
   await expect(card).toContainText(/Nothing done: no stars|objectives: 1 star/);
   await expect(card).toContainText('The bell rang');

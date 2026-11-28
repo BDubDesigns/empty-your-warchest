@@ -308,7 +308,7 @@ const ALARM = {
   alertSpearRadius: 500,
   reactSeconds: 0,
   runnerDelaySeconds: 4,
-  runnerSpeed: 2.5,
+  runnerSpeed: 8,
   captainHideMinSeconds: 2,
   captainHideMaxSeconds: 3,
   captainShowMinSeconds: 25,
@@ -318,10 +318,10 @@ if (want('alarm')) {
   const page = await openTent('high', false, ALARM);
   await vantage(page, 'Hill');
   await shot(page, 'alarm-quiet');
-  await drag(page, 0, -500);
+  await drag(page, 0, 600);
   await fire(page);
   await settle(page);
-  await drag(page, 0, 500);
+  await drag(page, 0, -600);
   await page.waitForTimeout(500);
   (await aimAt(page, 'guard', 0, 'panic')) || (await aimAt(page, 'guard'));
   await shot(page, 'alarm-panic-hide');
@@ -338,7 +338,7 @@ if (want('alarm')) {
   }
   await page.waitForTimeout(3000);
   await shot(page, 'alarm-runner-later');
-  await page.locator('#screen-siege3d[data-alarm=rang]').waitFor({ timeout: 120_000 });
+  await page.locator('#screen-siege3d[data-alarm=rang]').waitFor({ timeout: 300_000 });
   await page.waitForTimeout(300);
   await shot(page, 'alarm-bell-timer');
   (await aimAt(page, 'guard', 0, 'ring')) && (await shot(page, 'alarm-ringer'));
@@ -414,7 +414,7 @@ if (want('stars')) {
     alertBreakRadius: 500,
     runnerDelaySeconds: 0,
     runnerSpeed: 40,
-    reinforcementSeconds: 8,
+    reinforcementSeconds: 3,
   });
   await playTo(one, 1);
   await shot(one, 'card-1-star');
@@ -423,14 +423,14 @@ if (want('stars')) {
     ...ALARM,
     runnerDelaySeconds: 0,
     runnerSpeed: 40,
-    reinforcementSeconds: 10,
+    reinforcementSeconds: 3,
   });
   await vantage(none, 'Hill');
-  await drag(none, 0, -500);
+  await drag(none, 0, 600);
   await fire(none);
-  await none.locator('#screen-siege3d[data-alarm=rang]').waitFor({ timeout: 120_000 });
+  await none.locator('#screen-siege3d[data-alarm=rang]').waitFor({ timeout: 300_000 });
   await settle(none);
-  await drag(none, 0, 500);
+  await drag(none, 0, -600);
   await none.waitForTimeout(500);
   await shot(none, 'low-alarm-timer');
   await none.locator('#screen-siege3d .sg-card:not(.sg-confirm):not([hidden])').waitFor({
