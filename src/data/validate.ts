@@ -84,6 +84,14 @@ function checkReferences(data: GameData, ctx: z.RefinementCtx): void {
   const jobStations = new Set<string>();
   workers.jobs.forEach((job, index) => {
     const path = ['workers', 'jobs', index];
+    if ('plots' in job) {
+      // The farm's job: at the farm, one per station like any other.
+      const farm = data.stations.find((entry) => entry.id === job.plots);
+      if (farm?.mechanic !== 'farming') issue([...path, 'plots'], 'Must be the farm');
+      if (jobStations.has(job.plots)) issue([...path, 'plots'], 'One job per station');
+      jobStations.add(job.plots);
+      return;
+    }
     const recipe = data.recipes.find((entry) => entry.id === job.recipe);
     if (!recipe) {
       issue([...path, 'recipe'], `Unknown recipe "${job.recipe}"`);
@@ -287,6 +295,7 @@ function checkReferences(data: GameData, ctx: z.RefinementCtx): void {
   checkSiege(data, issue);
   checkArchery(data, itemIds, issue);
   checkFletching(data, itemIds, issue);
+  checkFarming(data, itemIds, issue);
   // The castle holds together: its wall closes round the courtyard, its anchors are where they say.
   for (const problem of castleProblems(data.castle)) issue(problem.path, problem.message);
 
@@ -653,6 +662,72 @@ function checkFletching(
         `feathers for ${String(shafts)} fletched arrows and their XP`,
     );
   }
+}
+
+/**
+ * The farm: every crop's seed and harvest are real items (its seed something the bird hunt drops,
+ * as seeds only come from birds), plots and crops open from level 1 and grow in level order, and
+ * the bands and stars make sense.
+ */
+function checkFarming(
+  data: GameData,
+  itemIds: ReadonlySet<string>,
+  issue: (path: Path, message: string) => void,
+): void {
+  const farming = data.farming;
+  const birdSeeds = new Set(data.archery.birds.map((bird) => bird.seed));
+  const crops = new Set<string>();
+  const seeds = new Set<string>();
+  farming.crops.forEach((crop, index) => {
+    const path = ['farming', 'crops', index];
+    if (crops.has(crop.id)) issue([...path, 'id'], `Duplicate id "${crop.id}"`);
+    crops.add(crop.id);
+    if (!itemIds.has(crop.seed)) issue([...path, 'seed'], `Unknown item "${crop.seed}"`);
+    else if (!birdSeeds.has(crop.seed)) {
+      issue([...path, 'seed'], `No bird drops "${crop.seed}": seeds come from the bird hunt`);
+    }
+    // One crop a seed, so a seed in the warchest always says what it grows.
+    if (seeds.has(crop.seed)) issue([...path, 'seed'], 'Another crop grows from this seed');
+    seeds.add(crop.seed);
+    if (!itemIds.has(crop.item)) issue([...path, 'item'], `Unknown item "${crop.item}"`);
+    if (crop.band.low >= crop.band.high) {
+      issue([...path, 'band'], 'The band must start under where it ends');
+    }
+    if (crop.band.high >= 1) issue([...path, 'band', 'high'], 'Leave room for mud above the band');
+    if (crop.band.low <= farming.watering.start.max) {
+      issue([...path, 'band', 'low'], 'The band must start above the driest a plot starts');
+    }
+  });
+  if (!farming.crops.some((crop) => crop.level === 1)) {
+    issue(['farming', 'crops'], 'At least one crop must be open from level 1');
+  }
+  const plots = farming.plots;
+  if (plots[0]?.level !== 1)
+    issue(['farming', 'plots'], 'The first plots must be open from level 1');
+  plots.forEach((entry, index) => {
+    const before = plots[index - 1];
+    if (before && (entry.count <= before.count || entry.level <= before.level)) {
+      issue(['farming', 'plots', index], 'Plots must grow, in level order');
+    }
+  });
+  const { start, stars, multiplier } = farming.watering;
+  if (start.min > start.max)
+    issue(['farming', 'watering', 'start'], 'min must not be more than max');
+  if (stars.one > stars.two || stars.two > stars.three) {
+    issue(['farming', 'watering', 'stars'], 'More stars must not need less');
+  }
+  if (multiplier.one < 1 || multiplier.one > multiplier.two || multiplier.two > multiplier.three) {
+    issue(['farming', 'watering', 'multiplier'], 'Must be 1 or more, and grow with the stars');
+  }
+  const { stages, treeDistance, treeHeight } = farming.looks;
+  if (stages.sprout > stages.young || stages.young > stages.grown) {
+    issue(['farming', 'looks', 'stages'], 'Stages must come in order');
+  }
+  for (const [key, range] of Object.entries({ treeDistance, treeHeight })) {
+    if (range.min > range.max) issue(['farming', 'looks', key], 'min must not be more than max');
+  }
+  const farms = data.stations.filter((station) => station.mechanic === 'farming');
+  if (farms.length > 1) issue(['stations'], 'One farm: its plots are shared');
 }
 
 export const gameDataSchema = gameDataShape.superRefine(checkReferences);

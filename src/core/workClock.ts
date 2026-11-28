@@ -38,6 +38,14 @@ export class WorkClock {
     return this.#playing + this.#away;
   }
 
+  /**
+   * Minutes owed at `now`, counting the playing time since the last tick, without ticking (which
+   * saves): what the farm adds to its banked clock to show its crops growing live.
+   */
+  owedAt(now: number): number {
+    return this.owed + Math.max(now - this.#lastTick, 0) / MINUTE;
+  }
+
   /** Counts time playing up to `now`. Call every so often while the game is open. */
   tick(now: number): void {
     this.#playing += Math.max(now - this.#lastTick, 0) / MINUTE;

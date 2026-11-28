@@ -42,6 +42,7 @@ async function openBench(tier) {
         'alchemy',
         'archery',
         'fletching',
+        'farming',
       ];
       localStorage.setItem('warchest.graphics', tier);
       localStorage.setItem(
@@ -69,7 +70,8 @@ async function openBench(tier) {
   await page.goto(url);
   await page.locator('body[data-view=camp]').waitFor({ timeout: 60_000 });
   const camp = await page.locator('#screen-phaser canvas').boundingBox();
-  await page.touchscreen.tap(camp.x + camp.width * 0.73, camp.y + camp.height * 0.62);
+  // The bench's place in the camp (src/data/stations.ts, fletchers_bench.camp).
+  await page.touchscreen.tap(camp.x + camp.width * 0.73, camp.y + camp.height * 0.53);
   await page.locator('body[data-fletching=make]').waitFor({ timeout: 60_000 });
   await page.waitForTimeout(1500);
   return page;

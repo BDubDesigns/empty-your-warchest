@@ -23,4 +23,7 @@ export const items = [
   { id: 'bare_arrow', name: 'Bare arrow', look: 'shaft' },
   // Fletching: the bench's shortcut, the feather bucket, makes a feather duster of an arrow.
   { id: 'duster_arrow', name: 'Duster arrow', look: 'duster' },
+  // From the farm: sunflowers' yellow petals, for Alchemy's yellow (no brew needs one yet). Woad
+  // gives the woad above.
+  { id: 'sunflower_petals', name: 'Sunflower petals', look: 'petals' },
 ] satisfies GameDataInput['items'];

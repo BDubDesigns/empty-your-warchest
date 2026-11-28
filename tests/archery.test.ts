@@ -515,7 +515,9 @@ describe('hunting stand workers', () => {
       'fletched_arrow',
     );
     // A minute of a worker is under a fifth of the birds a minute of playing downs.
-    const job = data.workers.jobs.find((entry) => entry.recipe === 'hunt_flock');
+    const job = data.workers.jobs.find(
+      (entry) => 'recipe' in entry && entry.recipe === 'hunt_flock',
+    );
     expect((job?.perMinute ?? 0) * 3).toBeLessThan(2);
   });
 });
