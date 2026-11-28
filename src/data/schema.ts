@@ -336,6 +336,14 @@ export const woodcuttingFeelSchema = z.object({
   /** The crash's buzz: `buzzCrashPulses` pulses, the first `buzzCrashMs` long, each one shorter. */
   buzzCrashMs: nonNegative,
   buzzCrashPulses: z.number().int().min(1),
+  /**
+   * Fell the rest (only looks: the rules bank it at once). Seconds between one tree starting to
+   * topple and the next, at most `fellRestSpread` seconds from the first to the last however many
+   * are standing, and seconds each tree takes to fall.
+   */
+  fellRestGap: nonNegative,
+  fellRestSpread: nonNegative,
+  fellRestFallSeconds: positive,
 });
 
 /** A min–max range. */
@@ -502,6 +510,17 @@ export const woodcuttingSchema = z.object({
   ),
   /** The fall and chain speeds the fast-fall switch uses (the faster feel from before Nov 23). */
   fastFall: z.object({ fallSeconds: positive, chainDelay: nonNegative }),
+  /**
+   * Fell the rest: once a round has `minStars` stars, every tree still standing can be knocked
+   * down at once as singles, `logsPerTree` logs each (no chain, cabin or boulder), and the round
+   * ends. Each tree falls a seeded way: up to `angleTries` directions are tried for one that
+   * touches nothing (the cabin, a boulder, a mushroom patch). How it looks is in the feel.
+   */
+  fellRest: z.object({
+    minStars: z.number().int().min(1).max(3),
+    logsPerTree: positiveInt,
+    angleTries: positiveInt,
+  }),
   /**
    * Ingredients to forage, set when a round's trees are seeded so each one's drop is fixed and
    * shows from the start. Mossy trees (moss on the trunk) and mushroom trees (mushrooms at the
@@ -2219,6 +2238,7 @@ export type ArcheryBird = Archery['birds'][number];
 export type ArrowKind = Archery['arrows'][number];
 export type BirdShape = (typeof birdShapes)[number];
 export type WoodcuttingForage = GameData['woodcutting']['forage'];
+export type WoodcuttingFellRest = GameData['woodcutting']['fellRest'];
 export type Gate = z.output<typeof gateSchema>;
 export type Roll = z.output<typeof rollSchema>;
 export type GateOp = Gate['op'];

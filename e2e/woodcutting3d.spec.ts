@@ -97,6 +97,21 @@ test('3D woodcutting: aim, Chop, chop in the close-up, the tree falls, logs to t
   await expect(summary).toHaveAttribute('data-stars', /[1-3]/);
   await summary.getByRole('button', { name: 'Keep chopping' }).tap();
   await expect(summary).toBeHidden();
+  // Next clearing goes straight into a new one, with this screen's and the HUD chest's graphics
+  // still alive (giving them back and asking again in the same moment left the screen white).
+  await page.getByRole('button', { name: 'End round' }).tap();
+  await summary.getByRole('button', { name: 'Next clearing' }).tap();
+  await expect(summary).toBeHidden({ timeout: 20_000 });
+  await expect(page.locator('body')).toHaveAttribute('data-woodcutting', 'pick');
+  await page.waitForTimeout(500);
+  const lost = await page.evaluate(
+    () =>
+      [...document.querySelectorAll('canvas')].filter((canvas) => {
+        const gl = canvas.getContext('webgl2') ?? canvas.getContext('webgl');
+        return canvas.checkVisibility() && (gl?.isContextLost() ?? false);
+      }).length,
+  );
+  expect(lost).toBe(0);
   await page.getByRole('button', { name: 'End round' }).tap();
   await summary.getByRole('button', { name: 'Back to camp' }).tap();
   await expect(page.locator('body')).toHaveAttribute('data-view', 'camp');
