@@ -1,0 +1,246 @@
+/* The farm (src/stations/farming/three/farming3dView.ts). The end card shares the fire pit's
+ * (.fm-button, .fm-card); the flash and hint animations are the hunting stand's. */
+.fa-canvas {
+  display: block;
+  touch-action: none;
+}
+
+.fa-ui {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  font-family: system-ui, sans-serif;
+  color: var(--fg);
+}
+
+.fa-ui button {
+  pointer-events: auto;
+}
+
+.fa-ui [hidden] {
+  display: none !important;
+}
+
+/* While watering: time left and plots in their band; under it, the water left in the can. */
+.fa-status {
+  position: absolute;
+  top: calc(var(--safe-top) + 70px);
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: rgb(30 22 12 / 0.6);
+  white-space: nowrap;
+  font:
+    700 14px system-ui,
+    sans-serif;
+}
+
+.fa-can {
+  position: absolute;
+  top: calc(var(--safe-top) + 102px);
+  left: 50%;
+  width: 160px;
+  height: 12px;
+  transform: translateX(-50%);
+  border: 2px solid rgb(255 255 255 / 0.75);
+  border-radius: 999px;
+  background: rgb(30 22 12 / 0.6);
+  overflow: hidden;
+}
+
+.fa-can::before {
+  content: 'Can';
+  position: absolute;
+  right: calc(100% + 8px);
+  top: -4px;
+  font:
+    700 12px system-ui,
+    sans-serif;
+}
+
+.fa-can-fill {
+  height: 100%;
+  background: linear-gradient(#8fd3ff, #3f8fd0);
+  transition: width 0.08s linear;
+}
+
+.fa-flash {
+  position: absolute;
+  top: calc(var(--safe-top) + 126px);
+  left: 0;
+  right: 0;
+  text-align: center;
+  font:
+    800 20px system-ui,
+    sans-serif;
+  text-shadow: 0 1px 4px rgb(0 0 0 / 0.75);
+}
+
+.fa-flash[data-tone='good'] {
+  color: #8ef59a;
+}
+
+.fa-flash[data-tone='bad'] {
+  color: #ffb0a0;
+}
+
+.fa-flash-show {
+  animation: ar-flash 1.4s ease-out forwards;
+}
+
+/* Each plot's tag, at its near edge: what's growing and how long it has to go. */
+.fa-tags {
+  position: absolute;
+  inset: 0;
+}
+
+.fa-tag {
+  position: absolute;
+  left: 0;
+  top: 0;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgb(30 22 12 / 0.65);
+  white-space: nowrap;
+  font:
+    700 13px system-ui,
+    sans-serif;
+}
+
+.fa-tag:empty {
+  display: none;
+}
+
+.fa-tag-ripe {
+  background: rgb(60 120 40 / 0.9);
+  animation: ar-pulse 1.6s ease-in-out infinite;
+}
+
+/* The soil gauge beside each plot while watering: its fill, and the crop's band in green. */
+.fa-gauge {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 14px;
+  height: 64px;
+  border: 2px solid rgb(255 255 255 / 0.85);
+  border-radius: 7px;
+  background: rgb(120 90 60 / 0.55);
+  overflow: hidden;
+}
+
+.fa-gauge-fill {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: #6fb6e8;
+}
+
+.fa-gauge-band {
+  position: absolute;
+  left: 0;
+  right: 0;
+  border-top: 2px solid #46d25a;
+  border-bottom: 2px solid #46d25a;
+  background: rgb(70 210 90 / 0.35);
+}
+
+.fa-gauge[data-state='good'] {
+  border-color: #8ef59a;
+  box-shadow: 0 0 8px rgb(70 210 90 / 0.8);
+}
+
+.fa-gauge[data-state='mud'] {
+  border-color: #c9774a;
+}
+
+.fa-gauge[data-state='mud'] .fa-gauge-fill {
+  background: #6a4a32;
+}
+
+/* The one being poured on glows (a scale here would scale its placement too). */
+.fa-gauge-pouring {
+  border-color: #fff;
+  box-shadow: 0 0 10px rgb(143 211 255 / 0.95);
+}
+
+.fa-hint {
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  bottom: calc(var(--safe-bottom) + 142px);
+  text-align: center;
+  font-size: 15px;
+  font-weight: 600;
+  text-shadow: 0 1px 3px rgb(0 0 0 / 0.85);
+}
+
+/* Water (or Done, while watering) over the seed buttons. */
+.fa-tools {
+  position: absolute;
+  left: calc(var(--safe-left) + 12px);
+  right: calc(var(--safe-right) + 12px);
+  bottom: calc(var(--safe-bottom) + 78px);
+  display: flex;
+  justify-content: center;
+}
+
+.fa-tool {
+  min-height: 52px;
+  padding: 0 22px;
+  border: 2px solid #6fb6e8;
+  border-radius: 12px;
+  background: rgb(24 54 80 / 0.85);
+  color: var(--fg);
+  font:
+    700 17px system-ui,
+    sans-serif;
+  touch-action: manipulation;
+}
+
+.fa-tool:active,
+.fa-seed:active {
+  transform: scale(0.94);
+}
+
+.fa-done {
+  border-color: var(--accent);
+  background: rgb(30 22 12 / 0.8);
+}
+
+/* The seeds to plant, one button a crop: tap to pick, then drag across empty plots. */
+.fa-seeds {
+  position: absolute;
+  left: calc(var(--safe-left) + 12px);
+  right: calc(var(--safe-right) + 12px);
+  bottom: calc(var(--safe-bottom) + 16px);
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+}
+
+.fa-seed {
+  flex: 1 1 0;
+  max-width: 190px;
+  min-height: 52px;
+  padding: 0 10px;
+  border: 2px solid rgb(255 255 255 / 0.35);
+  border-radius: 12px;
+  background: rgb(30 22 12 / 0.7);
+  color: var(--fg);
+  font:
+    700 16px system-ui,
+    sans-serif;
+  touch-action: manipulation;
+}
+
+.fa-seed-on {
+  border-color: var(--accent);
+  background: rgb(90 58 24 / 0.9);
+}
+
+.fa-seed:disabled {
+  opacity: 0.45;
+}

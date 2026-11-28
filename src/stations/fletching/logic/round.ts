@@ -1,4 +1,4 @@
-import { starBonus, type EventLogger, type Stack } from '../../../core';
+import { nextStreak, starBonus, type EventLogger, type Stack } from '../../../core';
 import type { Fletching, FletchingFeel } from '../../../data';
 
 /** The three kinds of arrow the bench makes. */
@@ -7,7 +7,7 @@ export type ArrowMade = 'fletched' | 'duster' | 'bare';
 /** How the tar went: too little (the feathers slide off), in the green band, or too much (globs). */
 export type TarState = 'thin' | 'good' | 'thick';
 
-/** How an arrow was made: feathers tapped on, shoved in the bucket, or none at all. */
+/** How a batch was made: feathers tapped on, shoved in the bucket, or none at all. */
 export type FletchWay = 'careful' | 'bucket' | 'bare';
 
 /** A feather slapped on as the shaft turned. */
@@ -24,17 +24,13 @@ export interface FeatherTap {
   onMark: boolean;
 }
 
-/** The arrow on the bench right now. */
+/**
+ * The one shaft on the bench, standing for the whole batch: waiting to be dipped, in the tar, in
+ * the jig with feathers going on, or made (off to the chest).
+ */
 export interface ArrowInHand {
-  /** Its number in the round, from 0. */
-  index: number;
-  /**
-   * Waiting to be dipped, in the tar, in the jig with feathers going on, or made (off to the
-   * chest while the next shaft comes).
-   */
   step: 'shaft' | 'dip' | 'feathers' | 'made';
-  /** Round time it came onto the bench, went into the tar, came out, and was made. */
-  readyAt: number;
+  /** Round time it went into the tar, came out, and was made. */
   dipAt: number | undefined;
   liftAt: number | undefined;
   madeAt: number | undefined;
@@ -44,53 +40,51 @@ export interface ArrowInHand {
   taps: FeatherTap[];
   way: FletchWay | undefined;
   made: ArrowMade | undefined;
-  /** Feathers it used up, and of those how many slid off (too little tar). */
-  feathers: number;
-  lost: number;
 }
 
-export type FletchingEndReason = 'time' | 'out';
+/** A batch as picked: its size on the picker, the streak's multiplier, and the arrows that makes. */
+export interface Batch {
+  size: number;
+  streak: number;
+  arrows: number;
+}
 
 /** How a round went. */
 export interface FletchingResult {
-  /** Arrows made, by kind. */
-  made: Record<ArrowMade, number>;
+  way: FletchWay;
+  made: ArrowMade;
+  /** Arrows made (all of the one kind), and the fletched arrows the stars added. */
   arrows: number;
-  stars: number;
-  /** Fletched arrows the stars added. */
   bonus: number;
+  stars: number;
   xp: number;
-  /** Feathers used up, and of those how many slid off (too little tar). */
+  /** Staves used, feathers used, and of those how many slid off (too little tar). */
+  staves: number;
   feathers: number;
   lost: number;
-  /** Staves split into shafts this round, and shafts used. */
-  staves: number;
-  shafts: number;
-  /** Arrows made the careful way and in the bucket. */
-  bucket: number;
-  careful: number;
+  /** The batch as picked, and the streak's multiplier for the next round. */
+  batch: Batch;
+  streakAfter: number;
   seconds: number;
-  reason: FletchingEndReason;
 }
 
 /** Things a view plays effects for. */
 export type FletchingEvent =
-  | { type: 'ready'; arrow: ArrowInHand }
   | { type: 'dip'; arrow: ArrowInHand }
   | { type: 'lift'; arrow: ArrowInHand }
   | { type: 'tap'; arrow: ArrowInHand; tap: FeatherTap }
-  | { type: 'made'; arrow: ArrowInHand; item: string; xp: number }
+  | { type: 'made'; arrow: ArrowInHand; result: FletchingResult; item: string }
   | ({ type: 'end' } & FletchingResult);
 
 export interface FletchingHooks {
   logger: EventLogger;
-  /** The Fletching level, for the logs. */
+  /** The Fletching level: how big a batch the bench takes. */
   level: number;
   /** How many of an item are in the warchest. */
   count: (item: string) => number;
   /** Takes items out of the warchest. */
   spend: (item: string, count: number) => void;
-  /** Banks items (an arrow made, a spare shaft, the stars' bonus) with their XP, as it happens. */
+  /** Banks items (the batch, the stars' bonus) with their XP. */
   bank: (items: Stack[], xp: number) => void;
   onEvent?: (event: FletchingEvent) => void;
 }
@@ -128,15 +122,8 @@ export function markAngle(index: number, marks: number): number {
   return (360 / marks) * index;
 }
 
-/** Stars from fletched arrows made: 3, 2 and 1 from the data's counts, else none. */
-export function starsFor(rules: Fletching['stars'], fletched: number): number {
-  if (fletched >= rules.three) return 3;
-  if (fletched >= rules.two) return 2;
-  return fletched >= rules.one ? 1 : 0;
-}
-
 /**
- * What a careful arrow comes out as: too little tar and its feathers slide off (bare); too much
+ * What a careful batch comes out as: too little tar and its feathers slide off (bare); too much
  * and it globs, or any feather off its mark and it's lopsided (a duster); else fletched.
  */
 export function carefulResult(
@@ -149,59 +136,163 @@ export function carefulResult(
 }
 
 /**
- * One round at the fletcher's bench, without any rendering: an arrow at a time, from the
- * warchest's shafts (and staves, split as they're needed) and feathers. A view feeds it the
- * player's dips, lifts, taps, the bucket and the bare button, and time, and draws it. The same
- * inputs at the same times play out the same.
+ * Stars from the round's beats. A fletched batch is 3. A careful one that came near (the tar
+ * within `nearTar` of the band, every feather within `nearTapMs` of its mark, or its window if
+ * that's wider) is 2; any other is 1. The bucket and bare are their fixed stars, never 3, so the
+ * shortcuts don't build a streak.
+ */
+export function starsFor(
+  rules: Pick<Fletching, 'stars'>,
+  feel: Pick<FletchingFeel, 'tarLow' | 'tarHigh' | 'markWindowMs'>,
+  beats: {
+    way: FletchWay;
+    made: ArrowMade;
+    tar: number;
+    taps: readonly Pick<FeatherTap, 'offMs'>[];
+  },
+): number {
+  const { stars } = rules;
+  if (beats.way === 'bucket') return Math.min(stars.bucket, 2);
+  if (beats.way === 'bare') return Math.min(stars.bare, 2);
+  if (beats.made === 'fletched') return 3;
+  const tarNear =
+    beats.tar >= feel.tarLow - stars.nearTar && beats.tar <= feel.tarHigh + stars.nearTar;
+  const window = Math.max(stars.nearTapMs, feel.markWindowMs);
+  const tapsNear = beats.taps.every((tap) => Math.abs(tap.offMs) <= window);
+  return tarNear && tapsNear ? 2 : 1;
+}
+
+/**
+ * The hot streak after a round: 3 stars raises the multiplier a step (up to `streakCap`);
+ * anything less drops it `streakDrop` steps, never below 1 (Brandon, Nov 28: a miss no longer
+ * starts again from 1). The shared rule, as at the fire pit.
+ */
+export function streakAfter(
+  streak: number,
+  stars: number,
+  feel: Pick<FletchingFeel, 'streakCap' | 'streakDrop'>,
+): number {
+  return nextStreak(streak, stars >= 3, feel.streakCap, feel.streakDrop);
+}
+
+/** The biggest batch the bench takes at `level` (before the streak), from the data's sizes. */
+export function benchSize(rules: Pick<Fletching, 'batch'>, level: number): number {
+  let size = 1;
+  for (const entry of rules.batch.sizes)
+    if (entry.level <= level) size = Math.max(size, entry.arrows);
+  return size;
+}
+
+/** The next bench size to open above `level`, if any. */
+export function nextBenchSize(
+  rules: Pick<Fletching, 'batch'>,
+  level: number,
+): { arrows: number; level: number } | undefined {
+  return rules.batch.sizes.find((entry) => entry.level > level);
+}
+
+/** Staves a batch of `arrows` takes: 1 for every `arrowsPerStave`, rounded up. */
+export function stavesFor(rules: Pick<Fletching, 'arrowsPerStave'>, arrows: number): number {
+  return Math.ceil(Math.max(arrows, 0) / rules.arrowsPerStave);
+}
+
+/**
+ * The most arrows the warchest's staves and feathers allow in one batch: as many as the staves
+ * make and the feathers fletch carefully. With too few feathers for even one careful arrow, it's
+ * what the staves make, as bare arrows only (`bareOnly`).
+ */
+export function arrowsAllowed(
+  rules: Pick<Fletching, 'arrowsPerStave' | 'feathers'>,
+  staves: number,
+  feathers: number,
+): { arrows: number; bareOnly: boolean } {
+  const byStaves = Math.max(Math.floor(staves), 0) * rules.arrowsPerStave;
+  const byFeathers = Math.floor(Math.max(feathers, 0) / rules.feathers.careful);
+  if (byFeathers < 1) return { arrows: byStaves, bareOnly: true };
+  return { arrows: Math.min(byStaves, byFeathers), bareOnly: false };
+}
+
+/**
+ * The picker's sizes, from 1 to the bench's size at `level`, each with the arrows it makes at
+ * this `streak` (at most what the warchest allows). A size is open only if it makes more than the
+ * one below it, so the picker never goes past what the staves and feathers allow.
+ */
+export function pickerSizes(
+  rules: Pick<Fletching, 'batch' | 'arrowsPerStave' | 'feathers'>,
+  level: number,
+  streak: number,
+  staves: number,
+  feathers: number,
+): Batch[] {
+  const { arrows: allowed } = arrowsAllowed(rules, staves, feathers);
+  if (allowed < 1) return [];
+  const sizes: Batch[] = [];
+  for (let size = 1; size <= benchSize(rules, level); size++) {
+    if (size > 1 && (size - 1) * streak >= allowed) break;
+    sizes.push({ size, streak, arrows: Math.min(size * streak, allowed) });
+  }
+  return sizes;
+}
+
+/**
+ * One round at the fletcher's bench, without any rendering: one arrow's beats, made into a whole
+ * batch. The batch is picked before it starts (`size` on the picker, times the hot streak), within
+ * the bench's size and the warchest's staves and feathers. A view feeds it the player's dip, lift,
+ * taps, the bucket or the bare button, and time, and draws it. The same inputs at the same times
+ * play out the same.
  */
 export class FletchingRound {
   readonly rules: Fletching;
   /** The feel, fixed for the round (sliders apply from the next one). */
   readonly feel: FletchingFeel;
+  readonly batch: Batch;
+  /** With too few feathers to fletch even one arrow, the batch can only be bare. */
+  readonly bareOnly: boolean;
   phase: 'make' | 'done' = 'make';
   /** Seconds into the round. */
   now = 0;
-  /** The arrow on the bench (none once the round's done or there's nothing left to make one). */
-  arrow: ArrowInHand | undefined;
-  readonly arrows: ArrowInHand[] = [];
+  /** The one shaft shown: the whole batch's beats. */
+  readonly arrow: ArrowInHand = {
+    step: 'shaft',
+    dipAt: undefined,
+    liftAt: undefined,
+    madeAt: undefined,
+    tar: undefined,
+    tarState: undefined,
+    taps: [],
+    way: undefined,
+    made: undefined,
+  };
   result: FletchingResult | undefined;
   readonly #hooks: FletchingHooks;
-  #made: Record<ArrowMade, number> = { fletched: 0, duster: 0, bare: 0 };
-  #xp = 0;
-  #feathers = 0;
-  #lost = 0;
-  #staves = 0;
-  #shafts = 0;
 
-  constructor(rules: Fletching, feel: FletchingFeel, hooks: FletchingHooks) {
+  constructor(
+    rules: Fletching,
+    feel: FletchingFeel,
+    hooks: FletchingHooks,
+    pick: { size: number; streak: number },
+  ) {
     this.rules = rules;
     this.feel = { ...feel };
     this.#hooks = hooks;
+    const staves = hooks.count(rules.stave);
+    const feathers = hooks.count(rules.feather);
+    const streak = Math.min(Math.max(Math.floor(pick.streak), 1), Math.max(this.feel.streakCap, 1));
+    const sizes = pickerSizes(rules, hooks.level, streak, staves, feathers);
+    const size = Math.min(Math.max(Math.floor(pick.size), 1), Math.max(sizes.length, 1));
+    this.batch = sizes[size - 1] ?? { size: 1, streak, arrows: 0 };
+    this.bareOnly = arrowsAllowed(rules, staves, feathers).bareOnly;
     hooks.logger.log('fletching.roundStart', {
       level: hooks.level,
-      seconds: rules.round.seconds,
-      shafts: hooks.count(rules.shaft),
-      staves: hooks.count(rules.stave),
-      feathers: hooks.count(rules.feather),
+      size: this.batch.size,
+      streak: this.batch.streak,
+      arrows: this.batch.arrows,
+      bench: benchSize(rules, hooks.level),
+      staves,
+      feathers,
+      bareOnly: this.bareOnly,
       feel: this.feel,
     });
-    this.#nextArrow();
-  }
-
-  /** Seconds left in the round. */
-  get left(): number {
-    return Math.max(this.rules.round.seconds - this.now, 0);
-  }
-
-  /** Arrows of each kind made so far. */
-  get made(): Readonly<Record<ArrowMade, number>> {
-    return this.#made;
-  }
-
-  /** Shafts there are still to make arrows from: in the warchest, and in the staves there. */
-  get shaftsLeft(): number {
-    const { rules } = this;
-    return this.#hooks.count(rules.shaft) + this.#hooks.count(rules.stave) * rules.shaftsPerStave;
   }
 
   /** Feathers in the warchest. */
@@ -209,19 +300,27 @@ export class FletchingRound {
     return this.#hooks.count(this.rules.feather);
   }
 
-  /** Whether there are the feathers for careful fletching, and for the bucket. */
+  /** Feathers the batch takes the careful way, and in the bucket. */
+  get carefulFeathers(): number {
+    return this.rules.feathers.careful * this.batch.arrows;
+  }
+
+  get bucketFeathers(): number {
+    return this.rules.feathers.bucket * this.batch.arrows;
+  }
+
+  /** Whether there are the feathers to fletch the batch carefully, and for the bucket. */
   get canFletch(): boolean {
-    return this.feathersLeft >= this.rules.feathers.careful;
+    return this.batch.arrows > 0 && this.feathersLeft >= this.carefulFeathers;
   }
 
   get canBucket(): boolean {
-    return this.feathersLeft >= this.rules.feathers.bucket;
+    return this.batch.arrows > 0 && this.feathersLeft >= this.bucketFeathers;
   }
 
-  /** The tar on the arrow in hand right now (0 to 1): rising while it's in the pot. */
+  /** The tar on the shaft right now (0 to 1): rising while it's in the pot. */
   get tar(): number {
     const arrow = this.arrow;
-    if (!arrow) return 0;
     if (arrow.step === 'dip' && arrow.dipAt !== undefined) {
       return tarLevel(this.now - arrow.dipAt, this.feel);
     }
@@ -231,14 +330,20 @@ export class FletchingRound {
   /** How far the shaft in the jig has turned (degrees), or 0 when it isn't in the jig. */
   get turn(): number {
     const arrow = this.arrow;
-    if (arrow?.step !== 'feathers' || arrow.liftAt === undefined) return 0;
+    if (arrow.step !== 'feathers' || arrow.liftAt === undefined) return 0;
     return turnAt(this.now - arrow.liftAt, this.feel);
   }
 
-  /** Puts the shaft's back end in the tar pot. */
+  /** Whether the round's under way (the shaft's been dipped): the picker's closed from then on. */
+  get begun(): boolean {
+    return this.arrow.step !== 'shaft';
+  }
+
+  /** Puts the shaft's back end in the tar pot. Not when the batch can only be bare. */
   dip(): boolean {
     const arrow = this.arrow;
-    if (this.phase !== 'make' || arrow?.step !== 'shaft') return false;
+    if (this.phase !== 'make' || arrow.step !== 'shaft' || this.bareOnly) return false;
+    if (this.batch.arrows < 1) return false;
     arrow.step = 'dip';
     arrow.dipAt = this.now;
     this.#hooks.onEvent?.({ type: 'dip', arrow });
@@ -248,7 +353,7 @@ export class FletchingRound {
   /** Lifts it out of the tar with the level it's reached, into the jig for its feathers. */
   lift(): boolean {
     const arrow = this.arrow;
-    if (this.phase !== 'make' || arrow?.step !== 'dip') return false;
+    if (this.phase !== 'make' || arrow.step !== 'dip') return false;
     const tar = this.tar;
     arrow.tar = tar;
     arrow.tarState = tarState(tar, this.feel);
@@ -260,11 +365,11 @@ export class FletchingRound {
 
   /**
    * Slaps a feather on at the top of the turning shaft, onto the nearest mark still bare (true if
-   * it went on). The last one finishes the arrow. Needs the feathers for a careful arrow.
+   * it went on). The last one finishes the batch. Needs the feathers for the batch done carefully.
    */
   tap(): boolean {
     const arrow = this.arrow;
-    if (this.phase !== 'make' || arrow?.step !== 'feathers' || !this.canFletch) return false;
+    if (this.phase !== 'make' || arrow.step !== 'feathers' || !this.canFletch) return false;
     const { marks } = this.rules;
     // The top, in the shaft's own angles.
     const angle = wrapDegrees(-this.turn);
@@ -287,168 +392,111 @@ export class FletchingRound {
     arrow.taps.push(tap);
     this.#hooks.onEvent?.({ type: 'tap', arrow, tap });
     if (arrow.taps.length >= marks) {
-      const tar = arrow.tarState ?? 'thin';
-      const made = carefulResult(tar, arrow.taps);
-      this.#finish(arrow, 'careful', made, this.rules.feathers.careful, made === 'bare');
+      this.#finish('careful', carefulResult(arrow.tarState ?? 'thin', arrow.taps));
     }
     return true;
   }
 
-  /** Shoves the tarred shaft in the feather bucket: a duster, at once, for the bucket's feathers. */
+  /** Shoves the tarred shaft in the feather bucket: the batch all dusters, at once. */
   bucket(): boolean {
     const arrow = this.arrow;
-    if (this.phase !== 'make' || arrow?.step !== 'feathers' || !this.canBucket) return false;
+    if (this.phase !== 'make' || arrow.step !== 'feathers' || !this.canBucket) return false;
     // Any feathers tapped on already are in among the bucket's.
-    this.#finish(arrow, 'bucket', 'duster', this.rules.feathers.bucket, false);
+    this.#finish('bucket', 'duster');
     return true;
   }
 
-  /** Skips the feathers: a bare arrow, before the tar or after it. */
+  /** Skips the feathers: the batch all bare, before the tar or after it. */
   bare(): boolean {
     const arrow = this.arrow;
-    if (this.phase !== 'make' || (arrow?.step !== 'shaft' && arrow?.step !== 'feathers')) {
+    if (this.phase !== 'make' || (arrow.step !== 'shaft' && arrow.step !== 'feathers')) {
       return false;
     }
-    this.#finish(arrow, 'bare', 'bare', 0, false);
+    if (this.batch.arrows < 1) return false;
+    this.#finish('bare', 'bare');
     return true;
   }
 
-  /** Runs the round on by `dt` seconds. */
+  /** Runs the round on by `dt` seconds: once the batch is made, it ends after its beat. */
   tick(dt: number): void {
     if (this.phase !== 'make') return;
     this.now += Math.max(dt, 0);
     const arrow = this.arrow;
+    const result = this.result;
     if (
-      arrow?.step === 'made' &&
+      result &&
       arrow.madeAt !== undefined &&
       this.now - arrow.madeAt >= this.feel.finishSeconds - 1e-9
     ) {
-      this.#nextArrow();
+      this.phase = 'done';
+      this.#hooks.onEvent?.({ type: 'end', ...result });
     }
-    // (Running out of shafts just now ended it.)
-    if (!this.result && this.now >= this.rules.round.seconds - 1e-9) this.#end('time');
   }
 
-  /** Leaving mid-round: the arrow in hand goes back as a shaft; what's been made stays. */
+  /** Leaving: before the batch is made, nothing's been used; after, it's all banked already. */
   exit(): void {
     if (this.phase === 'done') return;
-    this.#hooks.logger.log('fletching.leave', {
-      seconds: round2(this.now),
-      arrows: this.arrows.filter((arrow) => arrow.made).length,
-      fletched: this.#made.fletched,
-    });
-    this.#putBack();
+    if (!this.result) {
+      this.#hooks.logger.log('fletching.leave', {
+        seconds: round2(this.now),
+        step: this.arrow.step,
+        arrows: this.batch.arrows,
+      });
+    }
     this.phase = 'done';
   }
 
-  /** The next shaft onto the bench: a spare one, or a stave split into shafts. Else it's over. */
-  #nextArrow(): void {
-    const { rules } = this;
+  /** The batch is made: staves and feathers used, the arrows, any bonus and XP banked, logged. */
+  #finish(way: FletchWay, made: ArrowMade): void {
+    const { rules, arrow, batch } = this;
     const hooks = this.#hooks;
-    if (hooks.count(rules.shaft) < 1) {
-      if (hooks.count(rules.stave) < 1) {
-        this.arrow = undefined;
-        this.#end('out');
-        return;
-      }
-      hooks.spend(rules.stave, 1);
-      hooks.bank([{ item: rules.shaft, count: rules.shaftsPerStave }], 0);
-      this.#staves += 1;
-    }
-    hooks.spend(rules.shaft, 1);
-    this.#shafts += 1;
-    const arrow: ArrowInHand = {
-      index: this.arrows.length,
-      step: 'shaft',
-      readyAt: this.now,
-      dipAt: undefined,
-      liftAt: undefined,
-      madeAt: undefined,
-      tar: undefined,
-      tarState: undefined,
-      taps: [],
-      way: undefined,
-      made: undefined,
-      feathers: 0,
-      lost: 0,
-    };
-    this.arrow = arrow;
-    this.arrows.push(arrow);
-    hooks.onEvent?.({ type: 'ready', arrow });
-  }
-
-  #finish(arrow: ArrowInHand, way: FletchWay, made: ArrowMade, feathers: number, lost: boolean) {
-    const { rules } = this;
     arrow.step = 'made';
     arrow.madeAt = this.now;
     arrow.way = way;
     arrow.made = made;
-    arrow.feathers = feathers;
-    arrow.lost = lost ? feathers : 0;
-    if (feathers > 0) this.#hooks.spend(rules.feather, feathers);
-    this.#feathers += feathers;
-    this.#lost += arrow.lost;
-    this.#made[made] += 1;
+    const arrows = batch.arrows;
+    const staves = stavesFor(rules, arrows);
+    const feathers = way === 'bare' ? 0 : rules.feathers[way] * arrows;
+    // Too little tar: the careful way's feathers slid off.
+    const lost = way === 'careful' && made === 'bare' ? feathers : 0;
+    hooks.spend(rules.stave, staves);
+    if (feathers > 0) hooks.spend(rules.feather, feathers);
+    const stars = starsFor(rules, this.feel, { way, made, tar: arrow.tar ?? 0, taps: arrow.taps });
+    const bonus = made === 'fletched' ? starBonus(arrows, stars, rules.starBonus) : 0;
     const kind = rules.arrows[made];
-    this.#xp += kind.xp;
-    this.#hooks.bank([{ item: kind.item, count: 1 }], kind.xp);
-    this.#logArrow(arrow);
-    this.#hooks.onEvent?.({ type: 'made', arrow, item: kind.item, xp: kind.xp });
-  }
-
-  /** The arrow in hand, unfinished, goes back to the warchest as a shaft (no feathers used yet). */
-  #putBack(): void {
-    const arrow = this.arrow;
-    if (!arrow || arrow.step === 'made') return;
-    this.arrows.pop();
-    this.#shafts -= 1;
-    this.#hooks.bank([{ item: this.rules.shaft, count: 1 }], 0);
-    this.arrow = undefined;
-  }
-
-  #end(reason: FletchingEndReason): void {
-    this.#putBack();
-    this.arrow = undefined;
-    this.phase = 'done';
-    const { rules } = this;
-    const fletched = this.#made.fletched;
-    const stars = starsFor(rules.stars, fletched);
-    const bonus = starBonus(fletched, stars, rules.starBonus);
-    if (bonus > 0) this.#hooks.bank([{ item: rules.arrows.fletched.item, count: bonus }], 0);
-    const made = this.arrows.filter((arrow) => arrow.made);
+    const xp = kind.xp * arrows;
+    const items: Stack[] = [{ item: kind.item, count: arrows }];
+    if (bonus > 0) items.push({ item: rules.arrows.fletched.item, count: bonus });
+    hooks.bank(items, xp);
     const result: FletchingResult = {
-      made: { ...this.#made },
-      arrows: made.length,
-      stars,
+      way,
+      made,
+      arrows,
       bonus,
-      xp: this.#xp,
-      feathers: this.#feathers,
-      lost: this.#lost,
-      staves: this.#staves,
-      shafts: this.#shafts,
-      bucket: made.filter((arrow) => arrow.way === 'bucket').length,
-      careful: made.filter((arrow) => arrow.way === 'careful').length,
+      stars,
+      xp,
+      staves,
+      feathers,
+      lost,
+      batch: { ...batch },
+      streakAfter: streakAfter(batch.streak, stars, this.feel),
       seconds: this.now,
-      reason,
     };
     this.result = result;
-    this.#hooks.logger.log('fletching.roundEnd', {
-      level: this.#hooks.level,
-      ...result,
-      seconds: round2(this.now),
-      shaftsLeft: this.shaftsLeft,
-      feathersLeft: this.feathersLeft,
-    });
-    this.#hooks.onEvent?.({ type: 'end', ...result });
-  }
-
-  /** One log line per arrow: its tar, its taps, which way it was made, and what came of it. */
-  #logArrow(arrow: ArrowInHand): void {
-    this.#hooks.logger.log('fletching.arrow', {
-      arrow: arrow.index,
-      at: round2(arrow.readyAt),
-      way: arrow.way ?? null,
-      made: arrow.made ?? null,
+    hooks.logger.log('fletching.roundEnd', {
+      level: hooks.level,
+      way,
+      made,
+      size: batch.size,
+      streak: batch.streak,
+      streakAfter: result.streakAfter,
+      arrows,
+      bonus,
+      stars,
+      xp,
+      staves,
+      feathers,
+      lost,
       tar: arrow.tar === undefined ? null : round2(arrow.tar),
       tarState: arrow.tarState ?? null,
       // Seconds in the tar.
@@ -462,11 +510,11 @@ export class FletchingRound {
         ms: Math.round(tap.offMs),
         onMark: tap.onMark,
       })),
-      feathers: arrow.feathers,
-      lost: arrow.lost,
-      // Seconds from the shaft's being ready to the arrow's being made.
-      seconds: arrow.madeAt === undefined ? null : round2(arrow.madeAt - arrow.readyAt),
+      seconds: round2(this.now),
+      stavesLeft: hooks.count(rules.stave),
+      feathersLeft: hooks.count(rules.feather),
     });
+    hooks.onEvent?.({ type: 'made', arrow, result, item: kind.item });
   }
 }
 

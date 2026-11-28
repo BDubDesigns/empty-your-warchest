@@ -4,8 +4,11 @@ import { mountDebugMenu } from '../debug';
 import { BackButton } from './backButton';
 import { bootGame } from './boot';
 import { gpuOf } from './deviceHints';
+import { LeaveCard } from './leaveCard';
+import { LeaveGuard } from './leaveGuard';
 import { LoadingCard, noticeIfSlow } from './loadingCard';
 import { Navigation, type View } from './navigation';
+import { PhoneBack } from './phoneBack';
 import type { PhaserView } from './phaserView';
 import { Preloader, whenIdle } from './preloader';
 import { lazyScreen, type LazyScreen } from './screen';
@@ -22,6 +25,7 @@ type ScreenId =
   | 'brewing3d'
   | 'archery3d'
   | 'fletching3d'
+  | 'farming3d'
   | 'siege3d';
 
 /** The shell screen each station screen runs on. */
@@ -33,6 +37,7 @@ const SCREENS: Record<StationScreenId, ScreenId> = {
   brewing3d: 'brewing3d',
   archery3d: 'archery3d',
   fletching3d: 'fletching3d',
+  farming3d: 'farming3d',
   siege3d: 'siege3d',
 };
 
@@ -69,6 +74,7 @@ const firemakingView = () => import('../stations/firemaking/three/firemaking3dVi
 const brewingView = () => import('../stations/brewing/three/brewing3dView');
 const archeryView = () => import('../stations/archery/three/archery3dView');
 const fletchingView = () => import('../stations/fletching/three/fletching3dView');
+const farmingView = () => import('../stations/farming/three/farming3dView');
 const siegeView = () => import('../stations/siege/three/siege3dView');
 const runnerView = () => import('../runner/view');
 const benchScreen = () => import('../bench/view/benchScreen');
@@ -96,6 +102,7 @@ export async function startApp(): Promise<void> {
         booted.feel.brewing,
         booted.feel.archery,
         booted.feel.fletching,
+        booted.feel.farming,
         booted.feel.siege,
         booted.feel.runner,
       ],
@@ -156,10 +163,8 @@ export async function startApp(): Promise<void> {
   const brewing3dElement = byId('screen-brewing3d');
   const archery3dElement = byId('screen-archery3d');
   const fletching3dElement = byId('screen-fletching3d');
+  const farming3dElement = byId('screen-farming3d');
   const siege3dElement = byId('screen-siege3d');
-  const backButton = new BackButton(byId('back-button'), () => {
-    run(() => navigation.back())();
-  });
   let phaser: PhaserView | undefined;
   const run = (action: () => Promise<void>) => () => {
     action().catch((error: unknown) => {
@@ -172,6 +177,39 @@ export async function startApp(): Promise<void> {
     });
   };
 
+  // Back to camp asks first when leaving would lose something (each station view says what);
+  // the card is shared, and the phone's back goes through the same guard.
+  const leaveGuard = new LeaveGuard({
+    cost: () => {
+      const id = switcher.current;
+      return id === undefined ? undefined : screens[id].leaveCost?.();
+    },
+    where: () => {
+      const { view } = navigation;
+      return view.kind === 'station' ? view.stationId : view.kind;
+    },
+    prompt: new LeaveCard(byId('app')),
+    leave: run(() => navigation.back()),
+    log: (type, data) => {
+      logger.log(type, data);
+    },
+  });
+  const backButton = new BackButton(byId('back-button'), () => {
+    leaveGuard.request();
+  });
+  // The phone's back acts like the button: its own action (woodcutting's End round) when a
+  // station has one, else Back to camp through the guard.
+  const phoneBack = new PhoneBack(window.history, () => {
+    if (backButton.hasAction) {
+      logger.log('app.backButton', { action: true });
+      backButton.press();
+    } else {
+      leaveGuard.phoneBack();
+    }
+  });
+  window.addEventListener('popstate', () => {
+    phoneBack.popped(navigation.view.kind !== 'camp');
+  });
   const screens: Record<ScreenId, LazyScreen> = {
     phaser: lazyScreen(phaserElement, async () => {
       const { PhaserView } = await import('./phaserView');
@@ -294,6 +332,25 @@ export async function startApp(): Promise<void> {
       },
       async () => {
         await (await fletchingView()).Fletching3DView.preload();
+      },
+    ),
+    farming3d: lazyScreen(
+      farming3dElement,
+      async () => {
+        const { Farming3DView } = await farmingView();
+        return Farming3DView.create(farming3dElement, {
+          game,
+          logger,
+          clock,
+          work,
+          feel: feel.farming,
+          graphics,
+          haptics,
+          onLeave: run((): Promise<void> => navigation.back()),
+        });
+      },
+      async () => {
+        await (await farmingView()).Farming3DView.preload();
       },
     ),
     siege3d: lazyScreen(
@@ -494,6 +551,8 @@ export async function startApp(): Promise<void> {
     (view) => {
       document.body.dataset.view = viewName(view);
       backButton.setShown(view.kind !== 'camp');
+      leaveGuard.dismiss();
+      phoneBack.follow(view.kind !== 'camp');
       if (view.kind === 'camp') {
         bankWork();
         preloader.resume();

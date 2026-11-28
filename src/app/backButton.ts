@@ -17,11 +17,21 @@ export class BackButton {
     this.#element = element;
     this.#back = back;
     element.addEventListener('click', () => {
-      const override = this.#override;
-      if (override === undefined) this.#back();
-      else if (override !== 'hidden') override.onTap();
+      this.press();
     });
     this.#render();
+  }
+
+  /** What a tap does (and what the phone's back does): the override's action, else Back to camp. */
+  press(): void {
+    const override = this.#override;
+    if (override === undefined) this.#back();
+    else if (override !== 'hidden') override.onTap();
+  }
+
+  /** Whether a station has turned the button into its own action (woodcutting's End round). */
+  get hasAction(): boolean {
+    return this.#override !== undefined && this.#override !== 'hidden';
   }
 
   /** Shown outside the camp (navigation decides). */

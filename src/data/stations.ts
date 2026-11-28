@@ -1,27 +1,28 @@
 import type { GameDataInput } from './schema';
 
-// `camp` places the station in the camp: x and y as fractions of the portrait screen.
+// `camp` places the station in the camp: x and y as fractions of the portrait screen. Five rows
+// since the farm (the castle camp replaces this layout later).
 export const stations = [
   {
     id: 'tree_line',
     name: 'Tree line',
     skill: 'woodcutting',
     mechanic: 'woodcutting3d',
-    camp: { x: 0.27, y: 0.2 },
+    camp: { x: 0.27, y: 0.16 },
   },
   {
     id: 'workbench',
     name: 'Workbench',
     skill: 'splitting',
     mechanic: 'splitting',
-    camp: { x: 0.27, y: 0.42 },
+    camp: { x: 0.27, y: 0.345 },
   },
   {
     id: 'fire_pit',
     name: 'Fire pit',
     skill: 'firemaking',
     mechanic: 'firemaking',
-    camp: { x: 0.73, y: 0.42 },
+    camp: { x: 0.73, y: 0.345 },
   },
   {
     // Top right, across from the Tree line (M9). The camp scrolls one day; it stays in data.
@@ -29,7 +30,7 @@ export const stations = [
     name: 'Cauldron',
     skill: 'alchemy',
     mechanic: 'brewing',
-    camp: { x: 0.73, y: 0.2 },
+    camp: { x: 0.73, y: 0.16 },
   },
   {
     // At the forest edge (Archery): the left of the middle row, the chest moved over to the right
@@ -38,7 +39,7 @@ export const stations = [
     name: 'Hunting stand',
     skill: 'archery',
     mechanic: 'archery',
-    camp: { x: 0.27, y: 0.62 },
+    camp: { x: 0.27, y: 0.53 },
   },
   {
     // Right beside the hunting stand (Brandon, Nov 27), where the chest was: the chest and the
@@ -47,13 +48,21 @@ export const stations = [
     name: "Fletcher's bench",
     skill: 'fletching',
     mechanic: 'fletching',
-    camp: { x: 0.73, y: 0.62 },
+    camp: { x: 0.73, y: 0.53 },
   },
   {
     id: 'war_tent',
     name: 'War tent',
     skill: 'command',
     mechanic: 'siege',
-    camp: { x: 0.27, y: 0.82 },
+    camp: { x: 0.27, y: 0.715 },
+  },
+  {
+    // A fifth row under the War tent, for now: the castle camp will give it the fields.
+    id: 'farm',
+    name: 'Farm',
+    skill: 'farming',
+    mechanic: 'farming',
+    camp: { x: 0.27, y: 0.9 },
   },
 ] satisfies GameDataInput['stations'];

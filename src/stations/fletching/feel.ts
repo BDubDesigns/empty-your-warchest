@@ -10,9 +10,11 @@ export const fletchingTunables: readonly Tunable[] = [
   { key: 'markWindowMs', label: 'Feather on its mark: within (± ms)', min: 20, max: 300, step: 5 },
   { key: 'leadSeconds', label: 'First mark comes up after (s)', min: 0, max: 2, step: 0.05 },
   { key: 'dipPx', label: 'Drag down to dip (px)', min: 10, max: 160, step: 5, more: true },
+  { key: 'streakCap', label: 'Hot streak: at most (× the batch)', min: 1, max: 5, step: 1 },
+  { key: 'streakDrop', label: 'Hot streak: steps lost on a miss', min: 1, max: 5, step: 1 },
   {
     key: 'finishSeconds',
-    label: 'Next shaft ready after (s)',
+    label: 'Batch off to the chest after (s)',
     min: 0,
     max: 2,
     step: 0.05,

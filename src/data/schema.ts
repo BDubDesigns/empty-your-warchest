@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { charactersSchema } from './characterSchema';
+import { farmingSchema } from './farmingSchema';
 
 /** lower_snake_case id used to reference one piece of data from another. */
 const id = z.string().regex(/^[a-z][a-z0-9_]*$/, 'Use a lower_snake_case id');
@@ -19,7 +20,7 @@ export const skillSchema = z.object({ id, name });
  * (a spear), a bottle, a green tuft (moss), a mushroom cap, a little grey heap (ash), a blue leaf
  * (woad), a striped sunflower seed, a dark woad seed pod, a puff of mushroom spores, a feather, a
  * fletched arrow and a bare one (a shaft with no feathers), a feather duster of an arrow (feathers
- * stuck on every which way), and a plain round arrow shaft.
+ * stuck on every which way), a plain round arrow shaft, and a handful of yellow petals.
  */
 export const itemLooks = [
   'round',
@@ -37,7 +38,7 @@ export const itemLooks = [
   'arrow',
   'shaft',
   'duster',
-  'dowel',
+  'petals',
 ] as const;
 
 /** A colour as '#rrggbb'. */
@@ -1689,8 +1690,14 @@ export const fletchingFeelSchema = z.object({
   turnSpeed: positive,
   markWindowMs: nonNegative,
   leadSeconds: nonNegative,
-  /** After an arrow's made, the next shaft is ready this long later (seconds). */
+  /** After the batch is made, it goes off to the chest this long later (seconds). */
   finishSeconds: nonNegative,
+  /**
+   * The hot streak's multiplier on the batch: a 3-star round raises it a step, up to `streakCap`;
+   * any round under 3 stars drops it `streakDrop` steps, never below 1.
+   */
+  streakCap: positiveInt,
+  streakDrop: positiveInt,
   shakeStrength: nonNegative,
   /** Vibration (ms): the shaft going into the tar, a feather on its mark, one off it, the bucket. */
   buzzDipMs: nonNegative,
@@ -1713,18 +1720,17 @@ const fletchingTierLookSchema = z.object({
 });
 
 /**
- * Fletching at the fletcher's bench: make arrows from shafts (a `stave` splits into
- * `shaftsPerStave` of them; a spare `shaft` waits in the warchest) and feathers, one at a time,
- * for a round of `round.seconds`. Each arrow: dip its back end in the tar, then either fletch it
- * carefully (`feathers.careful`, one on each of `marks` marks as it turns) or shove it in the
- * bucket (`feathers.bucket`, always a duster). Or skip the feathers for a bare arrow. Tar is free.
+ * Fletching at the fletcher's bench: a round makes a batch of arrows from staves (1 for every
+ * `arrowsPerStave` arrows, rounded up) and feathers, with one arrow's beats: dip its back end in
+ * the tar, then either fletch it carefully (`feathers.careful` an arrow, one on each of `marks`
+ * marks as it turns) or shove it in the bucket (`feathers.bucket` an arrow, always a duster). Or
+ * skip the feathers for bare arrows. The whole batch comes out the same. Tar is free.
  */
 const fletchingSchema = z.object({
   /** The workers' recipe: it must be a stave's worth of careful fletching (checked). */
   recipe: id,
   stave: id,
-  shaft: id,
-  shaftsPerStave: positiveInt,
+  arrowsPerStave: positiveInt,
   feather: id,
   feathers: z.object({ careful: positiveInt, bucket: positiveInt }),
   marks: positiveInt,
@@ -1738,9 +1744,24 @@ const fletchingSchema = z.object({
     duster: z.object({ item: id, xp: nonNegative }),
     bare: z.object({ item: id, xp: nonNegative }),
   }),
-  round: z.object({ seconds: positive }),
-  /** Stars from fletched arrows made in the round: 1, 2 and 3 from these many. */
-  stars: z.object({ one: positiveInt, two: positiveInt, three: positiveInt }),
+  /**
+   * The batch picker: from `level` of the skill, a batch can be up to `arrows` arrows (before the
+   * hot streak multiplies it). The first size is open from level 1; they grow in level order.
+   */
+  batch: z.object({
+    sizes: z.array(z.object({ arrows: positiveInt, level: positiveInt })).min(1),
+  }),
+  /**
+   * Stars from the round's beats: 3 for a fletched batch; 2 for a near miss (the tar within
+   * `nearTar` of the green band, and every feather within `nearTapMs` of its mark); else 1. The
+   * bucket's dusters and bare arrows are a fixed `bucket` and `bare` stars, never 3.
+   */
+  stars: z.object({
+    nearTar: fraction,
+    nearTapMs: nonNegative,
+    bucket: z.number().int().min(0).max(2),
+    bare: z.number().int().min(0).max(2),
+  }),
   /** Bonus fletched arrows for 2 and 3 stars, a share of the fletched arrows made. */
   starBonus: z.object({ two: nonNegative, three: nonNegative }),
   /**
@@ -1789,15 +1810,20 @@ const workersSchema = z.object({
   }),
   jobs: z
     .array(
-      z.object({
-        recipe: id,
-        perMinute: positive,
-        batches: positiveInt.default(1),
-        yield: positiveInt.default(1),
-        extra: z.array(z.object({ item: id, count: positiveInt })).default([]),
-        /** Workers here in a new game. */
-        start: z.number().int().nonnegative(),
-      }),
+      z.union([
+        z.object({
+          recipe: id,
+          perMinute: positive,
+          batches: positiveInt.default(1),
+          yield: positiveInt.default(1),
+          extra: z.array(z.object({ item: id, count: positiveInt })).default([]),
+          /** Workers here in a new game. */
+          start: z.number().int().nonnegative(),
+        }),
+        // The farm's: no recipe. Each worker tends `perMinute` plots a minute (src/core/farm.ts):
+        // harvests a ripe one onto the pile and replants what was there.
+        z.object({ plots: id, perMinute: positive, start: z.number().int().nonnegative() }),
+      ]),
     )
     .min(1),
 });
@@ -2224,6 +2250,7 @@ export const gameDataShape = z.object({
   brewing: brewingSchema,
   archery: archerySchema,
   fletching: fletchingSchema,
+  farming: farmingSchema,
   siege: siegeSchema,
   runner: runnerSchema,
   warchest: warchestSchema,
@@ -2267,6 +2294,10 @@ export type SplittingLog = Splitting['tutorialLog'];
 export type SplittingFeel = Splitting['feel'];
 export type Workers = GameData['workers'];
 export type WorkerJob = Workers['jobs'][number];
+/** A worker job that runs a recipe (every station's but the farm's). */
+export type RecipeJob = Extract<WorkerJob, { recipe: string }>;
+/** The farm's worker job: tending its plots. */
+export type PlotJob = Extract<WorkerJob, { plots: string }>;
 export type Firemaking = GameData['firemaking'];
 export type FiremakingFeel = Firemaking['feel'];
 export type Brewing = GameData['brewing'];
@@ -2279,6 +2310,10 @@ export type ArrowKind = Archery['arrows'][number];
 export type BirdShape = (typeof birdShapes)[number];
 export type Fletching = GameData['fletching'];
 export type FletchingFeel = Fletching['feel'];
+export type Farming = GameData['farming'];
+export type FarmingFeel = Farming['feel'];
+export type Crop = Farming['crops'][number];
+export type CropShape = Crop['look']['shape'];
 export type WoodcuttingForage = GameData['woodcutting']['forage'];
 export type WoodcuttingFellRest = GameData['woodcutting']['fellRest'];
 export type Gate = z.output<typeof gateSchema>;

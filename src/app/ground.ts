@@ -36,6 +36,14 @@ const GROUNDS: Record<GroundKind, { map: string; normalMap: string; tile: number
 
 const loaded = new Map<GroundKind, { map: THREE.Texture; normalMap: THREE.Texture }>();
 
+/**
+ * A ground's colour and normal maps (loaded once, shared), and how many metres one repeat covers,
+ * for a surface that maps them itself (e.g. the farm's tilled soil).
+ */
+export function groundTextures(kind: GroundKind) {
+  return { ...texturesFor(kind), tile: GROUNDS[kind].tile };
+}
+
 function texturesFor(kind: GroundKind) {
   const existing = loaded.get(kind);
   if (existing) return existing;

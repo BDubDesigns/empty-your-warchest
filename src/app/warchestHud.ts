@@ -60,7 +60,7 @@ const PIECE_LENGTHS: Record<ItemLook, number> = {
   arrow: 1.6,
   shaft: 1.6,
   duster: 1.6,
-  dowel: 1.5,
+  petals: 0.5,
 };
 
 /**
@@ -229,14 +229,23 @@ export function pieceModel(
     piece.add(dusterModel(14));
     return piece;
   }
-  if (look === 'dowel') {
-    // An arrow shaft: a thin, pale, round length of wood with nothing on it yet.
-    const dowel = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.024, 0.024, 0.95, 6),
-      new THREE.MeshLambertMaterial({ color: 0xe0bd88 }),
+  if (look === 'petals') {
+    // Sunflower petals: a small fan of long yellow petals round a brown middle.
+    const petal = new THREE.MeshLambertMaterial({ color: 0xf6c21c, flatShading: true });
+    for (let index = 0; index < 6; index++) {
+      const blade = new THREE.Mesh(new THREE.SphereGeometry(0.3, 6, 3), petal);
+      const angle = (index / 6) * Math.PI * 2;
+      blade.scale.set(0.3, 0.1, 0.8);
+      blade.position.set(Math.sin(angle) * 0.2, 0, Math.cos(angle) * 0.2);
+      blade.rotation.y = angle;
+      piece.add(blade);
+    }
+    const middle = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.13, 0.13, 0.08, 10),
+      new THREE.MeshLambertMaterial({ color: 0x5a3a1c }),
     );
-    dowel.rotation.x = Math.PI / 2;
-    piece.add(dowel);
+    middle.position.y = 0.03;
+    piece.add(middle);
     return piece;
   }
   if (look === 'split') {

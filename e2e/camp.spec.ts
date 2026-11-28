@@ -41,6 +41,7 @@ test('every station and the chest can be entered and exited by touch', async ({ 
       brewing: 'brewing3d',
       archery: 'archery3d',
       fletching: 'fletching3d',
+      farming: 'farming3d',
     };
     const screen = screens[station.mechanic] ?? 'phaser';
     await expect(page.locator('body')).toHaveAttribute('data-screen', screen);

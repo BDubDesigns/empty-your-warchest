@@ -5,7 +5,7 @@ import { onResize, onTap, text } from '../app/phaserUi';
 import { Sfx } from '../app/sfx';
 import { theme } from '../app/theme';
 import { splitDeposit } from '../app/warchestPour';
-import { workerRate, type Game, type Stack } from '../core';
+import { hasJob, plotRate, workerRate, type Game, type Stack } from '../core';
 import { campSpots, type CampSpot } from './layout';
 
 export interface CampDeps {
@@ -90,9 +90,11 @@ export class CampScene extends Phaser.Scene {
       fontStyle: 'bold',
     });
     const detail = text(this, '', { fontSize: '13px', color: theme.muted });
-    // The station's workers: what they make a minute, − / + to move them on and off, and a
-    // Collect button for what they've made.
+    // The station's workers: what they make a minute (the farm's, how often they tend a plot),
+    // − / + to move them on and off, and a Collect button for what they've made.
     const rate = spot.kind === 'station' ? workerRate(game.data, spot.id) : undefined;
+    const tends = spot.kind === 'station' ? plotRate(game.data, spot.id) : undefined;
+    const working = spot.kind === 'station' && hasJob(game.data, spot.id);
     const output = text(this, '', { fontSize: '12px', color: theme.fg });
     const crew = text(this, '', { fontSize: '16px', fontStyle: 'bold' });
     const button = (label: string, change: 1 | -1) => {
@@ -125,7 +127,7 @@ export class CampScene extends Phaser.Scene {
       collectPlate,
       collectLabel,
     ]);
-    if (!rate) for (const part of workerParts) part.setVisible(false);
+    if (!working) for (const part of workerParts) part.setVisible(false);
     // Only stations have piles to collect.
     collectPlate.setVisible(false);
     collectLabel.setVisible(false);
@@ -142,7 +144,7 @@ export class CampScene extends Phaser.Scene {
         plate.setSize(width, TILE_HEIGHT);
         // The tap area was sized when the tile was made; grow it with the tile.
         (plate.input?.hitArea as Phaser.Geom.Rectangle | undefined)?.setSize(width, TILE_HEIGHT);
-        const centred = !rate;
+        const centred = !working;
         name.setPosition(0, centred ? -12 : -52);
         detail.setPosition(0, centred ? 14 : -32);
         output.setPosition(0, -14);
@@ -176,14 +178,13 @@ export class CampScene extends Phaser.Scene {
         collectLabel.setText(
           `Collect ${pile.map((stack) => itemText(game.data, stack.item, stack.count)).join(', ')}`,
         );
-        if (!rate) return;
+        if (!working) return;
         const workers = game.crew(spot.id);
         crew.setText(`👷 ${String(workers)}`);
-        output.setText(
-          workers > 0
-            ? `${itemText(game.data, rate.item, rate.count * workers)}/min`
-            : 'No workers',
-        );
+        const made = rate
+          ? `${itemText(game.data, rate.item, rate.count * workers)}/min`
+          : `a plot every ${String(Math.round(1 / ((tends ?? 1) * workers)))} min`;
+        output.setText(workers > 0 ? made : 'No workers');
         output.setColor(workers > 0 ? theme.fg : theme.muted);
         less.plate.setAlpha(workers > 0 ? 1 : 0.4);
         more.plate.setAlpha(game.freeWorkers > 0 ? 1 : 0.4);
