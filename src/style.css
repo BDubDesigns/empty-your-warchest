@@ -920,6 +920,10 @@ body:not([data-view='camp']) #build-label {
   top: calc(var(--safe-top) + 78px);
   right: calc(var(--safe-right) + 12px);
   width: min(340px, calc(100% - 24px - var(--safe-left) - var(--safe-right)));
+  /* On the screen whatever the item count: the rows scroll, the Close button stays in reach. */
+  max-height: calc(100% - var(--safe-top) - var(--safe-bottom) - 90px);
+  display: flex;
+  flex-direction: column;
   box-sizing: border-box;
   padding: 16px 14px 14px;
   border: 2px solid #7a5a2e;
@@ -955,8 +959,11 @@ body:not([data-view='camp']) #build-label {
 }
 
 .warchest-rows {
+  min-height: 0;
   margin: 0;
   padding: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   list-style: none;
   display: grid;
   gap: 6px;
