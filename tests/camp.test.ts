@@ -16,10 +16,11 @@ describe('camp layout', () => {
       'hunting_stand',
       'fletchers_bench',
       'war_tent',
+      'farm',
     ]);
     expect(spots).toContainEqual({ kind: 'chest', ...data.camp.chest });
     expect(spots).toContainEqual(
-      expect.objectContaining({ id: 'tree_line', skillName: 'Woodcutting', x: 0.27, y: 0.2 }),
+      expect.objectContaining({ id: 'tree_line', skillName: 'Woodcutting', x: 0.27, y: 0.16 }),
     );
   });
 
@@ -83,6 +84,7 @@ describe('warchest view', () => {
       { item: 'bare_arrow', name: 'Bare arrow', detail: '0' },
       { item: 'arrow_shaft', name: 'Arrow shaft', detail: '0' },
       { item: 'duster_arrow', name: 'Duster arrow', detail: '0' },
+      { item: 'sunflower_petals', name: 'Sunflower petals', detail: '0' },
     ]);
   });
 });

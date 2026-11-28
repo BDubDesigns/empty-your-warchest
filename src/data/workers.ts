@@ -38,5 +38,9 @@ export const workers = {
     // so a minute of careful playing. That's what the hunt's worker shoots, and its 3 feathers a
     // minute, so a worker at each keeps the other going.
     { recipe: 'fletch_arrows', perMinute: 0.5, start: 0 },
+    // A plot tended every 15 minutes: harvested onto the farm's pile, replanted with a seed from
+    // the warchest and watered at 1 star. Played, four woad plots at 3 stars give about 2.4 woad a
+    // minute of growing; a worker about a tenth of that (0.25 a minute). None start here.
+    { plots: 'farm', perMinute: 1 / 15, start: 0 },
   ],
 } satisfies GameDataInput['workers'];
