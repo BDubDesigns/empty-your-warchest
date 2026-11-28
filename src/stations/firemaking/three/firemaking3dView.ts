@@ -1601,7 +1601,12 @@ export class Firemaking3DView implements ScreenView {
         }, index * 180);
       }
     }, 50);
-    const layers = nextLayers(this.#layers, result.stars, feel.streakCap);
+    const layers = nextLayers(this.#layers, result.stars, feel.streakCap, feel.streakDrop);
+    this.#deps.logger.log('firemaking.streak', {
+      stars: result.stars,
+      layersBefore: this.#layers,
+      layersAfter: layers,
+    });
     const lines: string[] = [];
     const parts = [`${String(result.hardened)} hardened`];
     if (result.under > 0) parts.push(`${String(result.under)} underdone (back to staves)`);
@@ -1618,6 +1623,7 @@ export class Firemaking3DView implements ScreenView {
     if (layers > this.#layers) lines.push(`🔥 Hot streak! Next rack stacks ${String(layers)} deep`);
     else if (layers === this.#layers && layers > 1)
       lines.push(`🔥 Hot streak holds: ${String(layers)} deep`);
+    else if (layers < this.#layers) lines.push(`The streak drops to ${String(layers)} deep`);
     else if (this.#layers > 1) lines.push('The streak is over');
     // A level up that opens a bigger rack: it's the one the next rack uses.
     const rules = this.#deps.game.data.firemaking;
