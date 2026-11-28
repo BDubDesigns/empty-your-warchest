@@ -62,7 +62,9 @@ describe('workers', () => {
     expect(workerRate(data, 'workbench')?.count).toBeCloseTo(0.6);
     expect(workerRate(data, 'fire_pit')).toEqual({ item: 'spear', count: 0.5 });
     expect(workerRate(data, 'war_tent')).toBeUndefined();
-    expect(workerInputs(data).sort()).toEqual(['log', 'stave']);
+    expect(workerRate(data, 'hunting_stand')?.item).toBe('feather');
+    expect(workerRate(data, 'hunting_stand')?.count).toBeCloseTo(3);
+    expect(workerInputs(data).sort()).toEqual(['fletched_arrow', 'log', 'stave']);
   });
 });
 
@@ -106,7 +108,12 @@ describe('work', () => {
     expect(count(game, 'log')).toBe(20);
     expect(count(game, 'stave')).toBe(4);
     expect(pile(game, 'fire_pit', 'spear')).toBe(0);
-    expect(result.stations.map((station) => station.short)).toEqual([undefined, 'log', 'stave']);
+    expect(result.stations.map((station) => station.short)).toEqual([
+      undefined,
+      'log',
+      'stave',
+      undefined,
+    ]);
   });
 
   it('uses the warchest above the minimum when the line runs dry', () => {
@@ -206,7 +213,7 @@ describe('saved workers', () => {
     const loaded = saves.load();
     expect(loaded.status).toBe('loaded');
     expect(loaded.state.work).toEqual({
-      crew: { tree_line: 1, workbench: 1, fire_pit: 0 },
+      crew: { tree_line: 1, workbench: 1, fire_pit: 0, hunting_stand: 0 },
       carry: { fell_tree: 0.5, split_stave: 0.05 },
       minimums: { log: 10 },
       piles: {},
@@ -215,6 +222,11 @@ describe('saved workers', () => {
     const old = JSON.parse(store.get('warchest.save') ?? '{}') as { state: { work?: unknown } };
     delete old.state.work;
     store.set('warchest.save', JSON.stringify(old));
-    expect(saves.load().state.work.crew).toEqual({ tree_line: 1, workbench: 1, fire_pit: 1 });
+    expect(saves.load().state.work.crew).toEqual({
+      tree_line: 1,
+      workbench: 1,
+      fire_pit: 1,
+      hunting_stand: 0,
+    });
   });
 });

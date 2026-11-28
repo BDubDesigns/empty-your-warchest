@@ -30,5 +30,9 @@ export const workers = {
       extra: [{ item: 'log', count: 1 }],
       start: 1,
     },
+    // A hunt of three birds every 3 minutes: a bird a minute, about a tenth of the 9 or so a
+    // minute of playing (Brandon, Nov 27: playing must stay the main way to get seeds). It spends
+    // fletched arrows; none start here.
+    { recipe: 'hunt_flock', perMinute: 1 / 3, start: 0 },
   ],
 } satisfies GameDataInput['workers'];

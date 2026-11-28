@@ -32,6 +32,15 @@ export const stations = [
     camp: { x: 0.73, y: 0.2 },
   },
   {
+    // At the forest edge (Archery): the left of the middle row, the chest moved over to the right
+    // to make room.
+    id: 'hunting_stand',
+    name: 'Hunting stand',
+    skill: 'archery',
+    mechanic: 'archery',
+    camp: { x: 0.27, y: 0.62 },
+  },
+  {
     id: 'war_tent',
     name: 'War tent',
     skill: 'command',

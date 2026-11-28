@@ -53,6 +53,12 @@ const PIECE_LENGTHS: Record<ItemLook, number> = {
   cap: 0.5,
   heap: 0.5,
   leaf: 0.6,
+  seed: 0.4,
+  pod: 0.45,
+  spores: 0.45,
+  feather: 0.8,
+  arrow: 1.6,
+  shaft: 1.6,
 };
 
 /**
@@ -149,6 +155,74 @@ export function pieceModel(
     piece.add(leaf);
     return piece;
   }
+  if (look === 'seed') {
+    // A sunflower seed: a dark, pointed husk with pale stripes down it.
+    const husk = new THREE.Mesh(
+      new THREE.SphereGeometry(0.3, 10, 6),
+      new THREE.MeshLambertMaterial({ color: 0x34302c }),
+    );
+    husk.scale.set(0.55, 0.32, 1);
+    piece.add(husk);
+    const stripe = new THREE.MeshLambertMaterial({ color: 0xe8e2d2 });
+    for (const x of [-0.07, 0.07]) {
+      const line = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.2, 0.48), stripe);
+      line.position.set(x, 0.01, 0);
+      piece.add(line);
+    }
+    return piece;
+  }
+  if (look === 'pod') {
+    // A woad seed: a flat, dark violet pod, a little stalk at one end.
+    const pod = new THREE.Mesh(
+      new THREE.SphereGeometry(0.3, 10, 6),
+      new THREE.MeshLambertMaterial({ color: 0x4b2d52, flatShading: true }),
+    );
+    pod.scale.set(0.75, 0.22, 1);
+    const stalk = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.02, 0.02, 0.14, 5),
+      new THREE.MeshLambertMaterial({ color: 0x6b5a3a }),
+    );
+    stalk.rotation.x = Math.PI / 2;
+    stalk.position.z = -0.34;
+    piece.add(pod, stalk);
+    return piece;
+  }
+  if (look === 'spores') {
+    // Mushroom spores: a puff of tan dust round a little brown cloud.
+    const dust = new THREE.MeshLambertMaterial({ color: 0xb79a6c, flatShading: true });
+    [
+      [0, 0, 0, 0.26],
+      [0.2, 0.06, 0.14, 0.12],
+      [-0.18, -0.04, 0.12, 0.1],
+      [0.1, -0.05, -0.22, 0.11],
+      [-0.12, 0.08, -0.16, 0.09],
+    ].forEach(([x, y, z, r]) => {
+      const mote = new THREE.Mesh(new THREE.IcosahedronGeometry(r, 0), dust);
+      mote.position.set(x ?? 0, y ?? 0, z ?? 0);
+      piece.add(mote);
+    });
+    return piece;
+  }
+  if (look === 'feather') {
+    // A feather: a pale, flat vane on a quill.
+    const vane = new THREE.Mesh(
+      new THREE.SphereGeometry(0.3, 10, 4),
+      new THREE.MeshLambertMaterial({ color: 0xe9e4d8, side: THREE.DoubleSide }),
+    );
+    vane.scale.set(0.6, 0.06, 1.3);
+    vane.position.z = 0.04;
+    const quill = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.018, 0.012, 0.9, 5),
+      new THREE.MeshLambertMaterial({ color: 0x9c8e72 }),
+    );
+    quill.rotation.x = Math.PI / 2;
+    piece.add(vane, quill);
+    return piece;
+  }
+  if (look === 'arrow' || look === 'shaft') {
+    piece.add(arrowModel(look === 'arrow'));
+    return piece;
+  }
   if (look === 'split') {
     // A split stave: a squared-off length of pale, fresh wood.
     piece.add(new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.12, 1), wood));
@@ -167,6 +241,41 @@ export function pieceModel(
   piece.add(shaft, point);
   return piece;
 }
+/**
+ * An arrow lying along z, point first (+z), about 1 long: a thin shaft and a stone point, and
+ * three red and white feathers at the back if it's fletched (a bare one has none). The bird hunt
+ * flies these too.
+ */
+export function arrowModel(fletched: boolean): THREE.Object3D {
+  const arrow = new THREE.Group();
+  const shaft = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.022, 0.022, 0.88, 6),
+    new THREE.MeshLambertMaterial({ color: fletched ? 0xb98a52 : 0xd3ad78 }),
+  );
+  shaft.rotation.x = Math.PI / 2;
+  const point = new THREE.Mesh(
+    new THREE.ConeGeometry(0.05, 0.14, 6),
+    new THREE.MeshLambertMaterial({ color: 0x5d5f63, flatShading: true }),
+  );
+  point.rotation.x = Math.PI / 2;
+  point.position.z = 0.48;
+  arrow.add(shaft, point);
+  if (fletched) {
+    const colors = [0xc8402c, 0xf2ede2, 0xc8402c];
+    colors.forEach((color, index) => {
+      const vane = new THREE.Mesh(
+        new THREE.BoxGeometry(0.008, 0.07, 0.2),
+        new THREE.MeshLambertMaterial({ color }),
+      );
+      const turn = (index / colors.length) * Math.PI * 2;
+      vane.position.set(Math.sin(turn) * 0.045, Math.cos(turn) * 0.045, -0.33);
+      vane.rotation.z = -turn;
+      arrow.add(vane);
+    });
+  }
+  return arrow;
+}
+
 /** How far a piece hops up out of where it came from, in pixels. */
 const POP_HEIGHT = 28;
 /** How far the lid swings open, in radians. */

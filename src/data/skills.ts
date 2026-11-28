@@ -6,4 +6,5 @@ export const skills = [
   { id: 'firemaking', name: 'Firemaking' },
   { id: 'command', name: 'Command' },
   { id: 'alchemy', name: 'Alchemy' },
+  { id: 'archery', name: 'Archery' },
 ] satisfies GameDataInput['skills'];
