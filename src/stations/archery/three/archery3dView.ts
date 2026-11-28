@@ -3,6 +3,7 @@ import { gpuOf } from '../../../app/deviceHints';
 import { groundMesh } from '../../../app/ground';
 import type { Haptics } from '../../../app/haptics';
 import { loadModel } from '../../../app/models';
+import { countOf } from '../../../app/leaveGuard';
 import { capturePointer } from '../../../app/pointer';
 import type { ScreenView } from '../../../app/screen';
 import { Sfx } from '../../../app/sfx';
@@ -303,6 +304,15 @@ export class Archery3DView implements ScreenView {
     this.#renderer.setAnimationLoop((time) => {
       this.#loop(time);
     });
+  }
+
+  /** Back to camp mid-hunt loses the arrows still in the air (what's banked stays). */
+  leaveCost(): string | undefined {
+    const round = this.#round;
+    if (round?.phase !== 'hunt') return undefined;
+    const flying = round.arrows.filter((arrow) => arrow.state === 'flying').length;
+    if (flying === 0) return undefined;
+    return `The ${countOf(flying, 'arrow')} still in the air ${flying === 1 ? 'is' : 'are'} lost.`;
   }
 
   stop(): void {

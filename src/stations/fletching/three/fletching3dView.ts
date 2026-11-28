@@ -243,6 +243,13 @@ export class Fletching3DView implements ScreenView {
     });
   }
 
+  /** Back to camp with an arrow half made puts it back as a plain shaft: the tar or feathers are lost. */
+  leaveCost(): string | undefined {
+    const step = this.#round?.phase === 'make' ? this.#round.arrow?.step : undefined;
+    if (step !== 'dip' && step !== 'feathers') return undefined;
+    return 'The arrow in your hand goes back as a plain shaft.';
+  }
+
   stop(): void {
     this.#renderer.setAnimationLoop(null);
     this.#round?.exit();

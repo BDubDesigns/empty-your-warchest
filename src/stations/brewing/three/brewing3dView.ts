@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { groundMesh, wornGround } from '../../../app/ground';
 import type { Haptics } from '../../../app/haptics';
+import { countOf } from '../../../app/leaveGuard';
 import { capturePointer } from '../../../app/pointer';
 import type { ScreenView } from '../../../app/screen';
 import { Sfx, type SoundLoop } from '../../../app/sfx';
@@ -224,6 +225,17 @@ export class Brewing3DView implements ScreenView {
     this.#renderer.setAnimationLoop((time) => {
       this.#loop(time);
     });
+  }
+
+  /** Back to camp mid-brew loses the pot and what's in it (water is free, so it doesn't count). */
+  leaveCost(): string | undefined {
+    const round = this.#round;
+    if (round?.phase !== 'brew') return undefined;
+    const drops = Object.entries(round.counts)
+      .filter(([id]) => id !== WATER)
+      .reduce((sum, [, count]) => sum + Math.ceil(count), 0);
+    if (drops === 0) return undefined;
+    return `Your brew is lost, with the ${countOf(drops, 'ingredient')} you put in the pot.`;
   }
 
   stop(): void {

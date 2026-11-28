@@ -3017,6 +3017,75 @@ body:not([data-view='camp']) #build-label {
   font-size: 18px;
 }
 
+/* The shared "Leave this round?" card (src/app/leaveCard.ts). The layer dims the screen and takes
+ * its taps, so nothing is played underneath; under the debug menu (10). */
+.leave-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 9;
+  background: rgb(0 0 0 / 0.45);
+  touch-action: none;
+}
+
+.leave-layer[hidden] {
+  display: none;
+}
+
+.leave-card {
+  position: absolute;
+  inset: 22% 16px auto;
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+  padding: 20px;
+  border-radius: 14px;
+  background: rgb(20 24 18 / 0.95);
+}
+
+.leave-title {
+  font:
+    800 26px system-ui,
+    sans-serif;
+  text-align: center;
+}
+
+.leave-text {
+  color: var(--muted);
+  text-align: center;
+  white-space: pre-line;
+  line-height: 1.5;
+}
+
+.leave-buttons {
+  display: flex;
+  gap: 12px;
+}
+
+.leave-button {
+  min-width: 64px;
+  min-height: 56px;
+  padding: 0 18px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--accent);
+  color: var(--bg);
+  font:
+    700 20px system-ui,
+    sans-serif;
+  touch-action: manipulation;
+}
+
+.leave-button:active {
+  background: var(--accent-pressed);
+}
+
+.leave-button.leave-secondary {
+  border: 2px solid var(--accent);
+  background: transparent;
+  color: var(--accent);
+  font-size: 18px;
+}
+
 /* The bird hunt (src/stations/archery/three/archery3dView.ts). Buttons and the end card share the
  * fire pit's (.fm-button, .fm-card). */
 .ar-canvas {
