@@ -66,6 +66,10 @@ test('draws the bow and shoots an arrow, logged with its draw and aim', async ({
   await openStand(page, { fletched_arrow: 20, bare_arrow: 3 });
   await expect(page.locator('body')).toHaveAttribute('data-archery', 'hunt', { timeout: 20_000 });
   const screen = page.locator('#screen-archery3d');
+  // The counter shows points against par: every bird that flies by this round.
+  const par = Number(await screen.getAttribute('data-par'));
+  expect(par).toBeGreaterThan(0);
+  await expect(page.locator('.ar-status')).toContainText(`⭐ 0 / ${String(par)}`);
   // The quiver starts on the best arrows there are, and can switch.
   await expect(screen).toHaveAttribute('data-quiver', 'fletched_arrow');
   const bare = page.getByRole('radio', { name: /Bare arrow/ });
