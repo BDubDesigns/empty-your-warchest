@@ -5,8 +5,8 @@
 // for each number of stars, and the Low tier. Prints what each view costs to draw (draw calls,
 // triangles, texture memory).
 // usage: node tools/siege/shots.mjs <the game's URL, e.g. http://localhost:5173/> <out dir> [parts]
-// `parts`: some of castle,tower,low,guards,boxes,keep,alarm,stars (all by default; drawn in
-// software, each takes minutes).
+// `parts`: some of castle,tower,low,guards,boxes,keep,alarm,stars (or one card: card3 … card0)
+// (all by default; drawn in software, each takes minutes).
 import { mkdir, readFile } from 'node:fs/promises';
 import { chromium, devices } from '@playwright/test';
 
@@ -385,7 +385,9 @@ async function playTo(page, objectives) {
       if (!(await aimAt(page, 'guard'))) await vantage(page, 'Siege tower');
       await aimAt(page, 'guard');
     }
-    await fire(page);
+    // The last shot may still have finished it (or reinforcements come) while it aimed.
+    if ((await page.locator('body').getAttribute('data-siege')) !== 'aim') break;
+    await fire(page).catch(() => undefined);
     await page.waitForTimeout(1500);
     if (!(await over())) await settle(page);
   }
@@ -396,17 +398,28 @@ async function playTo(page, objectives) {
 }
 
 // The end card for each number of stars: every objective without the bell (no runner ever sets
-// off), every objective after the bell rang (a fast runner), the captain and then reinforcements,
-// and nothing but reinforcements (on the Low tier).
-if (want('stars')) {
+// off); every objective after the bell rang (the first volley alerts everyone and a fast runner
+// rings it, but the guards never get round to hiding, so a bot can still hit them); the captain
+// and then reinforcements; and nothing but reinforcements (on the Low tier).
+const card = (stars) => want('stars') || want(`card${String(stars)}`);
+if (card(3)) {
   const three = await openTent('high', false, { runnerDelaySeconds: 999 });
   await playTo(three, 3);
   await shot(three, 'card-3-stars');
   await three.close();
-  const two = await openTent('high', false, { runnerDelaySeconds: 0, runnerSpeed: 40 });
+}
+if (card(2)) {
+  const two = await openTent('high', false, {
+    alertSpearRadius: 500,
+    reactSeconds: 999,
+    runnerDelaySeconds: 0,
+    runnerSpeed: 40,
+  });
   await playTo(two, 3);
   await shot(two, 'card-2-stars');
   await two.close();
+}
+if (card(1)) {
   const one = await openTent('high', false, {
     ...ALARM,
     alertSpearRadius: 0,
@@ -419,6 +432,8 @@ if (want('stars')) {
   await playTo(one, 1);
   await shot(one, 'card-1-star');
   await one.close();
+}
+if (card(0)) {
   const none = await openTent('low', false, {
     ...ALARM,
     runnerDelaySeconds: 0,
