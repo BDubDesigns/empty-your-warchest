@@ -3262,7 +3262,7 @@ body:not([data-view='camp']) #build-label {
 }
 
 .fl-count-show {
-  animation: fl-count-pop 1.2s ease-out forwards;
+  animation: fl-count-pop 0.9s ease-out forwards;
 }
 
 @keyframes fl-count-pop {
@@ -3277,12 +3277,10 @@ body:not([data-view='camp']) #build-label {
   30% {
     transform: scale(1);
   }
-  80% {
-    opacity: 1;
-  }
+  /* It stays up until the end card takes over with the same count. */
   100% {
-    opacity: 0;
-    transform: translateY(-40px);
+    opacity: 1;
+    transform: translateY(-16px);
   }
 }
 

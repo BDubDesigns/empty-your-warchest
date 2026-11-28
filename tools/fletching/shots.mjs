@@ -130,7 +130,8 @@ async function tapFeathers(page, name) {
 
 /** One careful round; true if it was 3 stars. */
 async function carefulRound(page, names = {}) {
-  await dipTo(page, 0.52, names.dip);
+  // The band starts at 0.48: lifting as it gets there leaves room for a slow phone's lag.
+  await dipTo(page, 0.48, names.dip);
   await page.waitForTimeout(500);
   if (names.jig) await shot(page, names.jig);
   await tapFeathers(page, names.taps);
