@@ -16,6 +16,7 @@ export * from './rng';
 export * from './save';
 export * from './stars';
 export * from './state';
+export * from './streak';
 export * from './storage';
 export * from './workClock';
 export * from './workers';

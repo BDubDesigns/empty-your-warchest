@@ -808,6 +808,8 @@ export const firemakingFeelSchema = z.object({
   smokeThick: fraction,
   /** The hot streak: how deep racks can stack (1 = no streak). */
   streakCap: positiveInt,
+  /** Layers a rack under 3 stars takes off the streak (never below 1). */
+  streakDrop: positiveInt,
   /**
    * The pull: a touch within `grabPx` of the handle grabs it (forgiving), and the pull counts once
    * it has moved `dragPx`; the rack slides out over `pullSeconds`.
