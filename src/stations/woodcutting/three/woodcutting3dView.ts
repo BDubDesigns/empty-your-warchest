@@ -597,12 +597,23 @@ export class Woodcutting3DView implements ScreenView {
   }
 
   stop(): void {
+    this.#endClearing();
+    this.#hud.sleep();
+    releaseContext(this.#renderer, this.#deps.logger, 'wood3d');
+  }
+
+  /**
+   * Winds down the clearing on screen, keeping the graphics contexts (this screen's and the HUD
+   * chest's): Next clearing goes straight into a new one, and a context given back can't be asked
+   * for again in the same moment (the screen stayed white).
+   */
+  #endClearing(): void {
     this.#renderer.setAnimationLoop(null);
     this.#pendingPour = undefined;
     this.#summaryPending = undefined;
     this.#clearSummaryTimers();
     this.#deps.backButton.set(undefined);
-    this.#hud.sleep();
+    this.#hud.settle();
     this.#skillBar.settle();
     this.#bankedXp = undefined;
     this.#round.exit();
@@ -610,7 +621,6 @@ export class Woodcutting3DView implements ScreenView {
     this.#logPerformance();
     delete document.body.dataset.woodcutting;
     this.#lastPhase = '';
-    releaseContext(this.#renderer, this.#deps.logger, 'wood3d');
   }
 
   // World
@@ -2755,7 +2765,7 @@ export class Woodcutting3DView implements ScreenView {
     leave.classList.add('w3d-secondary');
     const next = button('Next clearing', () => {
       this.#leaveSummary(() => {
-        this.stop();
+        this.#endClearing();
         this.start();
       });
     });
