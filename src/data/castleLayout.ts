@@ -46,13 +46,21 @@ export interface PlacedPiece {
   turn: number;
 }
 
+/** A piece of a building's wall: the storey it's in (0 up) and its module's middle (x, z). */
+export interface FacadePiece extends PlacedPiece {
+  storey: number;
+  middle: Vec2;
+}
+
 export interface LaidBuilding {
   id: string;
   min: Vec2;
   max: Vec2;
   /** Its walls' height (m) to the roof's foot. */
   height: number;
-  pieces: PlacedPiece[];
+  /** How much of that never comes apart (m, from the ground): all of it, without `chunks`. */
+  solidHeight: number;
+  pieces: FacadePiece[];
 }
 
 export interface LaidStair {
@@ -86,16 +94,20 @@ export interface CaptainWindow {
  * The castle's parts that can come apart (the siege will break them; nothing breaks yet). The
  * curtain walls and round towers are built of chunks: each wall in columns of stacked blocks with
  * a battlement (parapet and two merlons) on top, each tower in rows of wedges round it, its top row
- * carrying its parapet and merlons. Then each loose merlon (on a solid tower), each gate's leaves,
- * each tower's tile roof, each building's roof, and the bell on its frame. Slits, doorways and ivy
- * are fixed to the chunk they're on (`of`) and go with it. What's `solid` in the data (the
- * gatehouse; the keep, always) stays whole. Every part is drawn on its own: the parts of a shape as
- * instances of it, so many cost one draw.
+ * carrying its parapet and merlons. A gatehouse is built of blocks: its two piers and the stonework
+ * over its gate, in rows, its top row carrying the parapet (its merlons stand on that). A
+ * building's top storeys may be blocks too (`chunks`). Then each loose merlon (on a gatehouse or a
+ * solid tower), each gate's leaves, each tower's tile roof, each building's roof, and the bell on
+ * its frame. Slits, doorways and ivy are fixed to the chunk they're on (`of`) and go with it.
+ * What's `solid` in the data (and a building's lower storeys) stays whole. Every part is drawn on
+ * its own: the parts of a shape as instances of it, so many cost one draw.
  */
 export const castlePartKinds = [
   'wallChunk',
   'battlement',
   'towerChunk',
+  'gatehouseChunk',
+  'storeyChunk',
   'merlon',
   'gate',
   'towerRoof',
@@ -111,6 +123,8 @@ export const castleBreakableKinds: readonly CastlePartKind[] = [
   'wallChunk',
   'battlement',
   'towerChunk',
+  'gatehouseChunk',
+  'storeyChunk',
   'merlon',
   'gate',
   'towerRoof',
@@ -140,6 +154,12 @@ export interface CastlePart {
   /** A chunk's row from the ground (0 up), and how many rows its wall or tower has. */
   row?: number;
   rows?: number;
+  /**
+   * The parts (by id) it's built on, for a gatehouse's blocks and merlons, a building's blocks and
+   * its roof: if one goes, it comes loose. (A wall's and a round tower's chunks rest on the ones
+   * under them, by their numbers.)
+   */
+  on?: string[];
   /** For a slit, doorway or vine: the chunk it's fixed to (none if that's solid). */
   of?: string;
   /** For a vine: the kit piece. */
@@ -413,7 +433,7 @@ function layWall(castle: Castle, index: number, outline: readonly Vec2[]): LaidW
 }
 
 function layBuilding(castle: Castle, building: CastleBuilding): LaidBuilding {
-  const pieces: PlacedPiece[] = [];
+  const pieces: FacadePiece[] = [];
   for (const side of ['front', 'back', 'left', 'right'] as const) {
     const frame = sideFrame(side);
     building.facades[side].forEach((storey, level) => {
@@ -430,6 +450,8 @@ function layBuilding(castle: Castle, building: CastleBuilding): LaidBuilding {
             node: piece.node,
             at: [x + ox * cos + oz * sin, level * castle.storey + oy, z - ox * sin + oz * cos],
             turn,
+            storey: level,
+            middle: [x, z],
           });
         }
       });
@@ -441,6 +463,7 @@ function layBuilding(castle: Castle, building: CastleBuilding): LaidBuilding {
     min: box.min,
     max: box.max,
     height: building.storeys * castle.storey,
+    solidHeight: Math.max(building.storeys - (building.chunks?.storeys ?? 0), 0) * castle.storey,
     pieces,
   };
 }
@@ -579,6 +602,84 @@ function towerChunking(castle: Castle, tower: CastleTower): { angle: number; row
   };
 }
 
+/**
+ * The heights a gatehouse's rows of blocks run between, from the ground up: the bottom row as
+ * high as its gate, the rest sharing what's above it.
+ */
+export function gatehouseRows(castle: Castle, tower: CastleTower): number[] {
+  const rows = castle.gatehouseChunks.rows;
+  const gate = tower.gate?.height ?? tower.height / rows;
+  return Array.from({ length: rows + 1 }, (_, row) =>
+    row === 0 ? 0 : gate + ((tower.height - gate) * (row - 1)) / (rows - 1),
+  );
+}
+
+/**
+ * Which of a gatehouse block's faces are the gatehouse's own outer faces, in the block's own
+ * frame (a block turned half round has its x and z the other way); and whether it's over the gate.
+ */
+export function gatehouseFaces(
+  castle: Castle,
+  part: CastlePart,
+): { xPlus: boolean; xMinus: boolean; zPlus: boolean; zMinus: boolean; over: boolean } {
+  const tower = castle.towers.find((candidate) => candidate.id === part.owner);
+  if (!tower) return { xPlus: false, xMinus: false, zPlus: false, zMinus: false, over: false };
+  const halfX = tower.size;
+  const halfZ = tower.depth ?? tower.size;
+  const [length, , depth] = part.size;
+  const dx = part.at[0] - tower.at[0];
+  const dz = part.at[2] - tower.at[1];
+  const world = {
+    xPlus: Math.abs(dx + length / 2 - halfX) < 1e-6,
+    xMinus: Math.abs(dx - length / 2 + halfX) < 1e-6,
+    zPlus: Math.abs(dz + depth / 2 - halfZ) < 1e-6,
+    zMinus: Math.abs(dz - depth / 2 + halfZ) < 1e-6,
+  };
+  const over = Math.abs(dx) < 1e-6;
+  return Math.abs(part.turn) > 1
+    ? { xPlus: world.xMinus, xMinus: world.xPlus, zPlus: world.zMinus, zMinus: world.zPlus, over }
+    : { ...world, over };
+}
+
+/**
+ * The stretches of a gatehouse's parapet a top-row block carries: one along each of the
+ * gatehouse's edges the block is on, out on the corbels, in the block's own frame (`at`: x, z;
+ * running along its x or its z).
+ */
+export function gatehouseEdges(
+  castle: Castle,
+  part: CastlePart,
+): { at: [number, number]; length: number; alongX: boolean }[] {
+  const faces = gatehouseFaces(castle, part);
+  const out = castle.details.corbel.out;
+  const thickness = castle.wall.parapet.thickness;
+  const [length, , depth] = part.size;
+  const edges: { at: [number, number]; length: number; alongX: boolean }[] = [];
+  // Along x (a front or back edge): as long as the block, and out to the corner on a side edge.
+  for (const sign of [1, -1]) {
+    if (!(sign > 0 ? faces.zPlus : faces.zMinus)) continue;
+    const from = -length / 2 - (faces.xMinus ? out : 0);
+    const to = length / 2 + (faces.xPlus ? out : 0);
+    edges.push({
+      at: [(from + to) / 2, sign * (depth / 2 + out - thickness / 2)],
+      length: to - from,
+      alongX: true,
+    });
+  }
+  // Along z (a side edge), between the front and back edges' stretches.
+  for (const sign of [1, -1]) {
+    if (!(sign > 0 ? faces.xPlus : faces.xMinus)) continue;
+    const from = -depth / 2 - (faces.zMinus ? out - thickness : 0);
+    const to = depth / 2 + (faces.zPlus ? out - thickness : 0);
+    edges.push({
+      at: [sign * (length / 2 + out - thickness / 2), (from + to) / 2],
+      length: to - from,
+      alongX: false,
+    });
+  }
+  return edges;
+}
+
 const round3 = (value: number) => value.toFixed(3);
 
 /** The middle of the towers' ring. */
@@ -595,11 +696,13 @@ function layParts(castle: Castle, walls: LaidWall[], buildings: LaidBuilding[]):
   const parts: CastlePart[] = [];
   const { wall: w, details } = castle;
   const counts = new Map<string, number>();
-  const add = (part: Omit<CastlePart, 'id'>): void => {
+  const add = (part: Omit<CastlePart, 'id'>): string => {
     const key = `${part.owner}.${part.kind}`;
     const number = counts.get(key) ?? 0;
     counts.set(key, number + 1);
-    parts.push({ id: `${key}.${String(number)}`, ...part });
+    const id = `${key}.${String(number)}`;
+    parts.push({ id, ...part });
+    return id;
   };
   const [cx, cz] = middleOf(castle);
   const solidWall = (id: string) =>
@@ -664,6 +767,9 @@ function layParts(castle: Castle, walls: LaidWall[], buildings: LaidBuilding[]):
     const [x, z] = tower.at;
     const h = tower.height;
     const top = h + w.parapet.height;
+    /** A gatehouse's block at a point, once its blocks are laid (see below). */
+    let gatehouseBlockAt: (px: number, py: number, pz: number) => string | undefined = () =>
+      undefined;
     if (tower.shape === 'round') {
       const rim = tower.size + details.corbel.out;
       if (!tower.solid) {
@@ -731,6 +837,75 @@ function layParts(castle: Castle, walls: LaidWall[], buildings: LaidBuilding[]):
     } else {
       const sx = tower.size;
       const sz = tower.depth ?? tower.size;
+      // A gatehouse that comes apart: its piers (either side of the gate) and the stonework over
+      // the gate, in blocks front to back, in rows. The left pier's are turned half round, so a
+      // block's own +x is always away from the gate; the back blocks over the gate too, so their
+      // own +z is always the gatehouse's face.
+      const blocks: { id: string; min: Vec3; max: Vec3; top: boolean }[] = [];
+      if (tower.gate && !tower.solid) {
+        const { rows, deep } = castle.gatehouseChunks;
+        const levels = gatehouseRows(castle, tower);
+        const pier = sx - tower.gate.width / 2;
+        const slab = (sz * 2) / deep;
+        const ids = new Map<string, string>();
+        for (let row = 0; row < rows; row++) {
+          const y0 = levels[row] ?? 0;
+          const height = (levels[row + 1] ?? h) - y0;
+          for (let d = 0; d < deep; d++) {
+            const zMid = z - sz + slab * (d + 0.5);
+            const block = (
+              column: -1 | 0 | 1,
+              length: number,
+              turned: boolean,
+              on: (string | undefined)[],
+            ) => {
+              const xMid = x + column * (tower.gate ? tower.gate.width / 2 + pier / 2 : 0);
+              const id = add({
+                kind: 'gatehouseChunk',
+                owner: tower.id,
+                at: [xMid, y0, zMid],
+                turn: turned ? Math.PI : 0,
+                size: [length, height, slab],
+                shape: `gatehouse:${tower.id}:${column === 0 ? 'over' : 'pier'}:${String(row)}:${String(turned ? deep - 1 - d : d)}`,
+                row,
+                rows,
+                on: on.flatMap((entry) => (entry === undefined ? [] : [entry])),
+              });
+              ids.set(`${String(column)}:${String(row)}:${String(d)}`, id);
+              blocks.push({
+                id,
+                min: [xMid - length / 2, y0, zMid - slab / 2],
+                max: [xMid + length / 2, y0 + height, zMid + slab / 2],
+                top: row === rows - 1,
+              });
+            };
+            const under = (column: number, at: number) =>
+              ids.get(`${String(column)}:${String(at)}:${String(d)}`);
+            block(1, pier, false, [under(1, row - 1)]);
+            block(-1, pier, true, [under(-1, row - 1)]);
+            // Over the gate: the lowest is held between the piers' blocks beside it.
+            if (row === 1) block(0, tower.gate.width, d < deep / 2, [under(1, 1), under(-1, 1)]);
+            else if (row > 1) block(0, tower.gate.width, d < deep / 2, [under(0, row - 1)]);
+          }
+        }
+      }
+      /**
+       * The gatehouse's block nearest a point (on its face, or out on its corbels), if it comes
+       * apart: one of its top row for `top`, else one at the point's height.
+       */
+      const blockAt = (px: number, py: number, pz: number, top = false): string | undefined => {
+        let best: { id: string; off: number } | undefined;
+        for (const block of blocks) {
+          if (top ? !block.top : py < block.min[1] || py > block.max[1]) continue;
+          const off = Math.hypot(
+            Math.max(block.min[0] - px, 0, px - block.max[0]),
+            Math.max(block.min[2] - pz, 0, pz - block.max[2]),
+          );
+          if (!best || off < best.off - 1e-9) best = { id: block.id, off };
+        }
+        return best?.id;
+      };
+      gatehouseBlockAt = blockAt;
       // Round its top's four edges, standing out on the corbels.
       const edges: { length: number; half: number; turn: number; out: Vec2 }[] = [
         { length: sx * 2, half: sz, turn: 0, out: [0, 1] },
@@ -747,17 +922,18 @@ function layParts(castle: Castle, walls: LaidWall[], buildings: LaidBuilding[]):
         const across: Vec2 = [Math.cos(edge.turn), -Math.sin(edge.turn)];
         for (let i = 0; i < count; i++) {
           const offset = -used / 2 + w.merlon.width / 2 + i * pitch;
+          const mx = x + edge.out[0] * reach + across[0] * offset;
+          const mz = z + edge.out[1] * reach + across[1] * offset;
+          // On a gatehouse that comes apart, it stands on the block under it.
+          const under = blockAt(mx, top, mz, true);
           add({
             kind: 'merlon',
             owner: tower.id,
-            at: [
-              x + edge.out[0] * reach + across[0] * offset,
-              top,
-              z + edge.out[1] * reach + across[1] * offset,
-            ],
+            at: [mx, top, mz],
             turn: edge.turn,
             size: [w.merlon.width, w.merlon.height, w.parapet.thickness],
             shape: 'merlon',
+            ...(under ? { on: [under] } : {}),
           });
         }
       }
@@ -777,17 +953,20 @@ function layParts(castle: Castle, walls: LaidWall[], buildings: LaidBuilding[]):
       for (const sideways of [-reach, reach]) {
         for (const y of [w.height * 0.45, (w.height + h) / 2]) {
           const out = depthOut - details.slit[2] / 2 + 0.04;
+          const at: Vec3 = [
+            x + facing[0] * out + across[0] * sideways,
+            y,
+            z + facing[1] * out + across[1] * sideways,
+          ];
+          const of = blockAt(at[0], at[1], at[2]);
           add({
             kind: 'slit',
             owner: tower.id,
-            at: [
-              x + facing[0] * out + across[0] * sideways,
-              y,
-              z + facing[1] * out + across[1] * sideways,
-            ],
+            at,
             turn: outTurn,
             size: details.slit,
             shape: 'slit',
+            ...(of ? { of } : {}),
           });
         }
       }
@@ -827,7 +1006,9 @@ function layParts(castle: Castle, walls: LaidWall[], buildings: LaidBuilding[]):
         ];
         turn = Math.atan2(toward[0], toward[1]);
       }
-      const of = towerChunkAt(tower, turn, w.height + 0.01);
+      const of =
+        towerChunkAt(tower, turn, w.height + 0.01) ??
+        gatehouseBlockAt(at[0], w.height + details.doorway[1] / 2, at[2]);
       add({
         kind: 'doorway',
         owner: tower.id,
@@ -843,6 +1024,41 @@ function layParts(castle: Castle, walls: LaidWall[], buildings: LaidBuilding[]):
   for (const building of buildings) {
     const width = building.max[0] - building.min[0] + castle.roof.overhang * 2;
     const depth = building.max[1] - building.min[1] + castle.roof.overhang * 2;
+    // Its top storeys in blocks, if they come apart: each on the one under it, the roof on the top
+    // ones.
+    const data = castle.buildings.find((candidate) => candidate.id === building.id);
+    let under = new Map<string, string>();
+    if (data?.chunks) {
+      const chunks = data.chunks;
+      for (let storey = data.storeys - chunks.storeys; storey < data.storeys; storey++) {
+        const laid = new Map<string, string>();
+        let x0 = building.min[0];
+        chunks.across.forEach((across, i) => {
+          const lengthX = across * castle.module;
+          let z0 = building.min[1];
+          chunks.deep.forEach((deep, j) => {
+            const lengthZ = deep * castle.module;
+            const key = `${String(i)}:${String(j)}`;
+            const below = under.get(key);
+            laid.set(
+              key,
+              add({
+                kind: 'storeyChunk',
+                owner: building.id,
+                at: [x0 + lengthX / 2, storey * castle.storey, z0 + lengthZ / 2],
+                turn: 0,
+                size: [lengthX, castle.storey, lengthZ],
+                shape: `storey:${building.id}`,
+                on: below ? [below] : [],
+              }),
+            );
+            z0 += lengthZ;
+          });
+          x0 += lengthX;
+        });
+        under = laid;
+      }
+    }
     add({
       kind: 'roof',
       owner: building.id,
@@ -854,6 +1070,7 @@ function layParts(castle: Castle, walls: LaidWall[], buildings: LaidBuilding[]):
       turn: 0,
       size: [width, Math.min(width, depth) / 2, depth],
       shape: `roof:${building.id}`,
+      on: [...under.values()],
     });
   }
   const bell = castle.bell;
@@ -1034,8 +1251,11 @@ export function castleProblems(castle: Castle): CastleProblem[] {
         issue(['towers', index, 'gate'], 'The gate must be lower than its tower');
       }
     }
-    if (tower.shape === 'square' && !tower.solid) {
-      issue(['towers', index, 'solid'], 'A square tower is solid (only round ones come apart yet)');
+    if (tower.shape === 'square' && !tower.solid && !tower.gate) {
+      issue(
+        ['towers', index, 'solid'],
+        'A square tower without a gate is solid (only gatehouses and round towers come apart)',
+      );
     }
     if (tower.height <= castle.wall.height + castle.wall.parapet.height) {
       issue(['towers', index, 'height'], 'A tower must stand above the wall and its parapet');
@@ -1189,6 +1409,25 @@ export function castleProblems(castle: Castle): CastleProblem[] {
         );
       }
     });
+    if (building.chunks) {
+      const { storeys, across, deep } = building.chunks;
+      const sum = (list: readonly number[]) => list.reduce((total, value) => total + value, 0);
+      if (storeys > building.storeys) {
+        issue([...path, 'chunks', 'storeys'], 'No more storeys come apart than it has');
+      }
+      if (sum(across) !== building.modules[0]) {
+        issue(
+          [...path, 'chunks', 'across'],
+          `Its blocks across must add up to ${String(building.modules[0])} modules`,
+        );
+      }
+      if (sum(deep) !== building.modules[1]) {
+        issue(
+          [...path, 'chunks', 'deep'],
+          `Its blocks deep must add up to ${String(building.modules[1])} modules`,
+        );
+      }
+    }
     for (const side of ['front', 'back', 'left', 'right'] as const) {
       const storeys = building.facades[side];
       const modules = building.modules[sideFrame(side).axis];

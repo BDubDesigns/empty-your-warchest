@@ -9,7 +9,7 @@ import {
   type GameDataInput,
 } from '../src/data';
 import { siegeTunables } from '../src/stations/siege/feel';
-import { castleBodies, standsOn } from '../src/stations/siege/logic/castleBodies';
+import { castleBodies, standsOn, within } from '../src/stations/siege/logic/castleBodies';
 import {
   objectiveDone,
   objectiveProgress,
@@ -160,7 +160,7 @@ describe('the castle as bodies', () => {
     expect(bodies.parts).toHaveLength(breakable.length + 1);
     expect(bodies.parts.at(-1)).toMatchObject({ kind: 'rack', id: plan.rack });
     expect(bodies.parts.every((part) => part.shapes.length > 0)).toBe(true);
-    // The keep, the gatehouse, the wall inside the towers, the stair and the props never break.
+    // The keep's lower storeys, the wall inside the towers, the stair and the props never break.
     expect(bodies.solids.length).toBeGreaterThan(10);
   });
 
@@ -178,8 +178,41 @@ describe('the castle as bodies', () => {
       byId('north_west.towerChunk.0'),
     ]);
     expect(part('north_west.towerRoof.0')?.supports).toHaveLength(sectors);
-    // The solid gatehouse's merlons stand on it.
-    expect(part('gatehouse.merlon.0')?.supports).toEqual([]);
+    // And the whole row under it holds a tower's row up: with too few wedges left, it comes down.
+    expect(part(`north_west.towerChunk.${String(sectors)}`)?.holds).toEqual({
+      parts: Array.from({ length: sectors }, (_, sector) =>
+        byId(`north_west.towerChunk.${String(sector)}`),
+      ),
+      atLeast: data.siege.bodies.towerHold,
+    });
+    expect(part('north_west.towerChunk.0')?.holds).toBeUndefined();
+    // The gatehouse's blocks on the ones under them, the lowest over the gate between the piers',
+    // and its merlons on its top row.
+    const gatehouse = bodies.parts.filter((entry) => entry.kind === 'gatehouseChunk');
+    const over = gatehouse.filter((entry) => entry.foot[0] === 0);
+    expect(over.map((entry) => entry.supports.length).sort()).toEqual([1, 1, 2, 2]);
+    const merlonOn = part('gatehouse.merlon.0')?.supports ?? [];
+    expect(merlonOn).toHaveLength(1);
+    expect(bodies.parts[merlonOn[0] ?? -1]?.kind).toBe('gatehouseChunk');
+    // The top row carries the parapet (more shapes than the block itself).
+    expect(bodies.parts[merlonOn[0] ?? -1]?.shapes.length).toBeGreaterThan(1);
+    // The keep's roof on its top storey's blocks, which stand on the storeys that never break.
+    const storey = bodies.parts.filter((entry) => entry.kind === 'storeyChunk');
+    expect(part('keep.roof.0')?.supports).toHaveLength(storey.length);
+    expect(storey.every((entry) => entry.supports.length === 0)).toBe(true);
+  });
+
+  it('knows which block of the keep a point is in', () => {
+    const bodies = castleBodies(data.castle, LAYOUT, data.siege.bodies, undefined);
+    const window = LAYOUT.anchors.captainWindows[0];
+    if (!window) throw new Error('No captain window');
+    const inside: [number, number, number] = [
+      window.at[0] - window.out[0] * 0.2,
+      window.at[1],
+      window.at[2] - window.out[1] * 0.2,
+    ];
+    const blocks = bodies.parts.filter((entry) => within(entry, inside));
+    expect(blocks.map((entry) => entry.kind)).toEqual(['storeyChunk']);
   });
 
   it('knows where a guard stands: on a wall’s walk, or on a tower’s top', () => {
@@ -380,6 +413,146 @@ describe('the siege round', () => {
     expect(left.round.phase).toBe('done');
     expect(left.finished[0]).toMatchObject({ ending: 'withdrew', stars: 1, done: 1 });
     left.round.dispose();
+  });
+
+  it('an aimed volley that lands on one wall chunk breaks it, and its column comes down', () => {
+    const { round, logs } = siege();
+    const chunk = round.parts.findIndex((part) => part.body.id === 'front_left.wallChunk.2');
+    const middle = partMiddle(round, 'front_left.wallChunk.2');
+    shoot(round, { x: middle.x, y: middle.y, z: middle.z + 1.5 }, 'aimed', 300);
+    expect(round.parts[chunk]?.mode).toBe('broken');
+    // What stood on it fell, and broke as it landed.
+    for (const id of ['front_left.wallChunk.3', 'front_left.battlement.1']) {
+      const part = round.parts.find((entry) => entry.body.id === id);
+      expect(part?.fallen || part?.mode === 'broken').toBe(true);
+    }
+    // What the throw did is logged once it's known: when the next goes, or at the end.
+    expect(logs.some((event) => event.type === 'siege.throwDone')).toBe(false);
+    round.withdraw();
+    const done = logs.find((event) => event.type === 'siege.throwDone')?.data;
+    expect(done).toMatchObject({ throw: 1, mode: 'aimed' });
+    expect(done?.partsBroken).toBeGreaterThanOrEqual(1);
+    expect(done?.partsLoosened).toBeGreaterThanOrEqual(2);
+    round.dispose();
+  });
+
+  it('a tower that loses half its bottom row comes down, and its lookout with it', () => {
+    const lookout = planWith(7).guards.find((guard) => guard.slot.kind === 'lookout');
+    const guards = planWith(7).guards.map((guard, index) =>
+      index === 0
+        ? { ...guard, slot: { post: 'south_west_top', kind: 'lookout' as const } }
+        : guard,
+    );
+    const { round, logs } = siege({ plan: planWith(7, lookout ? {} : { guards }) });
+    const tower = round.parts.filter((part) => part.body.owner === 'south_west');
+    const sectors = data.castle.towerChunks.sectors;
+    for (const x of [-19.5, -18, -16.5]) shoot(round, { x, y: 1.5, z: 19.3 }, 'aimed', 240);
+    const bottom = tower.slice(0, sectors).filter((part) => part.mode === 'fixed');
+    expect(bottom.length).toBeLessThan(data.siege.bodies.towerHold);
+    // Everything above came loose: nothing up there is where it was built.
+    expect(tower.slice(sectors).every((part) => part.mode !== 'fixed')).toBe(true);
+    expect(logs.find((event) => event.type === 'siege.collapse')?.data).toMatchObject({
+      owner: 'south_west',
+      needed: data.siege.bodies.towerHold,
+    });
+    const onTop = round.guards.filter((guard) => guard.slot?.post === 'south_west_top');
+    expect(onTop.length).toBeGreaterThan(0);
+    expect(onTop.every((guard) => guard.down)).toBe(true);
+    round.dispose();
+  });
+
+  it('a pier of the gatehouse knocked out brings down what it held, merlons and all', () => {
+    const { round, events } = siege({ vantage: LOW });
+    const mode = (id: string) => round.parts.find((part) => part.body.id === id)?.mode;
+    shoot(round, { x: 3, y: 1.5, z: 20 }, 'aimed', 240);
+    // The front block of the right pier's foot went; the pier's blocks on it came loose, and the
+    // stonework over the gate that they held.
+    expect(mode('gatehouse.gatehouseChunk.2')).toBe('broken');
+    const loose = events.flatMap((event) =>
+      event.type === 'loose' ? [round.parts[event.part]?.body.id] : [],
+    );
+    expect(loose).toEqual(
+      expect.arrayContaining([
+        'gatehouse.gatehouseChunk.7',
+        'gatehouse.gatehouseChunk.13',
+        'gatehouse.gatehouseChunk.9',
+      ]),
+    );
+    expect(loose.some((id) => id?.startsWith('gatehouse.merlon'))).toBe(true);
+    round.dispose();
+  });
+
+  it('breaking the block of the keep the captain stands in brings him down', () => {
+    // A top-storey window: his block comes apart (the storeys under it never do).
+    const { round, events } = siege({ plan: planWith(7, { captainWindow: 0 }) });
+    const captain = round.guards.findIndex((guard) => guard.role === 'captain');
+    const objective = round.plan.objectives.findIndex((entry) => entry.kind === 'captain');
+    const at = guardAt(round, captain);
+    // Well to the side of him, on the same block's face.
+    shoot(round, { x: at.x - 2.3, y: at.y, z: at.z }, 'aimed', 240);
+    expect(round.parts.find((part) => part.body.id === 'keep.storeyChunk.1')?.mode).toBe('broken');
+    expect(events.some((event) => event.type === 'hit' && event.target.kind === 'guard')).toBe(
+      false,
+    );
+    expect(round.guards[captain]).toMatchObject({ down: true, by: 'fall' });
+    expect(round.progress[objective]).toEqual({ done: 1, needed: 1 });
+    // The roof lost a block under it and came loose. A lower window's captain has no such block.
+    expect(events).toContainEqual({
+      type: 'loose',
+      part: round.parts.findIndex((part) => part.kind === 'roof'),
+    });
+    round.dispose();
+    const lower = siege({ plan: planWith(7, { captainWindow: 2 }) });
+    const below = lower.round.guards.findIndex((guard) => guard.role === 'captain');
+    const low = guardAt(lower.round, below);
+    shoot(lower.round, { x: low.x - 2.3, y: low.y, z: low.z }, 'aimed', 240);
+    expect(lower.round.guards[below]?.down).toBe(false);
+    lower.round.dispose();
+  });
+
+  it('the spear rack crushed by falling stone counts as broken', () => {
+    // The rack moved into the gate's passage, under the stonework over the gate.
+    const game = structuredClone(data);
+    const prop = game.castle.props.find((entry) => entry.id === 'spear_rack');
+    if (!prop) throw new Error('No spear rack');
+    prop.at = [0, 13.6];
+    prop.turn = 0;
+    const { round, events } = siege({
+      game,
+      plan: planWith(7, { rack: 'spear_rack' }),
+      vantage: TOWER,
+    });
+    const rack = round.parts.findIndex((part) => part.kind === 'rack');
+    const objective = round.plan.objectives.findIndex((entry) => entry.kind === 'rack');
+    // The back of the right pier's foot, low on its courtyard side (spears that go on through it
+    // come down short of the rack): what's over the gate rests on it.
+    for (let shot = 0; shot < 4 && round.parts[rack]?.mode !== 'broken'; shot++) {
+      shoot(round, { x: 4.5, y: 0.8, z: 13.2 }, 'aimed', 300);
+    }
+    expect(round.parts[rack]?.mode).toBe('broken');
+    expect(
+      events.some(
+        (event) =>
+          event.type === 'hit' && event.target.kind === 'part' && event.target.index === rack,
+      ),
+    ).toBe(false);
+    expect(round.progress[objective]).toEqual({ done: 1, needed: 1 });
+    round.dispose();
+  });
+
+  it('tells what can be seen from a vantage point: the captain at his window, not behind the keep', () => {
+    const { round } = siege({ plan: planWith(7, { captainWindow: 0 }) });
+    const captain = round.guards.findIndex((guard) => guard.role === 'captain');
+    const eye = (id: number) => {
+      const [x, y, z] = data.castle.vantages[id]?.at ?? [0, 0, 0];
+      return { x, y, z };
+    };
+    const at = guardAt(round, captain);
+    expect(round.sees(eye(HILL), at, 1.2)).toBe(true);
+    // From the low ground the front wall stands in the way.
+    expect(round.sees(eye(LOW), at, 1.2)).toBe(false);
+    expect(round.sees(eye(HILL), { x: at.x, y: 1, z: at.z - 12 }, 1.2)).toBe(false);
+    round.dispose();
   });
 
   it('landed spears stop being bodies, and loose chunks are fixed where they settle', () => {

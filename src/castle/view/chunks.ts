@@ -1,6 +1,6 @@
 import * as THREE from 'three';
-import type { Castle, CastlePart } from '../../data';
-import { block, drum, wedge, type Skin } from './stonework';
+import { gatehouseEdges, gatehouseFaces, type Castle, type CastlePart } from '../../data';
+import { block, drum, slab, wedge, type Skin } from './stonework';
 
 // The shapes the castle's stonework is built of, wall and tower alike: a slice of wall (its body,
 // and its foot, trim band and walk where the slice reaches them), a battlement, a wedge of a
@@ -154,6 +154,120 @@ export function towerWedge(castle: Castle, { skins }: StoneSkins, part: CastlePa
         shape.push(...merlon(castle, { skins }, matrix));
       }
     }
+  }
+  return shape;
+}
+
+/**
+ * A block of a gatehouse that comes apart, as the layout's `part` says, standing on its own foot's
+ * middle (its +x away from the gate, for a pier's): its stone, and whatever of the gatehouse's
+ * foot, the trim round its arch, its trim band and its crown (corbels, parapet, walk) is on it. The
+ * lowest block over the gate is cut to the arch, down to where the arch springs.
+ */
+export function gatehouseBlock(castle: Castle, { skins }: StoneSkins, part: CastlePart): Shape {
+  const tower = castle.towers.find((candidate) => candidate.id === part.owner);
+  const gate = tower?.gate;
+  if (!tower || !gate) throw new Error(`No gatehouse "${part.owner}"`);
+  const w = castle.wall;
+  const { cap, corbel, archTrim } = castle.details;
+  const faces = gatehouseFaces(castle, part);
+  const [length, height, depth] = part.size;
+  const y0 = part.at[1];
+  const y1 = y0 + height;
+  const top = part.row !== undefined && part.rows !== undefined && part.row === part.rows - 1;
+  const radius = gate.width / 2;
+  const spring = Math.max(gate.height - radius, 0);
+  const shape: Shape = [];
+  /** A box on the block: `size`, its foot's middle at `at` (in the block's frame). */
+  const put = (
+    key: keyof Castle['skins'],
+    size: [number, number, number],
+    at: [number, number, number],
+  ) => {
+    shape.push({
+      material: skins[key].material,
+      geometry: block(size, new THREE.Matrix4().makeTranslation(...at), skins[key].skin),
+    });
+  };
+  /** A band round the block's outer faces, standing `out` proud of them, `tall` high from `y`. */
+  const band = (key: keyof Castle['skins'], out: number, y: number, tall: number, more = 0) => {
+    const x = [-length / 2 - (faces.xMinus ? out : 0), length / 2 + (faces.xPlus ? out : 0)];
+    const z = [-depth / 2 - (faces.zMinus ? out : 0), depth / 2 + (faces.zPlus ? out : 0)];
+    const [x0 = 0, x1 = 0] = x;
+    const [z0 = 0, z1 = 0] = z;
+    put(key, [x1 - x0 + more, tall, z1 - z0 + more], [(x0 + x1) / 2, y, (z0 + z1) / 2]);
+  };
+  // Its stone: cut to the arch, for the lowest block over the gate.
+  const arched = faces.over && Math.abs(y0 - gate.height) < 1e-6;
+  if (arched) {
+    const outline = new THREE.Shape();
+    outline.moveTo(-radius, spring - y0);
+    outline.lineTo(-radius, height);
+    outline.lineTo(radius, height);
+    outline.lineTo(radius, spring - y0);
+    outline.absarc(0, spring - y0, radius, 0, Math.PI, false);
+    shape.push({
+      material: skins.tower.material,
+      geometry: slab(
+        outline,
+        depth,
+        new THREE.Matrix4().makeTranslation(0, 0, -depth / 2),
+        skins.tower.skin,
+        14,
+      ),
+    });
+  } else {
+    put('tower', [length, height, depth], [0, 0, 0]);
+  }
+  // The trim round the arch, on the gatehouse's face: up a pier's gate side to the spring, and
+  // round over the gate.
+  for (const sign of [1, -1]) {
+    if (!(sign > 0 ? faces.zPlus : faces.zMinus)) continue;
+    const z = sign * (depth / 2 + archTrim.proud / 2);
+    if (!faces.over && y0 < spring) {
+      put(
+        'trim',
+        [archTrim.width, Math.min(spring, y1) - y0, archTrim.proud],
+        [-length / 2 + archTrim.width / 2, 0, z],
+      );
+    }
+    if (arched) {
+      const ring = new THREE.Shape();
+      ring.absarc(0, spring - y0, radius + archTrim.width, 0, Math.PI, false);
+      ring.absarc(0, spring - y0, radius, Math.PI, 0, true);
+      shape.push({
+        material: skins.trim.material,
+        geometry: slab(
+          ring,
+          archTrim.proud,
+          new THREE.Matrix4().makeTranslation(0, 0, z - archTrim.proud / 2),
+          skins.trim.skin,
+          14,
+        ),
+      });
+    }
+  }
+  if (!faces.over && y0 === 0) {
+    band('tower', w.plinth.out, 0, Math.min(w.plinth.height, y1));
+    if (w.plinth.height < y1)
+      band('trim', w.plinth.out, w.plinth.height, cap.height * 1.5, cap.out);
+  }
+  const course = w.height - w.course.height;
+  if (course >= y0 && course < y1) band('trim', w.course.out, course - y0, w.course.height);
+  if (top) {
+    // The crown: corbels round the gatehouse's edges carrying the parapet out over them, and the
+    // walk on top.
+    band('trim', corbel.out, height - corbel.height, corbel.height);
+    for (const edge of gatehouseEdges(castle, part)) {
+      put(
+        'tower',
+        edge.alongX
+          ? [edge.length, w.parapet.height, w.parapet.thickness]
+          : [w.parapet.thickness, w.parapet.height, edge.length],
+        [edge.at[0], height, edge.at[1]],
+      );
+    }
+    put('walk', [length, 0.04, depth], [0, height, 0]);
   }
   return shape;
 }
