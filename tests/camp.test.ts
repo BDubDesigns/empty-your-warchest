@@ -14,6 +14,7 @@ describe('camp layout', () => {
       'fire_pit',
       'cauldron',
       'hunting_stand',
+      'fletchers_bench',
       'war_tent',
     ]);
     expect(spots).toContainEqual({ kind: 'chest', ...data.camp.chest });
@@ -80,6 +81,8 @@ describe('warchest view', () => {
       { item: 'feather', name: 'Feather', detail: '0' },
       { item: 'fletched_arrow', name: 'Fletched arrow', detail: '0' },
       { item: 'bare_arrow', name: 'Bare arrow', detail: '0' },
+      { item: 'arrow_shaft', name: 'Arrow shaft', detail: '0' },
+      { item: 'duster_arrow', name: 'Duster arrow', detail: '0' },
     ]);
   });
 });

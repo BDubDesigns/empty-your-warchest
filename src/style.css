@@ -920,6 +920,10 @@ body:not([data-view='camp']) #build-label {
   top: calc(var(--safe-top) + 78px);
   right: calc(var(--safe-right) + 12px);
   width: min(340px, calc(100% - 24px - var(--safe-left) - var(--safe-right)));
+  /* On the screen whatever the item count: the rows scroll, the Close button stays in reach. */
+  max-height: calc(100% - var(--safe-top) - var(--safe-bottom) - 90px);
+  display: flex;
+  flex-direction: column;
   box-sizing: border-box;
   padding: 16px 14px 14px;
   border: 2px solid #7a5a2e;
@@ -955,8 +959,11 @@ body:not([data-view='camp']) #build-label {
 }
 
 .warchest-rows {
+  min-height: 0;
   margin: 0;
   padding: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   list-style: none;
   display: grid;
   gap: 6px;
@@ -3142,4 +3149,127 @@ body:not([data-view='camp']) #build-label {
     600 11px system-ui,
     sans-serif;
   color: var(--muted);
+}
+
+/* The fletcher's bench (src/stations/fletching/three/fletching3dView.ts). The end card shares the
+ * fire pit's (.fm-button, .fm-card). */
+.fl-canvas {
+  display: block;
+  touch-action: none;
+}
+
+.fl-ui {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  font-family: system-ui, sans-serif;
+  color: var(--fg);
+}
+
+.fl-ui button {
+  pointer-events: auto;
+}
+
+.fl-ui [hidden] {
+  display: none !important;
+}
+
+/* Time left and fletched arrows made; under it, the shafts and feathers there are. */
+.fl-status,
+.fl-supplies {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: rgb(30 22 12 / 0.6);
+  white-space: nowrap;
+}
+
+.fl-status {
+  top: calc(var(--safe-top) + 70px);
+  font:
+    700 14px system-ui,
+    sans-serif;
+}
+
+.fl-supplies {
+  top: calc(var(--safe-top) + 100px);
+  font:
+    600 12px system-ui,
+    sans-serif;
+  color: var(--muted);
+}
+
+.fl-flash {
+  position: absolute;
+  top: calc(var(--safe-top) + 134px);
+  left: 0;
+  right: 0;
+  text-align: center;
+  font:
+    800 22px system-ui,
+    sans-serif;
+  text-shadow: 0 1px 4px rgb(0 0 0 / 0.75);
+}
+
+.fl-flash[data-tone='good'] {
+  color: #8ef59a;
+}
+
+.fl-flash[data-tone='bad'] {
+  color: #ffb0a0;
+}
+
+.fl-flash-show {
+  animation: ar-flash 1.1s ease-out forwards;
+}
+
+.fl-hint {
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  bottom: calc(var(--safe-bottom) + 96px);
+  text-align: center;
+  font-size: 16px;
+  font-weight: 600;
+  text-shadow: 0 1px 3px rgb(0 0 0 / 0.85);
+  animation: ar-pulse 1.6s ease-in-out infinite;
+}
+
+/* Bare (no feathers) bottom left; the bucket bottom right, over the bucket. */
+.fl-tools {
+  position: absolute;
+  left: calc(var(--safe-left) + 12px);
+  right: calc(var(--safe-right) + 12px);
+  bottom: calc(var(--safe-bottom) + 16px);
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.fl-tool {
+  min-height: 56px;
+  padding: 0 16px;
+  border: 2px solid var(--accent);
+  border-radius: 12px;
+  background: rgb(30 22 12 / 0.7);
+  color: var(--fg);
+  font:
+    700 17px system-ui,
+    sans-serif;
+  touch-action: manipulation;
+}
+
+.fl-tool:active {
+  transform: scale(0.94);
+}
+
+.fl-tool:disabled {
+  opacity: 0.45;
+}
+
+.fl-bucket {
+  margin-left: auto;
+  background: rgb(90 58 24 / 0.85);
 }

@@ -17,7 +17,8 @@ export const skillSchema = z.object({ id, name });
  * How an item looks as a piece flying into a warchest: a round log, a split stave, a pointed shaft
  * (a spear), a bottle, a green tuft (moss), a mushroom cap, a little grey heap (ash), a blue leaf
  * (woad), a striped sunflower seed, a dark woad seed pod, a puff of mushroom spores, a feather, a
- * fletched arrow and a bare one (a shaft with no feathers).
+ * fletched arrow and a bare one (a shaft with no feathers), a feather duster of an arrow (feathers
+ * stuck on every which way), and a plain round arrow shaft.
  */
 export const itemLooks = [
   'round',
@@ -34,6 +35,8 @@ export const itemLooks = [
   'feather',
   'arrow',
   'shaft',
+  'duster',
+  'dowel',
 ] as const;
 
 /** A colour as '#rrggbb'. */
@@ -1576,6 +1579,104 @@ const archerySchema = z.object({
   feel: archeryFeelSchema,
 });
 
+/** Feel numbers for fletching. The debug menu can override them live. */
+export const fletchingFeelSchema = z.object({
+  /**
+   * The tar dip: while the shaft's held in the pot its tar level rises `tarFill` a second (1 is a
+   * full coat), and lifting it with the level from `tarLow` to `tarHigh` (the green band) is just
+   * right. Under it the feathers slide off; over it the tar globs. Dragging down `dipPx` (CSS px)
+   * puts the shaft in the pot.
+   */
+  tarFill: positive,
+  tarLow: fraction,
+  tarHigh: fraction,
+  dipPx: positive,
+  /**
+   * The feathers: the shaft turns `turnSpeed` degrees a second, its first mark reaching the top
+   * `leadSeconds` after it's in the jig. A tap within `markWindowMs` of a mark's being at the top
+   * slaps the feather on that mark; any later or earlier, it goes on crooked.
+   */
+  turnSpeed: positive,
+  markWindowMs: nonNegative,
+  leadSeconds: nonNegative,
+  /** After an arrow's made, the next shaft is ready this long later (seconds). */
+  finishSeconds: nonNegative,
+  shakeStrength: nonNegative,
+  /** Vibration (ms): the shaft going into the tar, a feather on its mark, one off it, the bucket. */
+  buzzDipMs: nonNegative,
+  buzzSlapMs: nonNegative,
+  buzzMissMs: nonNegative,
+  buzzBucketMs: nonNegative,
+});
+
+/** How the fletcher's bench draws on a graphics tier (only looks: the rules are the same on both). */
+const fletchingTierLookSchema = z.object({
+  /** The most device pixels drawn per CSS pixel, and whether the sun casts shadows. */
+  pixelRatio: positive,
+  shadows: z.boolean(),
+  /** Feathers stuck on a duster, and heaped in the bucket; trees along the forest edge. */
+  dusterFeathers: z.number().int().nonnegative(),
+  bucketFeathers: z.number().int().nonnegative(),
+  trees: z.number().int().nonnegative(),
+  /** The textured grass round the bench (else plain green). */
+  grass: z.boolean(),
+});
+
+/**
+ * Fletching at the fletcher's bench: make arrows from shafts (a `stave` splits into
+ * `shaftsPerStave` of them; a spare `shaft` waits in the warchest) and feathers, one at a time,
+ * for a round of `round.seconds`. Each arrow: dip its back end in the tar, then either fletch it
+ * carefully (`feathers.careful`, one on each of `marks` marks as it turns) or shove it in the
+ * bucket (`feathers.bucket`, always a duster). Or skip the feathers for a bare arrow. Tar is free.
+ */
+const fletchingSchema = z.object({
+  /** The workers' recipe: it must be a stave's worth of careful fletching (checked). */
+  recipe: id,
+  stave: id,
+  shaft: id,
+  shaftsPerStave: positiveInt,
+  feather: id,
+  feathers: z.object({ careful: positiveInt, bucket: positiveInt }),
+  marks: positiveInt,
+  /**
+   * What comes out: a fletched arrow (tar in the band, every feather on its mark), a duster (the
+   * bucket, too much tar, or feathers off their marks) or a bare one (no feathers, or too little
+   * tar: they slide off and are lost). Each is an arrow kind of the bird hunt's, and pays `xp`.
+   */
+  arrows: z.object({
+    fletched: z.object({ item: id, xp: nonNegative }),
+    duster: z.object({ item: id, xp: nonNegative }),
+    bare: z.object({ item: id, xp: nonNegative }),
+  }),
+  round: z.object({ seconds: positive }),
+  /** Stars from fletched arrows made in the round: 1, 2 and 3 from these many. */
+  stars: z.object({ one: positiveInt, two: positiveInt, three: positiveInt }),
+  /** Bonus fletched arrows for 2 and 3 stars, a share of the fletched arrows made. */
+  starBonus: z.object({ two: nonNegative, three: nonNegative }),
+  /**
+   * Looks. The camera fits `frameWidth` (metres) across the screen, looking down `pitch` degrees
+   * from `distance` away, and moves in to `closeDistance` from the shaft's back end while the
+   * feathers go on. The shaft is `shaftLength` long and `shaftRadius` round, and a full tar level
+   * coats `tarLength` of it from the back end. Feathers are `featherLength` long. Trees stand
+   * `treeDistance` away, `treeHeight` tall, placed from `seed`.
+   */
+  looks: z.object({
+    frameWidth: positive,
+    pitch: z.number().min(0).max(80),
+    distance: positive,
+    closeDistance: positive,
+    shaftLength: positive,
+    shaftRadius: positive,
+    tarLength: positive,
+    featherLength: positive,
+    treeDistance: rangeSchema,
+    treeHeight: rangeSchema,
+    seed: z.number().int(),
+    tiers: z.object({ high: fletchingTierLookSchema, low: fletchingTierLookSchema }),
+  }),
+  feel: fletchingFeelSchema,
+});
+
 /**
  * Workers: how many you have (`start` at level 1 of `skill`, one more every `everyLevels`), and
  * the job each does at a station: its recipe run `perMinute` times a minute (with `batches` and
@@ -1974,6 +2075,7 @@ export const gameDataShape = z.object({
   firemaking: firemakingSchema,
   brewing: brewingSchema,
   archery: archerySchema,
+  fletching: fletchingSchema,
   siege: siegeSchema,
   runner: runnerSchema,
   warchest: warchestSchema,
@@ -2026,6 +2128,8 @@ export type ArcheryFeel = Archery['feel'];
 export type ArcheryBird = Archery['birds'][number];
 export type ArrowKind = Archery['arrows'][number];
 export type BirdShape = (typeof birdShapes)[number];
+export type Fletching = GameData['fletching'];
+export type FletchingFeel = Fletching['feel'];
 export type WoodcuttingForage = GameData['woodcutting']['forage'];
 export type WoodcuttingFellRest = GameData['woodcutting']['fellRest'];
 export type Gate = z.output<typeof gateSchema>;

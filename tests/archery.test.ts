@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { Game, Rng, newGameState, type GameState, type Stack } from '../src/core';
-import { GameDataError, parseGameData, type Archery, type GameData } from '../src/data';
+import { GameDataError, parseGameData, type GameData } from '../src/data';
 import {
   ArcheryRound,
   apex,
@@ -570,23 +570,25 @@ describe('archery data', () => {
     }, 'Above the field');
   });
 
-  it('takes a new arrow kind by data alone (the duster, next slice)', () => {
-    const withDuster = dataWith((raw) => {
-      raw.items.push({ id: 'duster_arrow', name: 'Duster', look: 'arrow' });
-      raw.archery.arrows.push({
-        item: 'duster_arrow',
-        speed: 26,
-        drag: 0.9,
-        drift: 0,
-        wobble: 0,
-        wobbleHz: 0,
-        fishtail: 0,
-        breakChance: 0.1,
-      });
-    });
-    const duster = withDuster.archery.arrows[2] as Archery['arrows'][number];
-    expect(apex(duster, feel, rules.step)).toBeLessThan(apex(bare, feel, rules.step));
-    const played = play(withDuster, { arrows: { duster_arrow: 1 } });
+  it('flies the duster straight but short, like a shuttlecock, and shoots it from the quiver', () => {
+    const duster = must(rules.arrows.find((arrow) => arrow.item === 'duster_arrow'));
+    // Shorter than even a bare arrow, but it still reaches the lower finches.
+    const top = apex(duster, feel, rules.step);
+    expect(top).toBeLessThan(apex(bare, feel, rules.step));
+    const finch = must(rules.birds.find((bird) => bird.id === 'finch'));
+    expect(top).toBeGreaterThan(finch.altitude.min);
+    // Straight: every shot flies its preview exactly (no drift, no wobble).
+    const shot = launch(duster, feel, 70, 1, new Rng(3));
+    for (let step = 0; step < 60; step++) stepArrow(shot, feel.gravity, rules.step);
+    const plain = previewPath(duster, feel, 70, 1, 60 * rules.step, rules.step).at(-1);
+    expect(shot.x).toBeCloseTo(plain?.x ?? NaN, 6);
+    expect(shot.y).toBeCloseTo(plain?.y ?? NaN, 6);
+    // Slow: high drag sheds its speed, so it's soon falling nearly straight down.
+    expect(Math.hypot(shot.vx, shot.vy)).toBeLessThan(duster.speed * 0.6);
+    // The quiver only starts on it when there's nothing better.
+    expect(bestArrow(rules, (item) => (item === 'duster_arrow' ? 4 : 0))).toBe('duster_arrow');
+    expect(bestArrow(rules, (item) => (item === 'duster_arrow' ? 4 : 1))).toBe('fletched_arrow');
+    const played = play(data, { arrows: { duster_arrow: 1 } });
     expect(played.round.shoot('duster_arrow', 90, 1)).toBe(true);
   });
 });

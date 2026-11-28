@@ -133,6 +133,20 @@ export const archery = {
       fishtail: 10,
       breakChance: 0.2,
     },
+    {
+      // The feather duster (Fletching's bucket): straight but slow and short, like a shuttlecock.
+      // All that drag and no wobble: at a full draw straight up it tops out about 22, finch height,
+      // and it's soon falling almost straight down. Listed last, so the quiver only starts on it
+      // when there's nothing else.
+      item: 'duster_arrow',
+      speed: 48,
+      drag: 0.6,
+      drift: 0,
+      wobble: 0,
+      wobbleHz: 0,
+      fishtail: 0,
+      breakChance: 0.15,
+    },
   ],
   aim: { min: 8, max: 172 },
   arrowSeconds: 6,

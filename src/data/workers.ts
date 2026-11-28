@@ -34,5 +34,9 @@ export const workers = {
     // minute of playing (Brandon, Nov 27: playing must stay the main way to get seeds). It spends
     // fletched arrows; none start here.
     { recipe: 'hunt_flock', perMinute: 1 / 3, start: 0 },
+    // A stave's 2 fletched arrows every 2 minutes: an arrow a minute, about a tenth of the 10 or
+    // so a minute of careful playing. That's what the hunt's worker shoots, and its 3 feathers a
+    // minute, so a worker at each keeps the other going.
+    { recipe: 'fletch_arrows', perMinute: 0.5, start: 0 },
   ],
 } satisfies GameDataInput['workers'];
