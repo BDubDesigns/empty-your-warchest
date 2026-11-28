@@ -51,6 +51,9 @@ export const firemaking = {
     smokeWisps: 0.75,
     smokeThick: 0.9,
     streakCap: 3,
+    // A rack under 3 stars drops the streak this many layers (never below 1). Nov 28: it used to
+    // start again from 1.
+    streakDrop: 1,
     grabPx: 70,
     dragPx: 40,
     pullSeconds: 0.45,
