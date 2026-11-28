@@ -1,5 +1,10 @@
 import { Rng, type EventLogger, type Stack } from '../../../core';
-import type { Clearing, WoodcuttingFeel, WoodcuttingForage } from '../../../data';
+import type {
+  Clearing,
+  WoodcuttingFeel,
+  WoodcuttingFellRest,
+  WoodcuttingForage,
+} from '../../../data';
 import { angleBeforeLift, nudgeAim, type AimSample } from './aim';
 import {
   afterChain,
@@ -12,7 +17,15 @@ import {
   type Point,
 } from './chain';
 import { fallTimeToReach, fallTimeToTilt, rollTime } from './fall';
-import { addDrops, forageChain, seedForage, type ChainForage, type Forage } from './forage';
+import { fellRestSteps } from './fellRest';
+import {
+  addDrops,
+  forageChain,
+  forageTrees,
+  seedForage,
+  type ChainForage,
+  type Forage,
+} from './forage';
 import { chainLogs, starBonusLogs, starsFor, type StarBonus, type StarThresholds } from './score';
 import {
   chopDamage,
@@ -107,6 +120,11 @@ export type RoundEvent =
   | { type: 'banked'; trees: number; logs: number; forage: ChainForage }
   /** A chain that crashed into the cabin: its logs never reach the warchest. */
   | { type: 'lost'; trees: number; logs: number }
+  /**
+   * Fell the rest: the trees still standing went down as singles (`steps`, in ripple order) and
+   * banked `logs`, with what they foraged. The round is over.
+   */
+  | { type: 'felledRest'; steps: FallStep[]; logs: number; forage: ChainForage }
   | { type: 'cleared' };
 
 export interface RoundHooks {
@@ -137,7 +155,12 @@ export interface RoundHooks {
   /** The clearing's par, the star thresholds and the star bonus, for the round's stars. */
   /** `cabinCap`: the most stars a round that hit the cabin can have. */
   stars?: StarThresholds & { par: number; bonus: StarBonus; cabinCap: number };
+  /** Fell the rest, once the round has enough stars. Without it, it's never offered. */
+  fellRest?: WoodcuttingFellRest;
 }
+
+/** Why a round ended. */
+export type RoundEndReason = 'cleared' | 'exit' | 'cabin' | 'felledRest';
 
 /**
  * One round of domino felling, without any rendering: aim, chop, the chain, banking and
@@ -248,6 +271,68 @@ export class WoodcuttingRound {
       bonus: this.#bonusLogs,
     });
     return this.#bonusLogs;
+  }
+
+  /**
+   * Fell the rest is offered: the round has enough stars, trees still stand, and nothing is
+   * being chopped, falling or rolling (a tree picked to aim at but not yet chopped is fine).
+   */
+  get canFellRest(): boolean {
+    const rules = this.#hooks.fellRest;
+    const kind = this.phase.kind;
+    return (
+      rules !== undefined &&
+      !this.#ended &&
+      this.standing.size > 0 &&
+      (kind === 'pick' || kind === 'aim') &&
+      this.stars >= rules.minStars
+    );
+  }
+
+  /** Logs Fell the rest banks now: `logsPerTree` for each tree still standing. */
+  get fellRestLogs(): number {
+    return this.standing.size * (this.#hooks.fellRest?.logsPerTree ?? 0);
+  }
+
+  /**
+   * Fell the rest: every standing tree goes down as a single (no chain, no boulders, no cabin),
+   * banking `logsPerTree` logs each and what's on those trees (moss, mushrooms), and the round
+   * ends. The star bonus is then on the round's logs, these included.
+   */
+  fellRest(): void {
+    const rules = this.#hooks.fellRest;
+    if (!rules || !this.canFellRest) return;
+    const starsBefore = this.stars;
+    const patches = this.forage.patches.filter((patch) => !this.#paid.has(`patch:${patch.id}`));
+    const steps = fellRestSteps(this.clearing, this.standing, patches, rules.angleTries, this.#rng);
+    const trees = steps.length;
+    const logs = this.#hooks.bank(trees * rules.logsPerTree, trees);
+    this.felled += trees;
+    this.logs += logs;
+    this.standing.clear();
+    const forage = this.#hooks.forage
+      ? forageTrees(
+          steps.map((step) => step.tree),
+          this.forage,
+          this.#hooks.forage,
+          this.#paid,
+        )
+      : { trees: [], boulders: [], patches: [], drops: [] };
+    if (forage.drops.length > 0) {
+      this.#hooks.bankDrops?.(forage.drops);
+      addDrops(this.drops, forage.drops);
+    }
+    this.#log('woodcutting.fellRest', {
+      trees,
+      logs,
+      roundLogs: this.logs,
+      starsBefore,
+      stars: this.stars,
+      ...(forage.drops.length > 0 && { forage: forage.trees, drops: forage.drops }),
+    });
+    this.phase = { kind: 'cleared' };
+    this.#end('felledRest');
+    this.#hooks.onEvent?.({ type: 'felledRest', steps, logs, forage });
   }
 
   start(seed: number): void {
@@ -687,7 +772,7 @@ export class WoodcuttingRound {
     }
   }
 
-  #end(reason: 'cleared' | 'exit' | 'cabin'): void {
+  #end(reason: RoundEndReason): void {
     if (this.#ended) return;
     this.#ended = true;
     this.#log('woodcutting.roundEnd', {
