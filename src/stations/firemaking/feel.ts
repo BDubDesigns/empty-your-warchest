@@ -16,6 +16,7 @@ export const firemakingTunables: readonly Tunable[] = [
     step: 0.01,
   },
   { key: 'streakCap', label: 'Hot streak: most layers', min: 1, max: 5, step: 1 },
+  { key: 'streakDrop', label: 'Hot streak: layers lost on a miss', min: 1, max: 5, step: 1 },
   { key: 'grabPx', label: 'Handle grab reach (px)', min: 20, max: 160, step: 5 },
   { key: 'dragPx', label: 'Drag to pull (px)', min: 5, max: 150, step: 5, more: true },
   { key: 'pullSeconds', label: 'Rack slides out (s)', min: 0.1, max: 1.5, step: 0.05, more: true },
