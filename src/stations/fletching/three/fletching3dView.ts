@@ -243,11 +243,17 @@ export class Fletching3DView implements ScreenView {
     });
   }
 
-  /** Back to camp with an arrow half made puts it back as a plain shaft: the tar or feathers are lost. */
+  /**
+   * Back to camp with a batch half made: nothing's used until it's made, so only its beats are
+   * lost, and the hot streak ends (as it does on leaving at any time).
+   */
   leaveCost(): string | undefined {
-    const step = this.#round?.phase === 'make' ? this.#round.arrow?.step : undefined;
-    if (step !== 'dip' && step !== 'feathers') return undefined;
-    return 'The arrow in your hand goes back as a plain shaft.';
+    const round = this.#round;
+    const step = round?.phase === 'make' ? round.arrow.step : undefined;
+    if (!round || (step !== 'dip' && step !== 'feathers')) return undefined;
+    const streak =
+      round.batch.streak > 1 ? `, and your ×${String(round.batch.streak)} streak ends` : '';
+    return `This batch of ${String(round.batch.arrows)} isn't made yet: nothing is used${streak}.`;
   }
 
   stop(): void {
