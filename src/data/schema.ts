@@ -1643,10 +1643,11 @@ export const fletchingFeelSchema = z.object({
   /** After the batch is made, it goes off to the chest this long later (seconds). */
   finishSeconds: nonNegative,
   /**
-   * The hot streak's multiplier on the batch: a 3-star round raises it a step, up to this; any
-   * round under 3 stars drops it a step, never below 1.
+   * The hot streak's multiplier on the batch: a 3-star round raises it a step, up to `streakCap`;
+   * any round under 3 stars drops it `streakDrop` steps, never below 1.
    */
   streakCap: positiveInt,
+  streakDrop: positiveInt,
   shakeStrength: nonNegative,
   /** Vibration (ms): the shaft going into the tar, a feather on its mark, one off it, the bucket. */
   buzzDipMs: nonNegative,

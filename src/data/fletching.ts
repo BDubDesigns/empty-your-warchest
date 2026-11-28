@@ -100,8 +100,9 @@ export const fletching = {
     // The made batch goes off to the chest this long after it's finished, then the card shows.
     finishSeconds: 0.45,
     // The hot streak: a 3-star round raises the batch's multiplier a step (×1, ×2, ×3) up to
-    // this; any round under 3 stars drops it one step, never below ×1 (Brandon, Nov 28).
+    // this; any round under 3 stars drops it `streakDrop` steps, never below ×1 (Brandon, Nov 28).
     streakCap: 3,
+    streakDrop: 1,
     shakeStrength: 1,
     buzzDipMs: 12,
     buzzSlapMs: 22,

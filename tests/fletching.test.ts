@@ -8,7 +8,7 @@ import {
   carefulResult,
   markAngle,
   nextBenchSize,
-  nextStreak,
+  streakAfter,
   pickerSizes,
   starsFor,
   stavesFor,
@@ -173,15 +173,15 @@ describe('fletching rules', () => {
   });
 
   it('raises the streak on 3 stars up to its cap, and drops it one step otherwise, never below 1', () => {
-    const cap = feel.streakCap;
-    expect(cap).toBe(3);
-    expect(nextStreak(1, 3, cap)).toBe(2);
-    expect(nextStreak(2, 3, cap)).toBe(3);
-    expect(nextStreak(3, 3, cap)).toBe(3);
-    expect(nextStreak(3, 2, cap)).toBe(2);
-    expect(nextStreak(2, 1, cap)).toBe(1);
-    expect(nextStreak(1, 1, cap)).toBe(1);
-    expect(nextStreak(1, 0, cap)).toBe(1);
+    expect(feel.streakDrop).toBe(1);
+    expect(feel.streakCap).toBe(3);
+    expect(streakAfter(1, 3, feel)).toBe(2);
+    expect(streakAfter(2, 3, feel)).toBe(3);
+    expect(streakAfter(3, 3, feel)).toBe(3);
+    expect(streakAfter(3, 2, feel)).toBe(2);
+    expect(streakAfter(2, 1, feel)).toBe(1);
+    expect(streakAfter(1, 1, feel)).toBe(1);
+    expect(streakAfter(1, 0, feel)).toBe(1);
   });
 
   it('opens bigger batches with the level, by the data', () => {

@@ -1,4 +1,4 @@
-import { starBonus, type EventLogger, type Stack } from '../../../core';
+import { nextStreak, starBonus, type EventLogger, type Stack } from '../../../core';
 import type { Fletching, FletchingFeel } from '../../../data';
 
 /** The three kinds of arrow the bench makes. */
@@ -163,13 +163,16 @@ export function starsFor(
 }
 
 /**
- * The hot streak after a round: 3 stars raises the multiplier a step (up to `cap`); anything less
- * drops it a step, never below 1 (Brandon, Nov 28: a miss no longer starts again from 1).
+ * The hot streak after a round: 3 stars raises the multiplier a step (up to `streakCap`);
+ * anything less drops it `streakDrop` steps, never below 1 (Brandon, Nov 28: a miss no longer
+ * starts again from 1). The shared rule, as at the fire pit.
  */
-export function nextStreak(streak: number, stars: number, cap: number): number {
-  const top = Math.max(Math.floor(cap), 1);
-  const now = Math.min(Math.max(Math.floor(streak), 1), top);
-  return stars >= 3 ? Math.min(now + 1, top) : Math.max(now - 1, 1);
+export function streakAfter(
+  streak: number,
+  stars: number,
+  feel: Pick<FletchingFeel, 'streakCap' | 'streakDrop'>,
+): number {
+  return nextStreak(streak, stars >= 3, feel.streakCap, feel.streakDrop);
 }
 
 /** The biggest batch the bench takes at `level` (before the streak), from the data's sizes. */
@@ -476,7 +479,7 @@ export class FletchingRound {
       feathers,
       lost,
       batch: { ...batch },
-      streakAfter: nextStreak(batch.streak, stars, this.feel.streakCap),
+      streakAfter: streakAfter(batch.streak, stars, this.feel),
       seconds: this.now,
     };
     this.result = result;
