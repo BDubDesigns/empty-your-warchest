@@ -31,12 +31,14 @@ export const siege = {
   // Just under the camera, out of its view: its spears come up from the bottom of the screen. At
   // the low ground (the camera 1.7 m up) it stands on the field.
   mount: { ahead: 0, below: 0.5 },
-  // Kenney's chibi soldier, 1.5 m tall and nearly as wide: a big target, seen at range. A direct
-  // hit brings him down.
-  guard: { size: [1.1, 1.5, 0.8], density: 400, friction: 0.8, hp: 20, downTilt: 50, topple: 2 },
-  // A size bigger, in gold. He stands just inside his window, and shows from its sill up (the
-  // kit's wide window opens about 1 m over its floor).
-  captain: { scale: 1.2, tint: '#ffc64a', hp: 20, sill: 1, inset: 0.15 },
+  // The knight's body (characters.body: 0.73 across, 1.81 up, 0.56 deep in his idle clip, without
+  // his horns, pauldrons and scarf) and about 10% round it, as games make hit boxes a touch bigger
+  // than what's drawn so a near miss feels fair. Every look of guard shares it, so none is harder
+  // to hit. A direct hit brings him down.
+  guard: { size: [0.8, 2, 0.62], density: 400, friction: 0.8, hp: 20, downTilt: 50, topple: 2 },
+  // The same body as a guard's (his gold plate is what marks him out). He stands just inside his
+  // window, and shows from its sill up (the kit's wide window opens about 1 m over its floor).
+  captain: { scale: 1, hp: 20, sill: 1, inset: 0.15 },
   materials: [
     { id: 'stone', kind: 'stone', density: 1800, friction: 0.8, restitution: 0.05 },
     { id: 'timber', kind: 'wood', density: 600, friction: 0.7, restitution: 0.1 },
@@ -84,7 +86,7 @@ export const siege = {
   },
   // A guard walks his stretch of the walk (2.4 m) in about 3 s.
   guardMoves: { patrolSpeed: 0.8, patrolPause: 1.2 },
-  // Kenney's Castle Kit and Mini Characters (CC0): skins over the rules' boxes.
+  // Kenney's Castle Kit and the Quaternius characters (CC0): skins over the rules' boxes.
   skins: {
     // The spear is the ballista's bolt.
     bolt: {
@@ -93,19 +95,25 @@ export const siege = {
       turn: 0,
       node: 'arrow',
     },
+    // The guards wear the characters' guard looks (one each, from the round's seed), drawn so
+    // their body fills the box less its margin. He staggers at a hit that leaves him standing.
     guard: {
-      model: 'models/kenney/mini/character-soldier.glb',
-      fit: 'height',
-      turn: 0,
-      clips: { stand: 'idle', patrol: 'walk', down: 'die' },
+      fill: 0.91,
+      clips: { stand: 'idle', patrol: 'walk', hit: 'hit', down: 'die' },
+    },
+    // At his window he leans on its sill.
+    captain: {
+      character: 'captain',
+      clips: { stand: 'lean', patrol: 'walk', hit: 'hit', down: 'die' },
     },
   },
   looks: {
     // As the stress test's blobs (opacity 0.45), stretched to each thing's footprint and a little
     // past it.
     blobShadows: { opacity: 0.45, spread: 1.3, lift: 0.04, fadeHeight: 1.5 },
-    // The captain's gold, on every live objective's targets.
-    objective: { color: '#ffc64a', glow: 0.7, pulse: 0.5, pulseSeconds: 1.4 },
+    // The captain's gold, on every live objective's targets. The guards and captain glow less than
+    // the rack: at the full glow every look turned the same gold from range.
+    objective: { color: '#ffc64a', glow: 0.7, pulse: 0.5, pulseSeconds: 1.4, figureGlow: 0.4 },
     tiers: {
       high: {
         shadows: 'map',

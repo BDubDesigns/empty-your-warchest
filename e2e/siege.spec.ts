@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { expect, test, type Page } from '@playwright/test';
 import { castle } from '../src/data/castle';
+import { characters } from '../src/data/characters';
 import { siege } from '../src/data/siege';
 import { skills } from '../src/data/skills';
 import { stations } from '../src/data/stations';
@@ -156,9 +157,22 @@ test('Siege: the castle from its vantage points, drag to look, Fire and follow, 
   await expect(ghost).toHaveAttribute('aria-pressed', 'false');
   expect(await page.evaluate(() => localStorage.getItem('warchest.siege.ghost'))).toContain('off');
 
-  // Withdraw ends it with what's done, on a card.
+  // Withdraw asks first, and Keep fighting (the safe answer) goes back to the round.
   await page.getByRole('button', { name: 'Withdraw' }).tap();
-  const card = page.locator('#screen-siege3d .sg-card');
+  const confirm = page.getByRole('alertdialog', { name: 'Withdraw from the siege?' });
+  await expect(confirm).toBeVisible();
+  await expect(confirm).toContainText('Objectives done:');
+  await expect(confirm).toContainText('stay in the warchest');
+  await expect(confirm.getByRole('button', { name: 'Keep fighting' })).toBeFocused();
+  await confirm.getByRole('button', { name: 'Keep fighting' }).tap();
+  await expect(confirm).toBeHidden();
+  await expect(page.locator('body')).toHaveAttribute('data-siege', 'aim');
+  await expect(page.getByRole('button', { name: 'Fire' })).toBeVisible();
+
+  // Confirmed, it ends the round with what's done, on a card.
+  await page.getByRole('button', { name: 'Withdraw' }).tap();
+  await confirm.getByRole('button', { name: 'Withdraw' }).tap();
+  const card = page.locator('#screen-siege3d .sg-card:not(.sg-confirm)');
   await expect(card).toBeVisible({ timeout: 10_000 });
   await expect(card).toContainText('Objectives:');
   await expect(page.locator('body')).toHaveAttribute('data-siege', 'done');
@@ -182,6 +196,7 @@ test('Siege: the castle from its vantage points, drag to look, Fire and follow, 
     'siege.throwDone',
     'siege.potion',
     'siege.ghost',
+    'siege.withdrawAsk',
     'siege.end',
     'siege.cost',
     'graphics.tier',
@@ -190,6 +205,16 @@ test('Siege: the castle from its vantage points, drag to look, Fire and follow, 
   }
   const started = exported.events.find((event) => event.type === 'siege.roundStart');
   expect(started?.data?.feel).toMatchObject({ aimPerPx: feel.aimPerPx });
+  // Each guard's look (the new characters, picked from the round's seed).
+  const looks = (started?.data?.guards as { look?: string }[]).map((guard) => guard.look);
+  expect(looks.length).toBeGreaterThan(0);
+  for (const look of looks) expect(characters.guards).toContain(look);
+  // Withdraw asked twice: kept fighting, then confirmed.
+  expect(
+    exported.events
+      .filter((event) => event.type === 'siege.withdrawAsk')
+      .map((event) => event.data?.confirmed),
+  ).toEqual([false, true]);
   const thrown = exported.events.find((event) => event.type === 'siege.throw');
   expect(thrown?.data).toMatchObject({
     mode: 'aimed',
@@ -219,7 +244,7 @@ test('Siege: the castle from its vantage points, drag to look, Fire and follow, 
 test('Siege: with no spears in the warchest, it says so', async ({ page }) => {
   test.setTimeout(120_000);
   await openTent(page, 0);
-  const card = page.locator('#screen-siege3d .sg-card');
+  const card = page.locator('#screen-siege3d .sg-card:not(.sg-confirm)');
   await expect(card).toBeVisible({ timeout: 90_000 });
   await expect(card).toContainText('No spears');
   await card.getByRole('button', { name: 'Back to camp' }).tap();

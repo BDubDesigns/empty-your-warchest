@@ -106,6 +106,7 @@ export async function startApp(): Promise<void> {
         booted.choices.vibration,
         booted.choices.warTent,
         booted.choices.siegeGhost,
+        booted.choices.siegeHitBoxes,
         booted.choices.runnerSpears,
         booted.choices.runnerLift,
       ],
@@ -304,6 +305,7 @@ export async function startApp(): Promise<void> {
           logger,
           feel: feel.siege,
           ghost: choices.siegeGhost,
+          hitBoxes: choices.siegeHitBoxes,
           graphics,
           haptics,
           onLeave: run((): Promise<void> => navigation.back()),
@@ -311,8 +313,15 @@ export async function startApp(): Promise<void> {
       },
       async () => {
         // The physics engine's wasm starts here too, so the first throw never waits for it, and
-        // the castle's kit is fetched.
-        await (await siegeView()).Siege3DView.preload(game.data.siege.skins, game.data.castle.kit);
+        // the castle's kit and the characters' files are fetched.
+        await (
+          await siegeView()
+        ).Siege3DView.preload(
+          game.data.siege.skins,
+          game.data.castle.kit,
+          game.data.characters,
+          graphics.tier,
+        );
       },
     ),
     three: lazyScreen(

@@ -221,6 +221,22 @@ export function ghostChoice(store: KeyValueStore): LiveChoice<GhostLine> {
   );
 }
 
+export type HitBoxes = 'on' | 'off';
+
+/** Debug: whether the siege draws its guards' hit boxes (the rules' boxes) over them. */
+export function hitBoxChoice(store: KeyValueStore): LiveChoice<HitBoxes> {
+  return new LiveChoice<HitBoxes>(
+    'warchest.siege.hitBoxes',
+    'Siege: guards’ hit boxes',
+    [
+      { value: 'off', label: 'Off' },
+      { value: 'on', label: 'On' },
+    ],
+    'off',
+    store,
+  );
+}
+
 export type WarTent = 'siege' | 'runner';
 
 /**

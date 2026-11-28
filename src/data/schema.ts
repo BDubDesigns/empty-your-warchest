@@ -1177,6 +1177,9 @@ const skinSchema = z.object({
   node: z.string().optional(),
 });
 
+/** The characters' clips a guard (or the captain) plays (see `skins`). */
+const guardClipsSchema = z.object({ stand: id, patrol: id, hit: id, down: id });
+
 /**
  * The siege's looks on one graphics tier. `shadows`: the sun's real-time shadow map, or a blob
  * under each guard and loose part (it must match the castle's tier). A broken part bursts into
@@ -1226,14 +1229,13 @@ const siegeSchema = z.object({
     topple: nonNegative,
   }),
   /**
-   * The captain: a guard `scale` times as big, tinted `tint`, with `hp` hit points, standing in
-   * one of the keep's captain windows with his middle `inset` m inside its face. Only what shows
-   * of him is hit: his box starts `sill` m above his floor (the window's sill). If his window is
-   * in a storey that comes apart, he goes down with the chunk he stands in.
+   * The captain: a guard `scale` times as big, with `hp` hit points, standing in one of the keep's
+   * captain windows with his middle `inset` m inside its face. Only what shows of him is hit: his
+   * box starts `sill` m above his floor (the window's sill). If his window is in a storey that
+   * comes apart, he goes down with the chunk he stands in.
    */
   captain: z.object({
     scale: positive,
-    tint: hexColor,
     hp: positive,
     sill: nonNegative,
     inset: z.number(),
@@ -1278,13 +1280,15 @@ const siegeSchema = z.object({
    * How the siege's things look: a model over a rules' box, only a skin (the physics stays the
    * box). `fit: box` stretches it to the box on every axis; `height` scales it evenly to the box's
    * height. `turn` turns it about the up axis first (degrees). `node` picks one part of the model by
-   * name (the ballista's bolt, for the spear). Guards play the named `clips` of their model.
+   * name (the ballista's bolt, for the spear). The guards wear the characters' guard looks (one
+   * each, picked from the round's seed: only a look), the captain his `character`; each is drawn
+   * so the characters' body is `fill` of its box's height, and plays the characters' `clips`:
+   * standing, patrolling, hit and still standing, and down.
    */
   skins: z.object({
     bolt: skinSchema,
-    guard: skinSchema.extend({
-      clips: z.object({ stand: name, patrol: name, down: name }),
-    }),
+    guard: z.object({ fill: z.number().positive().max(1), clips: guardClipsSchema }),
+    captain: z.object({ character: id, clips: guardClipsSchema }),
   }),
   /**
    * How the siege draws on each graphics tier (see `graphics`). Only looks: the rules (parts,
@@ -1305,13 +1309,15 @@ const siegeSchema = z.object({
     /**
      * A live objective's targets (the captain, the spear rack, the battlement's guards): each
      * glows `color` (`glow` of it, swelling and fading by `pulse` of that every `pulseSeconds`)
-     * and has a mark in that colour over it. Done, they lose both.
+     * and has a mark in that colour over it; the guards and the captain glow only `figureGlow` of
+     * that, so their outfits still show under it. Done, they lose both.
      */
     objective: z.object({
       color: hexColor,
       glow: fraction,
       pulse: fraction,
       pulseSeconds: positive,
+      figureGlow: fraction,
     }),
     tiers: z.object({ high: siegeTierLookSchema, low: siegeTierLookSchema }),
   }),

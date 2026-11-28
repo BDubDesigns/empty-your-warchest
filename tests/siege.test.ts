@@ -305,7 +305,33 @@ describe('the siege round', () => {
       feel: data.siege.feel,
     });
     expect((start?.data?.objectives as unknown[]).length).toBe(data.siege.objectives.count);
+    // Each guard's look, from the seed.
+    const looks = (start?.data?.guards as { look: string }[]).map((guard) => guard.look);
+    expect(looks).toEqual(
+      round.guards.filter((guard) => guard.role === 'guard').map((guard) => guard.look),
+    );
     round.dispose();
+  });
+
+  it('dresses each guard in a look from the seed, apart from the rules: the same seed, the same looks', () => {
+    const looksOf = (seed: number) => {
+      const { round } = siege({ seed });
+      const looks = round.guards.map((guard) => guard.look);
+      const plan = round.plan;
+      round.dispose();
+      return { looks, plan };
+    };
+    const first = looksOf(7);
+    expect(looksOf(7).looks).toEqual(first.looks);
+    const guards = first.looks.slice(0, -1);
+    // Five guards, five looks: each a different one; the captain his own.
+    expect(new Set(guards).size).toBe(Math.min(guards.length, data.characters.guards.length));
+    for (const look of guards) expect(data.characters.guards).toContain(look);
+    expect(first.looks.at(-1)).toBe(data.siege.skins.captain.character);
+    // Other seeds dress them otherwise, but the looks never move what the rules place.
+    const seeds = [1, 2, 3, 4, 5, 6, 8, 9];
+    expect(seeds.some((seed) => looksOf(seed).looks.join() !== first.looks.join())).toBe(true);
+    expect(looksOf(7).plan).toEqual(first.plan);
   });
 
   it('a volley through his window brings the captain down: an objective done, and logged', () => {
@@ -331,6 +357,19 @@ describe('the siege round', () => {
       vantage: 'hill',
     });
     round.dispose();
+  });
+
+  it('an aimed volley at a guard’s chest over the parapet brings him down, from each vantage', () => {
+    for (const vantage of [HILL, TOWER]) {
+      const { round } = siege({ vantage });
+      const guard = round.guards.findIndex((entry) => entry.slot?.kind === 'lookout');
+      expect(guard).toBeGreaterThanOrEqual(0);
+      const at = guardAt(round, guard);
+      // His chest: a little over his box's middle, over the parapet.
+      shoot(round, { x: at.x, y: at.y + 0.3, z: at.z });
+      expect(round.guards[guard]).toMatchObject({ down: true, by: 'spear' });
+      round.dispose();
+    }
   });
 
   it('knocking the wall out from under the battlement brings its guards down with it', () => {
@@ -779,5 +818,31 @@ describe('siege data', () => {
     fails((raw) => {
       raw.siege.looks.tiers.low.shadows = 'map';
     }, 'Shadows as the castle draws them');
+  });
+
+  it('fails on a captain or clip the characters haven’t got, or a box too small for the body', () => {
+    fails((raw) => {
+      raw.siege.skins.captain.character = 'king';
+    }, 'Unknown character "king"');
+    fails((raw) => {
+      raw.siege.skins.guard.clips.hit = 'flinch';
+    }, 'Unknown clip "flinch"');
+    fails((raw) => {
+      raw.siege.guard.size = [0.5, 2, 0.62];
+    }, 'Too small for the body');
+  });
+
+  it('boxes a guard round the knight’s body, a little more than it, every look the same', () => {
+    const [width, height, depth] = data.siege.guard.size;
+    const [bodyWidth, bodyHeight, bodyDepth] = data.characters.body;
+    // About 10% round the body: near misses count, but not empty air.
+    for (const [box, body] of [
+      [width, bodyWidth],
+      [height, bodyHeight],
+      [depth, bodyDepth],
+    ] as const) {
+      expect(box / body).toBeGreaterThan(1.05);
+      expect(box / body).toBeLessThan(1.2);
+    }
   });
 });

@@ -41,9 +41,11 @@ import { firemakingFeel } from '../stations/firemaking/feel';
 import { fletchingFeel } from '../stations/fletching/feel';
 import {
   ghostChoice,
+  hitBoxChoice,
   siegeFeel,
   warTentChoice,
   type GhostLine,
+  type HitBoxes,
   type WarTent,
 } from '../stations/siege/feel';
 import { splittingFeel } from '../stations/splitting/feel';
@@ -83,6 +85,7 @@ export interface Booted {
     runnerLift: LiveChoice<LiftMode>;
     warTent: LiveChoice<WarTent>;
     siegeGhost: LiveChoice<GhostLine>;
+    siegeHitBoxes: LiveChoice<HitBoxes>;
   };
   haptics: Haptics;
   /** The graphics tier (high or low) every 3D screen draws at; Debug → Graphics. */
@@ -172,6 +175,7 @@ export async function bootGame(buildLabel: string): Promise<Booted> {
     runnerLift: liftModeChoice(localStorageStore()),
     warTent: warTentChoice(localStorageStore()),
     siegeGhost: ghostChoice(localStorageStore()),
+    siegeHitBoxes: hitBoxChoice(localStorageStore()),
   };
   const haptics = new Haptics(choices.vibration);
   const graphics = new GraphicsSettings(data.graphics, localStorageStore(), logger, deviceHints());

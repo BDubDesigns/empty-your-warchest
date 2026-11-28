@@ -1,9 +1,8 @@
 import * as THREE from 'three';
-import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';
 import { BlobShadows, blobTexture } from '../../../app/blobShadows';
 import { gpuOf } from '../../../app/deviceHints';
 import type { Haptics } from '../../../app/haptics';
-import { loadAnimatedModel, loadModel, type AnimatedModel } from '../../../app/models';
+import { loadModel } from '../../../app/models';
 import { capturePointer } from '../../../app/pointer';
 import type { ScreenView } from '../../../app/screen';
 import { Sfx } from '../../../app/sfx';
@@ -23,13 +22,20 @@ import type {
   LiveChoice,
   LiveTuning,
 } from '../../../core';
-import type { Siege, SiegeFeel } from '../../../data';
-import type { GhostLine } from '../feel';
+import {
+  characterFiles,
+  loadCharacterKit,
+  type CharacterKit,
+  type PlacedCharacter,
+} from '../../../characters/view/characterKit';
+import type { Characters, Siege, SiegeFeel } from '../../../data';
+import type { GhostLine, HitBoxes } from '../feel';
 import type { BodyShape } from '../logic/castleBodies';
 import { objectiveText } from '../logic/objectives';
 import { loadPhysics, type Physics } from '../logic/physics';
 import {
   SiegeRound,
+  type GuardState,
   type MaterialKind,
   type PartMode,
   type Pose,
@@ -53,6 +59,8 @@ export interface Siege3DDeps {
   feel: LiveTuning<SiegeFeel>;
   /** Whether the last shot's path stays drawn, kept on this phone. */
   ghost: LiveChoice<GhostLine>;
+  /** Debug: whether the guards' hit boxes (the rules' boxes) are drawn over them. */
+  hitBoxes: LiveChoice<HitBoxes>;
   /** The graphics tier: what the siege draws (shadows, debris, dust). Calm frames feed its pick. */
   graphics: GraphicsSettings;
   haptics: Haptics;
@@ -126,6 +134,7 @@ const COLORS = {
   wood: 0xc39a66,
   dust: 0xcdbb9c,
   ghost: 0x7fe8ff,
+  hitBox: 0x7dff5a,
 };
 
 /**
@@ -133,19 +142,19 @@ const COLORS = {
  */
 const ANISOTROPY = 4;
 
+type SiegeGuardClips = Siege['skins']['guard']['clips'];
+
 /** The models the siege's things wear (`skins` in the data), loaded. */
 interface Skins {
   spear: THREE.Object3D;
-  guard: AnimatedModel;
 }
 
-/** A guard (or the captain) as drawn: Kenney's soldier, playing what he's about. */
+/** A guard (or the captain) as drawn: his character, playing what he's about. */
 interface GuardLook {
   root: THREE.Group;
-  model: THREE.Object3D;
-  mixer: THREE.AnimationMixer;
-  actions: Map<string, THREE.AnimationAction>;
-  clip: string;
+  placed: PlacedCharacter;
+  /** The clips he plays (the guards' or the captain's). */
+  clips: SiegeGuardClips;
   down: boolean;
   downAt: number;
   /** His own outline in red, drawn through walls while a Sense potion lasts. */
@@ -154,6 +163,8 @@ interface GuardLook {
   mark: THREE.Sprite;
   /** His own materials (they glow gold while his objective's live), freed with him. */
   owned: THREE.MeshLambertMaterial[];
+  /** His hit box (Debug → Options: Siege hit boxes), as the rules have it. */
+  box: THREE.LineSegments;
 }
 
 /** The spear rack's gold: its mark, and its own materials (they glow while it stands). */
@@ -311,6 +322,14 @@ export class Siege3DView implements ScreenView {
     depthTest: false,
     depthWrite: false,
   });
+  /** Debug: the guards' hit boxes, drawn through walls. */
+  readonly #boxMaterial = new THREE.LineBasicMaterial({
+    color: COLORS.hitBox,
+    depthTest: false,
+    depthWrite: false,
+  });
+  /** The guards' and the captain's characters on the castle's tier, and that tier. */
+  #kit: CharacterKit;
   readonly #markTexture: THREE.CanvasTexture;
   readonly #gold: THREE.Color;
   readonly #puffTexture: THREE.Texture;
@@ -382,12 +401,14 @@ export class Siege3DView implements ScreenView {
     physics: Physics,
     hud: WarchestHud,
     skins: Skins,
+    kit: CharacterKit,
     renderer: THREE.WebGLRenderer,
     tier: GraphicsTier,
   ) {
     this.#element = element;
     this.#deps = deps;
     this.#skins = skins;
+    this.#kit = kit;
     this.#physics = physics;
     this.#hud = hud;
     this.#renderer = renderer;
@@ -433,7 +454,7 @@ export class Siege3DView implements ScreenView {
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     deps.graphics.noteGpu(gpuOf(renderer.getContext()).gpu);
     const tier = deps.graphics.tier;
-    const [physics, hud, skins] = await Promise.all([
+    const [physics, hud, skins, kit] = await Promise.all([
       loadPhysics(),
       WarchestHud.create(element, {
         game: deps.game,
@@ -442,18 +463,31 @@ export class Siege3DView implements ScreenView {
         logger: deps.logger,
       }),
       loadSkins(deps.game.data.siege.skins),
+      loadCharacterKit(deps.game.data.characters, tier, ANISOTROPY),
     ]);
-    return new Siege3DView(element, deps, physics, hud, skins, renderer, tier);
+    return new Siege3DView(element, deps, physics, hud, skins, kit, renderer, tier);
   }
 
-  /** Loads the physics engine (and starts its wasm), the models and the castle's kit ahead of time. */
-  static async preload(skins?: Siege['skins'], kit?: string): Promise<void> {
+  /**
+   * Loads the physics engine (and starts its wasm), the models, and the castle's kit and the
+   * characters' files (on `tier`) ahead of time.
+   */
+  static async preload(
+    skins?: Siege['skins'],
+    kit?: string,
+    characters?: Characters,
+    tier?: GraphicsTier,
+  ): Promise<void> {
+    // Into the browser's cache: their own loaders fetch them again from there.
+    const files = [
+      ...(kit ? [kit] : []),
+      ...(characters && tier ? characterFiles(characters, tier) : []),
+    ];
     await Promise.all([
       loadPhysics(),
       WarchestHud.preload(),
       ...(skins ? [loadSkins(skins)] : []),
-      // Into the browser's cache: the castle's own loader fetches it again from there.
-      ...(kit ? [fetch(kit).then((response) => response.arrayBuffer())] : []),
+      ...files.map((file) => fetch(file).then((response) => response.arrayBuffer())),
     ]);
   }
 
@@ -536,11 +570,15 @@ export class Siege3DView implements ScreenView {
     this.#measureIn = MEASURE_FRAMES;
   }
 
-  /** Gives a part's meshes their own materials, so tinting it tints only it. */
+  /**
+   * Gives a part's meshes their own materials, so tinting it tints only it. Each keeps its own
+   * colour to tint from (the dark inside a block of the keep is all colour, no texture).
+   */
   #ownMaterials(object: THREE.Object3D): void {
     object.traverse((child) => {
       if (!(child instanceof THREE.Mesh)) return;
       const own = (child.material as THREE.Material).clone();
+      if ('color' in own && own.color instanceof THREE.Color) own.userData.base = own.color.clone();
       child.material = own;
       this.#partMaterials.push(own);
     });
@@ -566,7 +604,17 @@ export class Siege3DView implements ScreenView {
     this.#rebuilding = true;
     const started = performance.now();
     try {
-      const castle = await build;
+      // The characters too, if they were loaded for another tier.
+      const [castle, kit] = await Promise.all([
+        build,
+        this.#kit.tier === tier
+          ? this.#kit
+          : loadCharacterKit(this.#deps.game.data.characters, tier, ANISOTROPY),
+      ]);
+      if (kit !== this.#kit) {
+        this.#kit.dispose();
+        this.#kit = kit;
+      }
       this.#castleTier = tier;
       this.#useCastle(castle);
       this.#deps.logger.log('siege.castleBuilt', {
@@ -642,9 +690,12 @@ export class Siege3DView implements ScreenView {
     this.#blobs?.dispose(true);
     this.#blobs = undefined;
     for (const look of this.#guards) {
-      look.mixer.stopAllAction();
-      look.mixer.uncacheRoot(look.model);
+      const { mixer } = look.placed;
+      mixer.stopAllAction();
+      mixer.uncacheRoot(mixer.getRoot());
       look.root.removeFromParent();
+      look.box.removeFromParent();
+      look.box.geometry.dispose();
       for (const material of look.owned) material.dispose();
       look.mark.material.dispose();
     }
@@ -741,9 +792,9 @@ export class Siege3DView implements ScreenView {
     this.#commitMoved();
 
     const rules = this.#deps.game.data.siege;
-    this.#guards = round.guards.map((guard) => {
-      const look = this.#guardLook(guard.height, guard.role === 'captain');
-      this.#figures.add(look.root);
+    this.#guards = round.guards.map((guard, index) => {
+      const look = this.#guardLook(guard, index);
+      this.#figures.add(look.root, look.box);
       return look;
     });
     // The spear rack's gold: its own materials glow, and a mark hangs over it.
@@ -831,29 +882,25 @@ export class Siege3DView implements ScreenView {
   }
 
   /**
-   * A guard: Kenney's soldier (cloned with his skeleton), scaled evenly to `height`, his feet at
-   * his root, with his own mixer for his clips, and his red outline for Sense. His own materials
-   * (they glow gold while his objective's live) and a gold mark over him; the captain wears gold
-   * besides.
+   * A guard (or the captain): his character (cloned with its skeleton, its own mixer for its
+   * clips), scaled evenly so the characters' body fills its share of his box's height, his feet
+   * at his root; his red outline for Sense, his own materials (they glow gold while his
+   * objective's live), a gold mark over him, and his hit box for Debug.
    */
-  #guardLook(height: number, captain: boolean): GuardLook {
-    const rules = this.#deps.game.data.siege;
-    const skin = rules.skins.guard;
-    const model = SkeletonUtils.clone(this.#skins.guard.scene);
-    const bounds = new THREE.Box3().setFromObject(model);
-    const tall = Math.max(bounds.max.y - bounds.min.y, 0.001);
-    model.scale.setScalar(height / tall);
-    model.rotation.y = skin.turn * DEG;
+  #guardLook(guard: GuardState, index: number): GuardLook {
+    const { siege: rules, characters } = this.#deps.game.data;
+    const placed = this.#kit.place(guard.look);
+    placed.root.scale.setScalar((guard.height * rules.skins.guard.fill) / characters.body[1]);
+    const clips = guard.role === 'captain' ? rules.skins.captain.clips : rules.skins.guard.clips;
+    // Each a little further into it than the last, so they are not in step.
+    placed.play(clips.stand, ((index * 0.37) % 1) * this.#kit.clipSeconds(clips.stand));
     const owned: THREE.MeshLambertMaterial[] = [];
     const meshes: THREE.Mesh[] = [];
-    model.traverse((child) => {
-      child.castShadow = true;
+    placed.root.traverse((child) => {
       if (child instanceof THREE.Mesh) meshes.push(child as THREE.Mesh);
     });
-    const tint = new THREE.Color(rules.captain.tint);
     for (const mesh of meshes) {
       const own = (mesh.material as THREE.MeshLambertMaterial).clone();
-      if (captain) own.color.multiply(tint);
       mesh.material = own;
       owned.push(own);
     }
@@ -880,30 +927,29 @@ export class Siege3DView implements ScreenView {
       return overlay;
     });
     const root = new THREE.Group();
-    root.add(model);
+    root.add(placed.root);
     const mark = this.#markSprite();
     root.add(mark);
-    const mixer = new THREE.AnimationMixer(model);
-    const actions = new Map<string, THREE.AnimationAction>();
-    for (const clip of this.#skins.guard.animations) actions.set(clip.name, mixer.clipAction(clip));
-    return { root, model, mixer, actions, clip: '', down: false, downAt: 0, sense, mark, owned };
+    const [width, height, depth] = guard.size;
+    const box = new THREE.LineSegments(
+      new THREE.EdgesGeometry(new THREE.BoxGeometry(width, height, depth)),
+      this.#boxMaterial,
+    );
+    box.renderOrder = 22;
+    box.frustumCulled = false;
+    box.visible = false;
+    return { root, placed, clips, down: false, downAt: 0, sense, mark, owned, box };
   }
 
-  /** Plays `name` on a guard, crossfading from what he was playing. */
+  /**
+   * Plays `name` on a guard (blending from what he was playing), unless he's playing it. A hit
+   * plays through first (the characters' data plays it once, then idles) unless he's down.
+   */
   #playClip(look: GuardLook, name: string): void {
-    if (look.clip === name) return;
-    const next = look.actions.get(name);
-    if (!next) return;
-    const previous = look.actions.get(look.clip);
-    next.reset();
-    if (name === this.#deps.game.data.siege.skins.guard.clips.down) {
-      // Down: once through, and left lying on its last frame.
-      next.setLoop(THREE.LoopOnce, 1);
-      next.clampWhenFinished = true;
-    }
-    next.play();
-    if (previous) next.crossFadeFrom(previous, 0.2, false);
-    look.clip = name;
+    const playing = look.placed.clip;
+    if (playing === name) return;
+    if (playing === look.clips.hit && name !== look.clips.down) return;
+    look.placed.play(name);
   }
 
   #spearMesh(): THREE.Group {
@@ -965,8 +1011,13 @@ export class Siege3DView implements ScreenView {
       case 'hit': {
         const heavy = event.speed >= feel.heavyHitSpeed;
         const kind = event.kind;
-        if (kind === 'guard') this.#play('thud-1', 0.35, 500);
-        else {
+        if (kind === 'guard') {
+          this.#play('thud-1', 0.35, 500);
+          // Hit and still standing: he staggers (a hit that fells him plays his fall instead).
+          const look = this.#guards[event.target.index];
+          const standing = (this.#round?.guards[event.target.index]?.hp ?? 0) > 0;
+          if (look && standing && !look.down) look.placed.play(look.clips.hit);
+        } else {
           this.#play(
             kind === 'stone'
               ? `stone-${String(1 + Math.floor(Math.random() * 2))}`
@@ -1286,6 +1337,9 @@ export class Siege3DView implements ScreenView {
       drawCalls: info.calls,
       triangles: info.triangles,
       ...memory,
+      // The guards' and the captain's colour maps (in textureMB too).
+      characterTextureMB: this.#kit.textureMB(),
+      looks: this.#round?.guards.map((guard) => guard.look),
     });
   }
 
@@ -1322,9 +1376,9 @@ export class Siege3DView implements ScreenView {
     const sensing = this.#now < this.#senseUntil;
     const feel = this.#deps.feel.values;
     const rules = this.#deps.game.data.siege;
-    const clips = rules.skins.guard.clips;
+    const boxes = this.#deps.hitBoxes.value === 'on';
     // A live objective's gold: its glow swells and fades, so it catches the eye.
-    const { glow, pulse, pulseSeconds } = rules.looks.objective;
+    const { glow, pulse, pulseSeconds, figureGlow } = rules.looks.objective;
     const swell = 0.5 - 0.5 * Math.cos((this.#now / pulseSeconds) * Math.PI * 2);
     const lit = glow * (1 - pulse * swell);
     const live = (objective: number) => {
@@ -1343,7 +1397,7 @@ export class Siege3DView implements ScreenView {
       const { x, y, z } = pose.position;
       const target = !state.down && live(state.objective);
       for (const material of look.owned) {
-        material.emissive.copy(this.#gold).multiplyScalar(target ? lit : 0);
+        material.emissive.copy(this.#gold).multiplyScalar(target ? lit * figureGlow : 0);
       }
       if (state.down && (state.role === 'guard' || state.by === 'fall')) {
         // Lying: where his body lies (his die clip does the falling), his feet on what's under it.
@@ -1352,8 +1406,15 @@ export class Siege3DView implements ScreenView {
         look.root.position.set(x, y - state.feet, z);
         look.root.rotation.y = state.facing;
       }
+      const clips = look.clips;
       this.#playClip(look, state.down ? clips.down : state.walking ? clips.patrol : clips.stand);
       for (const overlay of look.sense) overlay.visible = sensing && !state.down;
+      // His hit box, as the rules have it (tumbling with him once he's down).
+      look.box.visible = boxes;
+      if (boxes) {
+        look.box.position.set(x, y, z);
+        look.box.quaternion.set(pose.rotation.x, pose.rotation.y, pose.rotation.z, pose.rotation.w);
+      }
       look.mark.visible = target;
       // Over his head; the captain's out in front of him (his window's wall would hide it).
       look.mark.position.set(
@@ -1492,7 +1553,7 @@ export class Siege3DView implements ScreenView {
     for (const look of this.#guards) {
       if (look.down && this.#now - look.downAt > DIE_SECONDS) continue;
       if (look.root.position.distanceTo(eye) > ANIMATE_WITHIN) continue;
-      look.mixer.update(dt);
+      look.placed.mixer.update(dt);
     }
   }
 
@@ -1960,9 +2021,9 @@ export class Siege3DView implements ScreenView {
     const potion = button('Sense', 'sg-potion', () => {
       this.#drinkPotion();
     });
-    // Ends the siege now, with what's done (a star for some).
+    // Ends the siege now, with what's done (a star for some), once it's confirmed.
     const withdraw = button('Withdraw', 'sg-withdraw', () => {
-      this.#round?.withdraw();
+      this.#askWithdraw();
     });
     extras.append(ghost, potion, withdraw);
     const fire = button('Fire', 'sg-fire', () => {
@@ -1995,7 +2056,23 @@ export class Siege3DView implements ScreenView {
     cardButtons.append(leave, again);
     card.append(cardStars, cardTitle, cardText, cardButtons);
     card.hidden = true;
-    root.append(crosshair, vantages, status, objectives, title, hint, controls, card);
+    // Withdraw's confirm: what ending now keeps, and Keep fighting (the safe one) first.
+    const confirm = el('div', 'sg-card sg-confirm');
+    confirm.setAttribute('role', 'alertdialog');
+    confirm.setAttribute('aria-label', 'Withdraw from the siege?');
+    const confirmTitle = el('div', 'sg-card-title', 'Withdraw from the siege?');
+    const confirmText = el('div', 'sg-card-text');
+    const confirmButtons = el('div', 'sg-card-buttons');
+    const keepFighting = button('Keep fighting', 'sg-button', () => {
+      this.#answerWithdraw(false);
+    });
+    const confirmWithdraw = button('Withdraw', 'sg-button sg-secondary', () => {
+      this.#answerWithdraw(true);
+    });
+    confirmButtons.append(keepFighting, confirmWithdraw);
+    confirm.append(confirmTitle, confirmText, confirmButtons);
+    confirm.hidden = true;
+    root.append(crosshair, vantages, status, objectives, title, hint, controls, card, confirm);
     this.#element.append(root);
     return {
       root,
@@ -2017,7 +2094,45 @@ export class Siege3DView implements ScreenView {
       cardTitle,
       cardText,
       again,
+      confirm,
+      confirmText,
+      keepFighting,
     };
+  }
+
+  /** Withdraw tapped: the confirm, saying what ending now keeps. */
+  #askWithdraw(): void {
+    const round = this.#round;
+    if (!round || round.phase === 'done') return;
+    const pays = round.paysNow;
+    const left = this.#deps.game.inventory.count(this.#deps.game.data.siege.item);
+    const plural = (count: number, word: string) =>
+      `${String(count)} ${word}${count === 1 ? '' : 's'}`;
+    const lines = [
+      `Objectives done: ${String(round.done)} of ${String(round.progress.length)}.`,
+      pays.won
+        ? `You keep ${plural(pays.stars, 'star')}, +${String(pays.xp)} Command XP and ${plural(pays.recovered, 'spear')} back.`
+        : `Nothing's done yet: no stars, +${String(pays.xp)} Command XP, and the ${plural(round.used, 'spear')} shot are lost.`,
+      `The ${plural(left, 'spear')} you haven't thrown stay in the warchest.`,
+    ];
+    this.#ui.confirmText.textContent = lines.join('\n');
+    this.#ui.confirm.hidden = false;
+    this.#ui.keepFighting.focus();
+  }
+
+  /** Withdraw's confirm answered: ends the round, or back to it. Logged either way. */
+  #answerWithdraw(confirmed: boolean): void {
+    const round = this.#round;
+    this.#ui.confirm.hidden = true;
+    if (!round) return;
+    this.#deps.logger.log('siege.withdrawAsk', {
+      confirmed,
+      done: round.done,
+      total: round.progress.length,
+      throws: round.throws,
+      used: round.used,
+    });
+    if (confirmed) round.withdraw();
   }
 
   /** The vantage buttons, the one you're at lit. */
@@ -2067,7 +2182,9 @@ export class Siege3DView implements ScreenView {
       title !== undefined && this.#now >= title.at && this.#now - title.at < TITLE_SECONDS;
     ui.title.hidden = !showing;
     if (title && ui.title.textContent !== title.text) ui.title.textContent = title.text;
-    const aiming = phase === 'aim' && ui.card.hidden;
+    // Withdraw's confirm goes once the round's over another way (every objective done).
+    if (phase !== 'aim' && phase !== 'won') ui.confirm.hidden = true;
+    const aiming = phase === 'aim' && ui.card.hidden && ui.confirm.hidden;
     ui.controls.hidden = !aiming;
     ui.vantages.hidden = !ui.card.hidden;
     ui.fire.disabled = !round.canThrow;
@@ -2301,13 +2418,19 @@ export class Siege3DView implements ScreenView {
   }
 }
 
-/** Darkens a part drawn on its own (its own materials) for its damage. */
+/**
+ * Darkens a part drawn on its own (its own materials) for its damage: each material's own colour,
+ * darker by its stage (a textured one's white; the keep's dark insides stay dark, never white).
+ */
 function tintObject(object: THREE.Object3D, stage: number): void {
   const tint = stageTint(0xffffff, stage);
   object.traverse((child) => {
     if (!(child instanceof THREE.Mesh)) return;
     const material = child.material as THREE.MeshLambertMaterial;
-    if ('color' in material) material.color.copy(tint);
+    if (!('color' in material)) return;
+    const base = material.userData.base as THREE.Color | undefined;
+    material.color.copy(tint);
+    if (base) material.color.multiply(base);
   });
 }
 
@@ -2365,16 +2488,13 @@ function textSprite(text: string, color: string): THREE.CanvasTexture {
 
 /** Loads the models the siege's things wear (each once, shared). */
 async function loadSkins(skins: Siege['skins']): Promise<Skins> {
-  const [spearModel, guard] = await Promise.all([
-    loadModel(skins.bolt.model),
-    loadAnimatedModel(skins.guard.model),
-  ]);
+  const spearModel = await loadModel(skins.bolt.model);
   // The spear is one part of its model (the ballista's bolt), by name.
   const part = skins.bolt.node ? spearModel.getObjectByName(skins.bolt.node) : undefined;
   const spear = (part ?? spearModel).clone(true);
   spear.position.set(0, 0, 0);
   spear.rotation.set(0, 0, 0);
-  return { spear, guard };
+  return { spear };
 }
 
 /** A round's frame record, empty. */
