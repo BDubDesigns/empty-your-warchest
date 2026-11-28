@@ -23,7 +23,7 @@ import type {
   LiveChoice,
   LiveTuning,
 } from '../../../core';
-import type { Siege, SiegeFeel } from '../../../data';
+import type { Castle, Siege, SiegeFeel } from '../../../data';
 import type { GhostLine } from '../feel';
 import type { BodyShape } from '../logic/castleBodies';
 import { objectiveText } from '../logic/objectives';
@@ -107,6 +107,33 @@ const COLORS = {
   dust: 0xcdbb9c,
   ghost: 0x7fe8ff,
 };
+
+/**
+ * How sharp the castle's textures are at a slant (three.js keeps it to what the GPU can do).
+ */
+const ANISOTROPY = 4;
+
+/**
+ * The castle built ahead of time (at the camp, by `preload`), and the tier it's built for: the
+ * siege takes it when it opens, so the War tent opens without building it then.
+ */
+let early: { tier: GraphicsTier; scene: Promise<CastleScene> } | undefined;
+
+/** The castle at `tier`: the one built ahead of time if it's for that tier, or built now. */
+function castleFor(castle: Castle, tier: GraphicsTier): Promise<CastleScene> {
+  const ready = early;
+  early = undefined;
+  if (ready?.tier === tier) return ready.scene;
+  if (ready) {
+    void ready.scene.then(
+      (scene) => {
+        scene.dispose();
+      },
+      () => undefined,
+    );
+  }
+  return buildCastleScene(castle, tier, ANISOTROPY);
+}
 
 /** The models the siege's things wear (`skins` in the data), loaded. */
 interface Skins {
@@ -365,23 +392,32 @@ export class Siege3DView implements ScreenView {
         logger: deps.logger,
       }),
       loadSkins(deps.game.data.siege.skins),
-      buildCastleScene(
-        deps.game.data.castle,
-        tier,
-        Math.min(4, renderer.capabilities.getMaxAnisotropy()),
-      ),
+      castleFor(deps.game.data.castle, tier),
     ]);
     return new Siege3DView(element, deps, physics, hud, skins, castle, renderer, tier);
   }
 
-  /** Loads the physics engine (and starts its wasm), the models and the castle's kit ahead of time. */
-  static async preload(skins?: Siege['skins'], kit?: string): Promise<void> {
+  /**
+   * Loads the physics engine (and starts its wasm) and the models, and builds the castle at
+   * `tier`, ahead of time.
+   */
+  static async preload(
+    skins?: Siege['skins'],
+    castle?: { castle: Castle; tier: GraphicsTier },
+  ): Promise<void> {
+    if (castle && !early) {
+      const scene = buildCastleScene(castle.castle, castle.tier, ANISOTROPY);
+      early = { tier: castle.tier, scene };
+      // A failed build only costs the head start: the siege builds it again when it opens.
+      scene.catch(() => {
+        if (early?.scene === scene) early = undefined;
+      });
+    }
     await Promise.all([
       loadPhysics(),
       WarchestHud.preload(),
       ...(skins ? [loadSkins(skins)] : []),
-      // Into the browser's cache: the castle's own loader fetches it again from there.
-      ...(kit ? [fetch(kit).then((response) => response.arrayBuffer())] : []),
+      ...(early ? [early.scene] : []),
     ]);
   }
 
@@ -467,11 +503,7 @@ export class Siege3DView implements ScreenView {
     this.#endRound();
     this.#ui.hint.textContent = 'Building the castle…';
     try {
-      const castle = await buildCastleScene(
-        this.#deps.game.data.castle,
-        tier,
-        Math.min(4, this.#renderer.capabilities.getMaxAnisotropy()),
-      );
+      const castle = await buildCastleScene(this.#deps.game.data.castle, tier, ANISOTROPY);
       this.#castle.scene.remove(this.#figures, this.#spearGroup, this.#effects, this.#ghost);
       this.#castle.dispose();
       for (const material of this.#partMaterials) material.dispose();
