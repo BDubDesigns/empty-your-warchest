@@ -221,6 +221,15 @@ interface TreeVisual {
   brokenAt?: number;
 }
 
+/** Banked logs held back from the HUD chest until they pour in from the felled trees. */
+interface PendingPour {
+  deposit: Deposit;
+  trees: string[];
+  /** What was foraged: each item poured from where it came from. */
+  drops: Deposit[];
+  forage: ChainForage;
+}
+
 /** Why the summary is up: every tree down, End round (can keep chopping), or the cabin hit. */
 type SummaryKind = 'cleared' | 'paused' | 'crashed';
 
@@ -365,15 +374,7 @@ export class Woodcutting3DView implements ScreenView {
   /** XP from the last bank, held back until its logs pour in. */
   #bankedXp: XpDeposit | undefined;
   /** A banked chain waiting for the camera to settle on the overview before its logs pour. */
-  #pendingPour:
-    | {
-        deposit: Deposit;
-        trees: string[];
-        /** What the chain foraged: each item poured from where it came from. */
-        drops: Deposit[];
-        forage: ChainForage;
-      }
-    | undefined;
+  #pendingPour: PendingPour | undefined;
   /**
    * Forage you can see, by what it is ('tree:id' mushrooms at a tree's foot, 'patch:id', and
    * 'boulder:id' the moss on a boulder): hidden once foraged.
@@ -454,6 +455,14 @@ export class Woodcutting3DView implements ScreenView {
   /** Logs landed in the chest this round, for the live stars, and the most stars shown so far. */
   #starLogs = 0;
   #starsShown = 0;
+  /**
+   * Fell the rest playing: when each remaining tree starts to topple and is down (round time), and
+   * the logs and forage to pour once the last one lands. Empty when it isn't playing.
+   */
+  #ripple = new Map<string, { step: FallStep; start: number; end: number; landed: boolean }>();
+  #ripplePour: PendingPour | undefined;
+  /** Logs Fell the rest banked this round, for the summary. */
+  #felledRestLogs = 0;
 
   private constructor(
     element: HTMLElement,
@@ -559,6 +568,7 @@ export class Woodcutting3DView implements ScreenView {
           this.#onEvent(event);
         },
         view: '3d',
+        fellRest: game.data.woodcutting.fellRest,
         stars: {
           par: plan.par,
           ...game.data.woodcutting.stars,
@@ -582,6 +592,9 @@ export class Woodcutting3DView implements ScreenView {
     this.#summaryNotBefore = 0;
     this.#starLogs = 0;
     this.#starsShown = 0;
+    this.#ripple.clear();
+    this.#ripplePour = undefined;
+    this.#felledRestLogs = 0;
     this.#showLiveStars();
     this.#showEndRound();
     this.#frameTimes = [];
@@ -611,6 +624,8 @@ export class Woodcutting3DView implements ScreenView {
     this.#renderer.setAnimationLoop(null);
     this.#pendingPour = undefined;
     this.#summaryPending = undefined;
+    this.#ripple.clear();
+    this.#ripplePour = undefined;
     this.#clearSummaryTimers();
     this.#deps.backButton.set(undefined);
     this.#hud.settle();
@@ -1926,6 +1941,8 @@ export class Woodcutting3DView implements ScreenView {
         forage: event.forage,
       };
       this.#bestChain = Math.max(this.#bestChain, event.trees);
+    } else if (event.type === 'felledRest') {
+      this.#startRipple(event.steps, event.logs, event.forage);
     } else {
       this.#deps.clearings.finished();
       this.#summaryPending = 'cleared';
@@ -2087,6 +2104,92 @@ export class Woodcutting3DView implements ScreenView {
     this.#showEndRound();
   }
 
+  /**
+   * Fell the rest (from the HUD button or the round-so-far summary): the rules bank it at once,
+   * and the view plays the trees toppling (see #startRipple).
+   */
+  #fellRest(): void {
+    const round = this.#round;
+    if (!round.canFellRest || this.#summaryPending) return;
+    this.#deps.logger.log('woodcutting3d.fellRest', {
+      from: this.#ui.summary.hidden ? 'hud' : 'summary',
+      trees: round.standing.size,
+      logs: round.fellRestLogs,
+    });
+    this.#clearSummaryTimers();
+    this.#ui.summary.hidden = true;
+    this.#deps.backButton.set('hidden');
+    round.fellRest();
+  }
+
+  /**
+   * The remaining trees topple in a quick ripple, each its own way (from the rules), a dusty thud
+   * as each lands; once the last is down the logs pour into the chest and the summary follows.
+   */
+  #startRipple(steps: FallStep[], logs: number, forage: ChainForage): void {
+    const feel = this.#round.feel;
+    const now = this.#round.now;
+    const gap =
+      steps.length > 1 ? Math.min(feel.fellRestGap, feel.fellRestSpread / (steps.length - 1)) : 0;
+    this.#ripple.clear();
+    for (const step of steps) {
+      const visual = this.#trees.get(step.tree);
+      if (!visual) continue;
+      visual.fallen = { trunks: step.trunks, tilts: step.trunks.map(() => Math.PI / 2) };
+      const start = now + step.depth * gap;
+      this.#ripple.set(step.tree, {
+        step,
+        start,
+        end: start + feel.fellRestFallSeconds,
+        landed: false,
+      });
+    }
+    // Held back from the chest now (it's banked), poured once the last tree is down.
+    this.#ripplePour = {
+      deposit: this.#hud.hold(logs, this.#landChain(logs)),
+      trees: steps.map((step) => step.tree),
+      drops: forage.drops.map((stack) => this.#hud.hold(stack.count, undefined, stack.item)),
+      forage,
+    };
+    this.#felledRestLogs = logs;
+    this.#deps.clearings.finished();
+    this.#summaryPending = 'cleared';
+    this.#play(`creak-${1 + Math.floor(Math.random() * 3)}`, 0.8);
+    this.#deps.haptics.pulse(feel.buzzLandMs);
+  }
+
+  /** Each rippling tree landing: dust and a thud; once all are down, pour the logs. */
+  #updateRipple(): void {
+    if (this.#ripple.size === 0) return;
+    const round = this.#round;
+    const feel = round.feel;
+    let landed = 0;
+    for (const [id, entry] of this.#ripple) {
+      if (!entry.landed && round.now >= entry.end) {
+        entry.landed = true;
+        const visual = this.#trees.get(id);
+        if (visual) {
+          for (const angle of entry.step.trunks) {
+            this.#burst('dust', this.#world(fallTip(visual.tree, angle), 0.2), 6);
+          }
+        }
+        // Thuds getting a little deeper down the ripple, and a light buzz each.
+        this.#play(
+          `land-${1 + Math.floor(Math.random() * 3)}`,
+          0.55,
+          -Math.min(entry.step.depth * 30, 300),
+        );
+        this.#deps.haptics.pulse(feel.buzzHitMs);
+      }
+      if (entry.landed) landed++;
+    }
+    if (landed < this.#ripple.size) return;
+    this.#shake = 0.1 * feel.shakeStrength;
+    this.#ripple.clear();
+    this.#pendingPour = this.#ripplePour;
+    this.#ripplePour = undefined;
+  }
+
   #clearSummaryTimers(): void {
     for (const timer of this.#summaryTimers) window.clearTimeout(timer);
     this.#summaryTimers = [];
@@ -2107,6 +2210,8 @@ export class Woodcutting3DView implements ScreenView {
         : 'Clearing cleared!';
     ui.summary.dataset.kind = kind;
     ui.keepChopping.hidden = !paused;
+    ui.summaryFellRest.hidden = !(paused && round.canFellRest);
+    setText(ui.summaryFellRest, fellRestLabel(round.fellRestLogs));
     this.#deps.backButton.set('hidden');
     this.#clearSummaryTimers();
     const par = `par ${String(round.par ?? '?')}`;
@@ -2122,6 +2227,7 @@ export class Woodcutting3DView implements ScreenView {
       (round.logs === 0
         ? `No logs yet · ${par}${lost}`
         : `${String(round.logs)} logs · ${par} · best chain ${String(this.#bestChain)}${lost}`) +
+      (this.#felledRestLogs > 0 ? `\nFelled the rest: +${String(this.#felledRestLogs)} logs` : '') +
       (foraged ? `\nForaged: ${foraged}` : '');
     ui.summarySeed.textContent =
       plan?.seed === undefined ? 'Tutorial clearing' : `Clearing #${String(plan.seed)}`;
@@ -2215,6 +2321,7 @@ export class Woodcutting3DView implements ScreenView {
     }
     ui.summaryButtons.dataset.busy = 'true';
     ui.keepChopping.hidden = true;
+    ui.summaryFellRest.hidden = true;
     const waitForPour = () => {
       if (!this.#hud.settled) {
         this.#summaryTimers.push(window.setTimeout(waitForPour, 100));
@@ -2437,6 +2544,7 @@ export class Woodcutting3DView implements ScreenView {
     this.#updateParticles(dt);
     this.#birds.update(dt);
     this.#updateCamera(realDt);
+    this.#updateRipple();
     this.#startPendingPour();
     const levelUp = this.#levelUpPending;
     if (levelUp && !this.#pendingPour && this.#hud.settled) {
@@ -2447,6 +2555,7 @@ export class Woodcutting3DView implements ScreenView {
     const pending = this.#summaryPending;
     if (
       pending &&
+      this.#ripple.size === 0 &&
       !this.#pendingPour &&
       this.#hud.settled &&
       this.#round.phase.kind !== 'falling' &&
@@ -2652,7 +2761,18 @@ export class Woodcutting3DView implements ScreenView {
     const falling = new Map(round.fallers.map((faller) => [faller.step.tree, faller]));
     for (const visual of this.#trees.values()) {
       const faller = falling.get(visual.tree.id);
-      if (faller) {
+      const rippling = this.#ripple.get(visual.tree.id);
+      if (rippling && !rippling.landed) {
+        // Fell the rest: toppling on its own, quicker than a chopped tree.
+        const started = round.now >= rippling.start;
+        visual.stump.visible = started;
+        const tilt = started
+          ? fallTilt((round.now - rippling.start) / feel.fellRestFallSeconds, feel.fallEase)
+          : 0;
+        visual.trunks.forEach((trunk, index) => {
+          this.#tip(trunk, rippling.step.trunks[index] ?? rippling.step.angle, tilt);
+        });
+      } else if (faller) {
         const started = round.now >= faller.start;
         visual.stump.visible = started && visual.brokenAt === undefined;
         const tilt = started
@@ -2784,6 +2904,17 @@ export class Woodcutting3DView implements ScreenView {
       },
       true,
     );
+    // Fell the rest: on the round-so-far summary, and under the live stars during the round.
+    const summaryFellRest = button('', () => {
+      this.#fellRest();
+    });
+    summaryFellRest.classList.add('w3d-fell-rest-summary');
+    summaryFellRest.hidden = true;
+    const fellRest = button('', () => {
+      this.#fellRest();
+    });
+    fellRest.classList.add('w3d-fell-rest');
+    fellRest.hidden = true;
     const summaryButtons = el('div', 'w3d-summary-buttons');
     summaryButtons.append(leave, next);
     summary.append(
@@ -2794,6 +2925,7 @@ export class Woodcutting3DView implements ScreenView {
       summaryXp,
       summarySeed,
       keepChopping,
+      summaryFellRest,
       summaryButtons,
     );
     summary.hidden = true;
@@ -2807,7 +2939,7 @@ export class Woodcutting3DView implements ScreenView {
     liveStarBar.append(liveStarFill);
     const liveStarText = el('div', 'w3d-live-star-text');
     liveStars.append(liveStarRow, liveStarBar, liveStarText);
-    root.append(perf, hint, panel, fast, flashes, counter, levelUp, summary, liveStars);
+    root.append(perf, hint, panel, fast, flashes, counter, levelUp, summary, liveStars, fellRest);
     this.#element.append(root);
     return {
       liveStars,
@@ -2840,6 +2972,8 @@ export class Woodcutting3DView implements ScreenView {
       summarySeed,
       summaryButtons,
       keepChopping,
+      fellRest,
+      summaryFellRest,
       stars,
     };
   }
@@ -2869,6 +3003,15 @@ export class Woodcutting3DView implements ScreenView {
     ui.fast.hidden = waiting || !fastFallUnlocked(game.data.woodcutting, game.level(this.#skill));
     ui.fast.textContent = `⏩ Fast fall: ${fastFall.value === 'on' ? 'on' : 'off'}`;
     ui.fast.setAttribute('aria-pressed', String(fastFall.value === 'on'));
+    // Fell the rest, once the stars it needs have lit up and nothing is still pouring in.
+    const offer =
+      round.canFellRest &&
+      !waiting &&
+      !this.#pendingPour &&
+      !this.#chase &&
+      this.#starsShown >= game.data.woodcutting.fellRest.minStars;
+    ui.fellRest.hidden = !offer;
+    if (offer) setText(ui.fellRest, fellRestLabel(round.fellRestLogs));
     ui.aim.hidden = phase.kind !== 'aim' || waiting;
     ui.chop.disabled = !round.canChop;
     ui.chopPanel.hidden = phase.kind !== 'chop' || waiting;
@@ -3035,6 +3178,16 @@ function rollPoint(roll: BoulderRoll, distance: number): Point {
     at = to;
   }
   return at;
+}
+
+/** The Fell the rest button's words: what it banks. */
+function fellRestLabel(logs: number): string {
+  return `Fell the rest · +${String(logs)} log${logs === 1 ? '' : 's'}`;
+}
+
+/** Sets an element's text only when it changes (the HUD button is updated every frame). */
+function setText(element: HTMLElement, text: string): void {
+  if (element.textContent !== text) element.textContent = text;
 }
 
 function blocks(visual: TreeVisual, pose: CameraPose, share: number, radius: number): boolean {
