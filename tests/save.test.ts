@@ -23,6 +23,7 @@ const state: GameState = {
     alchemy: 0,
     archery: 0,
     fletching: 0,
+    farming: 0,
   },
   lastSeenAt: 5_000,
   work: {
@@ -31,6 +32,19 @@ const state: GameState = {
     minimums: {},
     piles: { tree_line: [{ item: 'log', count: 3 }] },
     xp: { tree_line: 15 },
+  },
+  farm: {
+    minutes: 42,
+    plots: [
+      {
+        planting: {
+          crop: 'woad',
+          plantedAt: 40,
+          water: { stars: 2, inBand: true, moisture: 0.7, by: 'player' },
+        },
+      },
+      { last: 'sunflower' },
+    ],
   },
   done: ['tutorial.woodcutting'],
 };
@@ -63,15 +77,24 @@ describe('save/load', () => {
         alchemy: 0,
         archery: 0,
         fletching: 0,
+        farming: 0,
       },
       lastSeenAt: 10_000,
       work: {
-        crew: { tree_line: 1, workbench: 1, fire_pit: 1, hunting_stand: 0, fletchers_bench: 0 },
+        crew: {
+          tree_line: 1,
+          workbench: 1,
+          fire_pit: 1,
+          hunting_stand: 0,
+          fletchers_bench: 0,
+          farm: 0,
+        },
         carry: {},
         minimums: {},
         piles: {},
         xp: {},
       },
+      farm: { minutes: 0, plots: [] },
       done: [],
     });
   });

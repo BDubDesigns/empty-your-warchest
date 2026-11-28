@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { GameData } from '../data';
 import type { Clock } from './clock';
+import { checkFarm, copyFarm, newFarm } from './farm';
 import { startingCrew } from './workers';
 import { Inventory } from './inventory';
 import { newGameState, type GameState } from './state';
@@ -12,6 +13,29 @@ import type { KeyValueStore } from './storage';
  */
 export const SAVE_VERSION = 1;
 const SAVE_KEY = 'warchest.save';
+
+const wateringSchema = z.object({
+  stars: z.number().int().min(0).max(3),
+  inBand: z.boolean(),
+  moisture: z.number(),
+  by: z.enum(['player', 'worker']),
+});
+const farmSchema = z.object({
+  minutes: z.number().nonnegative(),
+  plots: z.array(
+    z.object({
+      planting: z
+        .object({
+          crop: z.string(),
+          plantedAt: z.number(),
+          water: wateringSchema.optional(),
+          ripe: z.boolean().optional(),
+        })
+        .optional(),
+      last: z.string().optional(),
+    }),
+  ),
+});
 
 const saveFileSchema = z.object({
   version: z.number(),
@@ -38,6 +62,8 @@ const saveFileSchema = z.object({
         xp: z.record(z.string(), z.number().nonnegative()).default({}),
       })
       .optional(),
+    // Added with the farm, the same way: a save without it gets empty plots.
+    farm: farmSchema.optional(),
   }),
 });
 
@@ -101,6 +127,10 @@ export class SaveStore {
       }
     }
 
+    // A plot of a crop the data no longer has.
+    const farm = copyFarm(file.state.farm ?? newFarm());
+    checkFarm(this.#data, farm);
+
     const saved = Object.keys(file.state.skills).sort().join(',');
     const current = this.#data.skills
       .map((skill) => skill.id)
@@ -119,6 +149,7 @@ export class SaveStore {
         piles: {},
         xp: {},
       },
+      farm,
       done: [...new Set(file.state.done)],
     };
   }

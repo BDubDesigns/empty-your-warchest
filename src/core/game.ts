@@ -1,4 +1,17 @@
 import { byId, type GameData } from '../data';
+import {
+  copyFarm,
+  cropById,
+  cropsOpen,
+  farmStation,
+  harvestOf,
+  isRipe,
+  plotCount,
+  ripeAt,
+  type FarmState,
+  type Harvest,
+  type Watering,
+} from './farm';
 import { Inventory, type Stack } from './inventory';
 import type { EventLogger } from './logger';
 import { craft, type CraftOutcome, type CraftResult } from './recipes';
@@ -17,6 +30,7 @@ export class Game {
   #lastSeenAt: number;
   #done: Set<string>;
   #work: WorkState;
+  #farm: FarmState;
 
   constructor(data: GameData, state: GameState, logger: EventLogger) {
     this.data = data;
@@ -27,6 +41,7 @@ export class Game {
     this.#lastSeenAt = state.lastSeenAt;
     this.#done = new Set(state.done);
     this.#work = fitCrew(data, state.work, this.workers);
+    this.#farm = copyFarm(state.farm);
   }
 
   get inventory(): Inventory {
@@ -163,7 +178,8 @@ export class Game {
    * piles, waiting to be collected. `away` is how much of it was time away, for the log.
    */
   work(minutes: number, away = 0): WorkResult {
-    const result = doWork(this.data, this.#inventory, this.#work, minutes);
+    const farm = { state: this.#farm, level: this.level(farmStation(this.data).skill) };
+    const result = doWork(this.data, this.#inventory, this.#work, minutes, farm);
     this.#logger.log('workers.work', {
       minutes: Math.round(minutes * 100) / 100,
       away: Math.round(away * 100) / 100,
@@ -176,8 +192,131 @@ export class Game {
         ...(short && { short }),
       })),
     });
+    const tended = result.farm;
+    if (tended && (tended.harvested.length > 0 || tended.replanted.length > 0 || tended.short)) {
+      this.#logger.log('farming.tend', {
+        minutes: Math.round(minutes * 100) / 100,
+        workers: this.crew(farmStation(this.data).id),
+        harvested: tended.harvested,
+        replanted: tended.replanted,
+        ...(tended.short && { short: tended.short }),
+      });
+    }
+    this.#noteRipe(this.#farm.minutes);
     this.#changed();
     return result;
+  }
+
+  // The farm
+
+  /** The farm's plots and clock (read only: change them through the methods below). */
+  get farm(): Readonly<FarmState> {
+    return this.#farm;
+  }
+
+  /** Plots open at the farm, from the Farming level. */
+  get plots(): number {
+    return plotCount(this.data.farming, this.level(farmStation(this.data).skill));
+  }
+
+  /**
+   * Plants `crop` in an empty open plot at `at` (farm minutes: banked, plus what the work clock
+   * owes), using one of its seeds. False if the plot's taken or there's no seed.
+   */
+  plant(plot: number, cropId: string, at: number): boolean {
+    const crop = cropById(this.data.farming, cropId);
+    const skill = farmStation(this.data).skill;
+    if (plot < 0 || plot >= this.plots || crop.level > this.level(skill)) return false;
+    const entry = (this.#farm.plots[plot] ??= {});
+    if (entry.planting || !this.#inventory.has(crop.seed, 1)) return false;
+    for (let index = 0; index < plot; index++) this.#farm.plots[index] ??= {};
+    this.#inventory.remove(crop.seed, 1);
+    entry.planting = { crop: crop.id, plantedAt: at };
+    this.#logger.log('farming.plant', {
+      plot,
+      crop: crop.id,
+      at: round2(at),
+      growMinutes: crop.growMinutes,
+      seedsLeft: this.#inventory.count(crop.seed),
+    });
+    this.#changed();
+    return true;
+  }
+
+  /** Records a plot's watering (once per planting: false if it's been watered, or is empty). */
+  water(plot: number, water: Watering): boolean {
+    const planting = this.#farm.plots[plot]?.planting;
+    if (!planting || planting.water) return false;
+    planting.water = { ...water };
+    this.#changed();
+    return true;
+  }
+
+  /**
+   * Harvests a ripe plot at `at` (farm minutes): its crop goes into the warchest with its XP, and
+   * the plot is empty again (remembering what grew there, for a worker to replant).
+   */
+  harvest(plot: number, at: number): Harvest | undefined {
+    const entry = this.#farm.plots[plot];
+    const planting = entry?.planting;
+    if (!entry || !planting || !isRipe(this.data.farming, planting, at)) return undefined;
+    this.#noteRipe(at);
+    const harvest = harvestOf(this.data.farming, plot, planting);
+    delete entry.planting;
+    entry.last = planting.crop;
+    this.#inventory.add(harvest.item, harvest.count);
+    this.#logger.log('farming.harvest', {
+      ...harvest,
+      stars: planting.water?.stars ?? null,
+      inBand: planting.water?.inBand ?? null,
+      by: 'player',
+    });
+    if (harvest.xp > 0) this.addXp(farmStation(this.data).skill, harvest.xp);
+    else this.#changed();
+    return harvest;
+  }
+
+  /**
+   * Starter seeds for each crop open at the Farming level and not had yet (once each): a crop's
+   * small pack when it unlocks. Returns what was given.
+   */
+  starterSeeds(): Stack[] {
+    const given: Stack[] = [];
+    for (const crop of cropsOpen(this.data.farming, this.level(farmStation(this.data).skill))) {
+      const key = `farming.starter.${crop.id}`;
+      if (this.hasDone(key)) continue;
+      if (crop.starter > 0) {
+        this.#inventory.add(crop.seed, crop.starter);
+        given.push({ item: crop.seed, count: crop.starter });
+      }
+      this.#logger.log('farming.starter', { crop: crop.id, seed: crop.seed, count: crop.starter });
+      this.markDone(key);
+    }
+    return given;
+  }
+
+  /** Logs the end of growing (once a planting) for every plot ripe at `at`. */
+  noteRipe(at: number): void {
+    if (this.#noteRipe(at)) this.#changed();
+  }
+
+  #noteRipe(at: number): boolean {
+    let any = false;
+    this.#farm.plots.forEach((entry, plot) => {
+      const planting = entry.planting;
+      if (!planting || planting.ripe || !isRipe(this.data.farming, planting, at)) return;
+      planting.ripe = true;
+      any = true;
+      this.#logger.log('farming.ripe', {
+        plot,
+        crop: planting.crop,
+        plantedAt: round2(planting.plantedAt),
+        ripeAt: round2(ripeAt(this.data.farming, planting)),
+        seenAt: round2(at),
+        watered: planting.water?.by ?? null,
+      });
+    });
+    return any;
   }
 
   /** What a station's workers have made and not had collected yet. */
@@ -215,6 +354,7 @@ export class Game {
     this.#lastSeenAt = state.lastSeenAt;
     this.#done = new Set(state.done);
     this.#work = fitCrew(this.data, state.work, this.workers);
+    this.#farm = copyFarm(state.farm);
     this.#changed();
   }
 
@@ -236,6 +376,7 @@ export class Game {
         ),
         xp: { ...this.#work.xp },
       },
+      farm: copyFarm(this.#farm),
       done: [...this.#done],
     };
   }
@@ -276,4 +417,8 @@ function fitCrew(data: GameData, work: WorkState, workers: number): WorkState {
     ),
     xp: { ...work.xp },
   };
+}
+
+function round2(value: number): number {
+  return Math.round(value * 100) / 100;
 }

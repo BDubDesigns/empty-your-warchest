@@ -2,6 +2,7 @@
 // Must not import Phaser or three.js.
 
 export * from './clock';
+export * from './farm';
 export * from './game';
 export * from './graphics';
 export * from './indexedDbSink';
