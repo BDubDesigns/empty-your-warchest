@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { releaseContext, restoreContext } from '../../app/trouble';
 import './runner.css';
 import type { Haptics } from '../../app/haptics';
+import { countOf } from '../../app/leaveGuard';
 import type { ScreenView } from '../../app/screen';
 import { Sfx } from '../../app/sfx';
 import { Rng, type Choice, type EventLogger, type Game, type LiveTuning } from '../../core';
@@ -235,6 +236,14 @@ export class RunnerView implements ScreenView {
     this.#renderer.setAnimationLoop((time) => {
       this.#tick(time);
     });
+  }
+
+  /** Back to camp mid-run is a retreat: the spears handed out are lost (the sliders' are free). */
+  leaveCost(): string | undefined {
+    const used = this.#sim.squad.spearsUsed;
+    if (!this.#started || this.#sim.done || used === 0) return undefined;
+    if (this.#deps.spearSource.value !== 'warchest') return undefined;
+    return `The ${countOf(used, 'spear')} handed out ${used === 1 ? 'is' : 'are'} lost.`;
   }
 
   stop(): void {
