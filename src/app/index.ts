@@ -73,6 +73,7 @@ const siegeView = () => import('../stations/siege/three/siege3dView');
 const runnerView = () => import('../runner/view');
 const benchScreen = () => import('../bench/view/benchScreen');
 const castlePreview = () => import('../castle/view/castlePreview');
+const characterPreview = () => import('../characters/view/characterPreview');
 
 /** Boots the game core, the debug menu, and the camp. */
 export async function startApp(): Promise<void> {
@@ -115,6 +116,9 @@ export async function startApp(): Promise<void> {
       },
       castlePreview: () => {
         void openCastlePreview();
+      },
+      characterPreview: () => {
+        void openCharacterPreview();
       },
     });
   } catch (error) {
@@ -430,6 +434,24 @@ export async function startApp(): Promise<void> {
           await switcher.aside(async () => {
             const { openCastlePreview: open } = await castlePreview();
             await open(byId('app'), { castle: game.data.castle, logger, graphics });
+          });
+        } finally {
+          if (document.body.dataset.view === 'camp') preloader.resume();
+          resolve();
+        }
+      })();
+    });
+  }
+
+  /** Debug → Character preview: as the castle preview, its code and models loaded only now. */
+  function openCharacterPreview(): Promise<void> {
+    preloader.pause();
+    return new Promise((resolve) => {
+      run(async () => {
+        try {
+          await switcher.aside(async () => {
+            const { openCharacterPreview: open } = await characterPreview();
+            await open(byId('app'), { characters: game.data.characters, logger, graphics });
           });
         } finally {
           if (document.body.dataset.view === 'camp') preloader.resume();

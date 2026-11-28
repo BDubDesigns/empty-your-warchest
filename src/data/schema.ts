@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { charactersSchema } from './characterSchema';
 
 /** lower_snake_case id used to reference one piece of data from another. */
 const id = z.string().regex(/^[a-z][a-z0-9_]*$/, 'Use a lower_snake_case id');
@@ -2083,6 +2084,7 @@ export const gameDataShape = z.object({
   tuning: tuningSchema,
   graphics: graphicsSchema,
   castle: castleSchema,
+  characters: charactersSchema,
 });
 
 export type GameDataInput = z.input<typeof gameDataShape>;
