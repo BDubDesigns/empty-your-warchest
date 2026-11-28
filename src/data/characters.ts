@@ -68,11 +68,12 @@ export const characters = {
   // pauldrons, scarf, hair): across his trunk, arms and head; his height to the armet's top; deep.
   body: [0.73, 1.81, 0.56],
   tiers: {
-    // About 17 MB of colour maps: the two guard maps, the captain's and the heads'.
+    // About 9 MB of colour maps: the two guard maps at 512 (guards are only seen from about 9 m
+    // or further), the captain's at 1024 (the follow shot sees him close), and the heads'.
     high: {
-      textureSizes: { guard: 1024, guard_dark: 1024, captain: 1024, heads: 512 },
+      textureSizes: { guard: 512, guard_dark: 512, captain: 1024, heads: 512 },
       shadows: true,
-      maxTextureMB: 18,
+      maxTextureMB: 9.5,
     },
     // About 4.3 MB, and no shadow map (as the siege's and the castle's Low).
     low: {
