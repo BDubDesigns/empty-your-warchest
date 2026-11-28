@@ -286,6 +286,7 @@ function checkReferences(data: GameData, ctx: z.RefinementCtx): void {
 
   checkSiege(data, issue);
   checkArchery(data, itemIds, issue);
+  checkFletching(data, itemIds, issue);
   // The castle holds together: its wall closes round the courtyard, its anchors are where they say.
   for (const problem of castleProblems(data.castle)) issue(problem.path, problem.message);
 
@@ -648,6 +649,62 @@ function checkArchery(
   // The trees stand behind the field, so they never hide a bird or an arrow.
   if (archery.looks.treeDistance.min <= archery.looks.distance) {
     issue(['archery', 'looks', 'treeDistance', 'min'], 'The trees must stand behind the field');
+  }
+}
+
+/**
+ * The fletcher's bench: its items exist, every arrow it makes is one the bird hunt can shoot, and
+ * the workers' recipe is a stave's worth of the same careful fletching.
+ */
+function checkFletching(
+  data: GameData,
+  itemIds: ReadonlySet<string>,
+  issue: (path: Path, message: string) => void,
+): void {
+  const fletching = data.fletching;
+  for (const key of ['stave', 'shaft', 'feather'] as const) {
+    if (!itemIds.has(fletching[key])) issue(['fletching', key], `Unknown item "${fletching[key]}"`);
+  }
+  const shootable = new Set(data.archery.arrows.map((arrow) => arrow.item));
+  const made = new Set<string>();
+  for (const kind of ['fletched', 'duster', 'bare'] as const) {
+    const path = ['fletching', 'arrows', kind, 'item'];
+    const item = fletching.arrows[kind].item;
+    if (!itemIds.has(item)) issue(path, `Unknown item "${item}"`);
+    else if (!shootable.has(item)) issue(path, `"${item}" isn't an arrow kind of the bird hunt`);
+    if (made.has(item)) issue(path, 'Twice');
+    made.add(item);
+  }
+  const { one, two, three } = fletching.stars;
+  if (one > two || two > three) issue(['fletching', 'stars'], 'More stars must not need less');
+  if (fletching.feel.tarLow >= fletching.feel.tarHigh) {
+    issue(['fletching', 'feel', 'tarLow'], 'The green band must start under where it ends');
+  }
+  const station = data.stations.find((entry) => entry.mechanic === 'fletching');
+  const recipe = data.recipes.find((entry) => entry.id === fletching.recipe);
+  if (!recipe) {
+    issue(['fletching', 'recipe'], `Unknown recipe "${fletching.recipe}"`);
+    return;
+  }
+  if (recipe.station !== station?.id) {
+    issue(['fletching', 'recipe'], 'Must be made at the fletching station');
+  }
+  // A stave's worth of careful fletching: its shafts, each with its feathers, for their XP.
+  const shafts = fletching.shaftsPerStave;
+  const count = (stacks: readonly { item: string; count: number }[], item: string) =>
+    stacks.filter((stack) => stack.item === item).reduce((sum, stack) => sum + stack.count, 0);
+  const expected = [
+    count(recipe.inputs, fletching.stave) === 1 && recipe.inputs.length === 2,
+    count(recipe.inputs, fletching.feather) === shafts * fletching.feathers.careful,
+    count(recipe.outputs, fletching.arrows.fletched.item) === shafts && recipe.outputs.length === 1,
+    recipe.xp === shafts * fletching.arrows.fletched.xp,
+  ];
+  if (!expected.every(Boolean)) {
+    issue(
+      ['fletching', 'recipe'],
+      `"${recipe.id}" must take 1 stave and ${String(shafts * fletching.feathers.careful)} ` +
+        `feathers for ${String(shafts)} fletched arrows and their XP`,
+    );
   }
 }
 

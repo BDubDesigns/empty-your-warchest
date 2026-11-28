@@ -22,6 +22,7 @@ const state: GameState = {
     command: 0,
     alchemy: 0,
     archery: 0,
+    fletching: 0,
   },
   lastSeenAt: 5_000,
   work: {
@@ -61,10 +62,11 @@ describe('save/load', () => {
         command: 0,
         alchemy: 0,
         archery: 0,
+        fletching: 0,
       },
       lastSeenAt: 10_000,
       work: {
-        crew: { tree_line: 1, workbench: 1, fire_pit: 1, hunting_stand: 0 },
+        crew: { tree_line: 1, workbench: 1, fire_pit: 1, hunting_stand: 0, fletchers_bench: 0 },
         carry: {},
         minimums: {},
         piles: {},

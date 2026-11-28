@@ -64,7 +64,7 @@ describe('workers', () => {
     expect(workerRate(data, 'war_tent')).toBeUndefined();
     expect(workerRate(data, 'hunting_stand')?.item).toBe('feather');
     expect(workerRate(data, 'hunting_stand')?.count).toBeCloseTo(3);
-    expect(workerInputs(data).sort()).toEqual(['fletched_arrow', 'log', 'stave']);
+    expect(workerInputs(data).sort()).toEqual(['feather', 'fletched_arrow', 'log', 'stave']);
   });
 });
 
@@ -112,6 +112,7 @@ describe('work', () => {
       undefined,
       'log',
       'stave',
+      undefined,
       undefined,
     ]);
   });
@@ -213,7 +214,7 @@ describe('saved workers', () => {
     const loaded = saves.load();
     expect(loaded.status).toBe('loaded');
     expect(loaded.state.work).toEqual({
-      crew: { tree_line: 1, workbench: 1, fire_pit: 0, hunting_stand: 0 },
+      crew: { tree_line: 1, workbench: 1, fire_pit: 0, hunting_stand: 0, fletchers_bench: 0 },
       carry: { fell_tree: 0.5, split_stave: 0.05 },
       minimums: { log: 10 },
       piles: {},
@@ -227,6 +228,7 @@ describe('saved workers', () => {
       workbench: 1,
       fire_pit: 1,
       hunting_stand: 0,
+      fletchers_bench: 0,
     });
   });
 });

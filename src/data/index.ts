@@ -6,6 +6,7 @@ import { brewing } from './brewing';
 import { camp } from './camp';
 import { castle } from './castle';
 import { firemaking } from './firemaking';
+import { fletching } from './fletching';
 import { graphics } from './graphics';
 import { items } from './items';
 import { levels } from './levels';
@@ -45,6 +46,7 @@ export const rawGameData: GameDataInput = {
   firemaking,
   brewing,
   archery,
+  fletching,
   siege,
   warchest,
   workers,

@@ -26,6 +26,8 @@ describe('game data', () => {
       'feather',
       'fletched_arrow',
       'bare_arrow',
+      'arrow_shaft',
+      'duster_arrow',
     ]);
     expect(data.stations.map((station) => station.id)).toEqual([
       'tree_line',
@@ -33,6 +35,7 @@ describe('game data', () => {
       'fire_pit',
       'cauldron',
       'hunting_stand',
+      'fletchers_bench',
       'war_tent',
     ]);
     expect(data.skills.map((skill) => skill.id)).toEqual([
@@ -42,6 +45,7 @@ describe('game data', () => {
       'command',
       'alchemy',
       'archery',
+      'fletching',
     ]);
   });
 
