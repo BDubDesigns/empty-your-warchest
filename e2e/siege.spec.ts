@@ -16,13 +16,24 @@ const feel = siege.feel;
 const ballista = siege.weapons.find((weapon) => weapon.id === siege.weapon);
 const volley = ballista?.aimed.start ?? 0;
 
-/** Opens the War tent with `spears` spears (and `potions` Sense potions) in the warchest. */
-async function openTent(page: Page, spears: number, potions = 0) {
+/**
+ * Opens the War tent with `spears` spears (and `potions` Sense potions) in the warchest, and the
+ * siege's feel with `tuning` changed (as Debug's live-tuning sliders leave it).
+ */
+async function openTent(
+  page: Page,
+  spears: number,
+  potions = 0,
+  tuning: Partial<typeof siege.feel> = {},
+) {
   if (!tent) throw new Error('No siege station in data');
   // Every skill in data at 0, so the save fits the data and isn't discarded.
   const xp = Object.fromEntries(skills.map((skill) => [skill.id, 0]));
   await page.addInitScript(
-    ({ count, potions, xp }) => {
+    ({ count, potions, xp, tuning }) => {
+      if (Object.keys(tuning).length > 0) {
+        localStorage.setItem('warchest.tuning.siege', JSON.stringify(tuning));
+      }
       localStorage.setItem(
         'warchest.save',
         JSON.stringify({
@@ -40,7 +51,7 @@ async function openTent(page: Page, spears: number, potions = 0) {
         }),
       );
     },
-    { count: spears, potions, xp },
+    { count: spears, potions, xp, tuning },
   );
   await page.goto('/');
   await expect(page.locator('body')).toHaveAttribute('data-view', 'camp');
@@ -249,4 +260,37 @@ test('Siege: with no spears in the warchest, it says so', async ({ page }) => {
   await expect(card).toContainText('No spears');
   await card.getByRole('button', { name: 'Back to camp' }).tap();
   await expect(page.locator('body')).toHaveAttribute('data-view', 'camp');
+});
+
+test('Siege: a spear alerts the guards, a runner rings the bell, and reinforcements end it', async ({
+  page,
+}) => {
+  test.setTimeout(150_000);
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  // Every guard hears the first spear and reacts at once; the runner is quick, and so are the
+  // reinforcements.
+  await openTent(page, 60, 0, {
+    alertSpearRadius: 500,
+    reactSeconds: 0,
+    runnerDelaySeconds: 0,
+    runnerSpeed: 40,
+    reinforcementSeconds: 6,
+  });
+  await expect(page.locator('body')).toHaveAttribute('data-siege', 'aim', { timeout: 90_000 });
+  const view = page.locator('#screen-siege3d');
+  await expect(view).toHaveAttribute('data-alarm', 'quiet');
+  await page.getByRole('button', { name: 'Fire' }).tap();
+  // The bell rings: the time left until reinforcements, at the top.
+  await expect(view).toHaveAttribute('data-alarm', 'rang', { timeout: 60_000 });
+  const timer = page.getByRole('timer', { name: 'Reinforcements' });
+  await expect(timer).toBeVisible();
+  await expect(timer).toHaveText(/^Reinforcements in 0:0\d$/);
+  // They arrive: the round is lost, and the card says why it got its stars.
+  const card = page.locator('#screen-siege3d .sg-card:not(.sg-confirm)');
+  await expect(card).toBeVisible({ timeout: 60_000 });
+  await expect(card).toContainText('Reinforcements arrived');
+  await expect(card).toContainText(/Nothing done: no stars|objectives: 1 star/);
+  await expect(card).toContainText('The bell rang');
+  expect(errors).toEqual([]);
 });
