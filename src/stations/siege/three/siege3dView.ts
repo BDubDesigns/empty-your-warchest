@@ -224,6 +224,8 @@ export class Siege3DView implements ScreenView {
   readonly #waiting = new THREE.Scene();
   /** On screen (between `start` and `stop`). */
   #started = false;
+  /** The castle's first build has begun (it begins when the siege first opens). */
+  #buildStarted = false;
   /** The tier the castle was built for (its textures and trees); its shadows follow the tier's. */
   #castleTier: GraphicsTier;
   #sun: THREE.DirectionalLight | undefined;
@@ -315,7 +317,6 @@ export class Siege3DView implements ScreenView {
     physics: Physics,
     hud: WarchestHud,
     skins: Skins,
-    castle: Promise<CastleScene>,
     renderer: THREE.WebGLRenderer,
     tier: GraphicsTier,
   ) {
@@ -350,7 +351,6 @@ export class Siege3DView implements ScreenView {
     this.#ghost.frustumCulled = false;
     this.#puffTexture = puffTexture();
     this.#ui = this.buildUi();
-    void this.#arrive(castle, tier);
     this.#sfx.load({ ...SOUNDS, whoosh: whooshUrl() });
     this.#listen();
     deps.graphics.onTier(({ tier: next }) => {
@@ -366,8 +366,6 @@ export class Siege3DView implements ScreenView {
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     deps.graphics.noteGpu(gpuOf(renderer.getContext()).gpu);
     const tier = deps.graphics.tier;
-    // The castle is built while the siege opens: it shows the sky (and says so) until it's there.
-    const castle = buildCastleScene(deps.game.data.castle, tier, ANISOTROPY);
     const [physics, hud, skins] = await Promise.all([
       loadPhysics(),
       WarchestHud.create(element, {
@@ -378,7 +376,7 @@ export class Siege3DView implements ScreenView {
       }),
       loadSkins(deps.game.data.siege.skins),
     ]);
-    return new Siege3DView(element, deps, physics, hud, skins, castle, renderer, tier);
+    return new Siege3DView(element, deps, physics, hud, skins, renderer, tier);
   }
 
   /** Loads the physics engine (and starts its wasm), the models and the castle's kit ahead of time. */
@@ -403,8 +401,18 @@ export class Siege3DView implements ScreenView {
     this.#renderer.setAnimationLoop((time) => {
       this.#loop(time);
     });
-    // Still being built: the round starts once it's there.
-    if (!this.#castle) return;
+    // Not built yet: it's built once the siege is on screen (it shows the sky, and says so, till
+    // then), and the round starts once it's there.
+    if (!this.#castle) {
+      if (!this.#buildStarted) {
+        this.#buildStarted = true;
+        const tier = this.#deps.graphics.tier;
+        window.setTimeout(() => {
+          void this.#arrive(buildCastleScene(this.#deps.game.data.castle, tier, ANISOTROPY), tier);
+        }, 0);
+      }
+      return;
+    }
     // Built for another tier (the phone was moved to Low as it played): build it again first.
     if (this.#deps.graphics.tier !== this.#castleTier) this.#rebuild(this.#deps.graphics.tier);
     else this.#startRound();
