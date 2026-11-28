@@ -105,7 +105,7 @@ export const siege = {
     // past it.
     blobShadows: { opacity: 0.45, spread: 1.3, lift: 0.04, fadeHeight: 1.5 },
     // The captain's gold, on every live objective's targets.
-    objective: { color: '#ffc64a', glow: 0.45, pulse: 0.5, pulseSeconds: 1.4 },
+    objective: { color: '#ffc64a', glow: 0.7, pulse: 0.5, pulseSeconds: 1.4 },
     tiers: {
       high: {
         shadows: 'map',
@@ -186,7 +186,7 @@ export const siege = {
     kickTilt: 1.5,
     kickSeconds: 0.22,
     senseSeconds: 10,
-    markSize: 1.2,
+    markSize: 1.6,
     followBack: 9,
     followRise: 2.2,
     followInSeconds: 0.18,

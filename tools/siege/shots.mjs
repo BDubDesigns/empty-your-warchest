@@ -2,11 +2,13 @@
 // starts and turned all the way left and right, the follow shot behind a spear, the spear rack's
 // gold, a Sense potion's outlines, a wrecked wall, a collapsed tower, and the Low tier. Prints
 // what each view costs to draw (draw calls, triangles, texture memory).
-// usage: node tools/siege/shots.mjs <the game's URL, e.g. http://localhost:5173/> <out dir>
+// usage: node tools/siege/shots.mjs <the game's URL, e.g. http://localhost:5173/> <out dir> [parts]
+// `parts`: some of castle,tower,low (all three by default; drawn in software, each takes minutes).
 import { mkdir, readFile } from 'node:fs/promises';
 import { chromium, devices } from '@playwright/test';
 
-const [url, out] = process.argv.slice(2);
+const [url, out, parts] = process.argv.slice(2);
+const want = (part) => !parts || parts.split(',').includes(part);
 if (!url || !out) throw new Error('usage: node tools/siege/shots.mjs <url> <out dir>');
 await mkdir(out, { recursive: true });
 
@@ -141,84 +143,90 @@ async function fire(page, mode = 'Aimed') {
 
 const slug = (name) => name.toLowerCase().replace(/\W+/g, '-');
 
-const high = await openTent('high');
-// Each vantage point as it starts, then turned all the way left and all the way right.
-for (const name of ['Hill', 'Low ground', 'Siege tower']) {
-  await vantage(high, name);
-  await shot(high, `high-${slug(name)}`);
-  await drag(high, -1400, 0);
-  await high.waitForTimeout(400);
-  await shot(high, `high-${slug(name)}-left`);
-  await drag(high, 2800, 0);
-  await high.waitForTimeout(400);
-  await shot(high, `high-${slug(name)}-right`);
-  await drag(high, -1400, 0);
-}
-// The spear rack's gold, from the siege tower (or what its line says, if it can't be seen there).
-await vantage(high, 'Siege tower');
-await aimAt(high, 'rack');
-await shot(high, 'high-rack');
-// A Sense potion: every guard's outline in red, and the gold marks, through the walls.
-await high.getByRole('button', { name: /Sense/ }).click();
-await high.waitForTimeout(800);
-await shot(high, 'high-sense');
-// The follow shot: an aimed volley at the captain (or a guard) from the hill, the camera behind
-// its lead spear.
-await vantage(high, 'Hill');
-(await aimAt(high, 'captain')) || (await aimAt(high, 'guard'));
-await shot(high, 'high-aimed');
-await fire(high);
-await high.locator('#screen-siege3d[data-camera=follow]').waitFor({ timeout: 30_000 });
-for (let index = 0; index < 4; index++) {
-  await high.waitForTimeout(250);
-  await shot(high, `high-follow-${String(index)}`);
-}
-await settle(high, false);
-// A wrecked wall: volleys low on the wall under a guard on the battlement, then a barrage.
-if (await aimAt(high, 'guard', 85)) {
+if (want('castle')) {
+  const high = await openTent('high');
+  // Each vantage point as it starts, then turned all the way left and all the way right.
+  for (const name of ['Hill', 'Low ground', 'Siege tower']) {
+    await vantage(high, name);
+    await shot(high, `high-${slug(name)}`);
+    await drag(high, -1400, 0);
+    await high.waitForTimeout(400);
+    await shot(high, `high-${slug(name)}-left`);
+    await drag(high, 2800, 0);
+    await high.waitForTimeout(400);
+    await shot(high, `high-${slug(name)}-right`);
+    await drag(high, -1400, 0);
+  }
+  // The spear rack's gold, from the siege tower (or what its line says, if it can't be seen there).
+  await vantage(high, 'Siege tower');
+  await aimAt(high, 'rack');
+  await shot(high, 'high-rack');
+  // A Sense potion: every guard's outline in red, and the gold marks, through the walls.
+  await high.getByRole('button', { name: /Sense/ }).click();
+  await high.waitForTimeout(800);
+  await shot(high, 'high-sense');
+  // The follow shot: an aimed volley at the captain (or a guard) from the hill, the camera behind
+  // its lead spear.
+  await vantage(high, 'Hill');
+  (await aimAt(high, 'captain')) || (await aimAt(high, 'guard'));
+  await shot(high, 'high-aimed');
   await fire(high);
-  await settle(high);
-  await fire(high);
-  await high.waitForTimeout(600);
-  await shot(high, 'high-wall-falling');
-  await settle(high);
-  await fire(high, 'Barrage');
-  await high.waitForTimeout(5000);
-  await settle(high);
-  await shot(high, 'high-wall-wrecked');
+  await high.locator('#screen-siege3d[data-camera=follow]').waitFor({ timeout: 30_000 });
+  for (let index = 0; index < 4; index++) {
+    await high.waitForTimeout(250);
+    await shot(high, `high-follow-${String(index)}`);
+  }
+  await settle(high, false);
+  // A wrecked wall: volleys low on the wall under a guard on the battlement, then a barrage.
+  if (await aimAt(high, 'guard', 85)) {
+    await fire(high);
+    await settle(high);
+    await fire(high);
+    await high.waitForTimeout(600);
+    await shot(high, 'high-wall-falling');
+    await settle(high);
+    await fire(high, 'Barrage');
+    await high.waitForTimeout(5000);
+    await settle(high);
+    await shot(high, 'high-wall-wrecked');
+  }
+  await high.close();
 }
-await high.close();
 
 // A collapsed tower: barrages low on the south-west tower from the low ground, on a fresh round.
-const tower = await openTent('high');
-await vantage(tower, 'Low ground');
-await aimAt(tower, 'tower:south_west');
-await shot(tower, 'high-tower-before');
-for (let volley = 0; volley < 3; volley++) {
-  await fire(tower, 'Barrage');
-  await tower.waitForTimeout(900);
-  await shot(tower, `high-tower-falling-${String(volley)}`);
-  await tower.waitForTimeout(4000);
-  await settle(tower);
+if (want('tower')) {
+  const tower = await openTent('high');
+  await vantage(tower, 'Low ground');
+  await aimAt(tower, 'tower:south_west');
+  await shot(tower, 'high-tower-before');
+  for (let volley = 0; volley < 3; volley++) {
+    await fire(tower, 'Barrage');
+    await tower.waitForTimeout(900);
+    await shot(tower, `high-tower-falling-${String(volley)}`);
+    await tower.waitForTimeout(4000);
+    await settle(tower);
+  }
+  await shot(tower, 'high-tower-collapsed');
+  await tower.close();
 }
-await shot(tower, 'high-tower-collapsed');
-await tower.close();
 
-const low = await openTent('low');
-await vantage(low, 'Low ground');
-await shot(low, 'low-low-ground');
-await drag(low, -1400, 0);
-await low.waitForTimeout(400);
-await shot(low, 'low-low-ground-left');
-await vantage(low, 'Hill');
-await shot(low, 'low-hill');
-await aimAt(low, 'tower:south_west');
-await fire(low, 'Barrage');
-await low.locator('#screen-siege3d[data-camera=follow]').waitFor({ timeout: 30_000 });
-await low.waitForTimeout(500);
-await shot(low, 'low-follow');
-await low.waitForTimeout(5000);
-await settle(low);
-await shot(low, 'low-hill-wrecked');
-await low.close();
+if (want('low')) {
+  const low = await openTent('low');
+  await vantage(low, 'Low ground');
+  await shot(low, 'low-low-ground');
+  await drag(low, -1400, 0);
+  await low.waitForTimeout(400);
+  await shot(low, 'low-low-ground-left');
+  await vantage(low, 'Hill');
+  await shot(low, 'low-hill');
+  await aimAt(low, 'tower:south_west');
+  await fire(low, 'Barrage');
+  await low.locator('#screen-siege3d[data-camera=follow]').waitFor({ timeout: 30_000 });
+  await low.waitForTimeout(500);
+  await shot(low, 'low-follow');
+  await low.waitForTimeout(5000);
+  await settle(low);
+  await shot(low, 'low-hill-wrecked');
+  await low.close();
+}
 await browser.close();

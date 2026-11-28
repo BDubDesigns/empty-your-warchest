@@ -557,6 +557,17 @@ export async function buildCastleScene(
             tile: 1,
           }),
         );
+        // Dark over the gap behind its walls too, where it shows: on its top (once the roof's
+        // gone) and on each face it shares with a neighbour (once that's gone).
+        const skin = 0.03;
+        const lid = (size: [number, number, number], at: [number, number, number]) => {
+          target.add(own.dark, block(size, placed(at, 0), { tile: 1 }));
+        };
+        lid([lengthX - skin * 2, skin, lengthZ - skin * 2], [bx, by + tall - skin, bz]);
+        if (dx0 === x0) lid([skin, tall, lengthZ - skin * 2], [x0 + skin / 2, by, bz]);
+        if (dx1 === x1) lid([skin, tall, lengthZ - skin * 2], [x1 - skin / 2, by, bz]);
+        if (dz0 === z0) lid([lengthX - skin * 2, tall, skin], [bx, by, z0 + skin / 2]);
+        if (dz1 === z1) lid([lengthX - skin * 2, tall, skin], [bx, by, z1 - skin / 2]);
         const last = by + tall >= building.height - eps;
         for (const [qx, qz] of corners) {
           if (qx < x0 - eps || qx > x1 + eps || qz < z0 - eps || qz > z1 + eps) continue;

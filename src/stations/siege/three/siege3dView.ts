@@ -118,7 +118,7 @@ const WHERE_TEXT: Record<Where, string> = {
   right: ' ▶ turn right',
   up: ' ▲ look up',
   down: ' ▼ look down',
-  hidden: ' · not visible from here',
+  hidden: ' · out of sight',
 };
 const COLORS = {
   sense: 0xff2a2a,
