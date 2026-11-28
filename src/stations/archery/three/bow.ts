@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { arrowModel } from '../../../app/warchestHud';
+import { arrowModel, dusterModel } from '../../../app/warchestHud';
 
 /**
  * The wooden starter bow, built in code, as you hold it at the bottom of the screen: lying in the
@@ -18,15 +18,18 @@ const LIMB_RADIUS = 0.017;
 const STRING_RADIUS = 0.0035;
 const ARROW_LENGTH = 0.9;
 
+/** The kinds of arrow the bow can have on its string. */
+export type NockedArrow = 'fletched' | 'bare' | 'duster';
+
 export class Bow {
   readonly group = new THREE.Group();
   readonly #size: number;
   readonly #limbs: THREE.Mesh;
   readonly #wood = new THREE.MeshLambertMaterial({ color: 0x8a5a2e, flatShading: true });
   readonly #strings: [THREE.Mesh, THREE.Mesh];
-  readonly #arrows: Record<'fletched' | 'bare', THREE.Object3D>;
+  readonly #arrows: Record<NockedArrow, THREE.Object3D>;
   #draw = -1;
-  #nocked: 'fletched' | 'bare' | undefined;
+  #nocked: NockedArrow | undefined;
 
   constructor(size: number) {
     this.#size = size;
@@ -52,9 +55,9 @@ export class Bow {
       new THREE.Mesh(stringGeometry, stringMaterial),
       new THREE.Mesh(stringGeometry, stringMaterial),
     ];
-    const nocked = (fletched: boolean) => {
+    const nocked = (kind: NockedArrow) => {
       const arrow = new THREE.Group();
-      const model = arrowModel(fletched);
+      const model = kind === 'duster' ? dusterModel(14) : arrowModel(kind === 'fletched');
       // Pointing up the bow (+y), its back end at the group's origin (the nock).
       model.rotation.x = -Math.PI / 2;
       model.position.y = 0.44;
@@ -63,19 +66,18 @@ export class Bow {
       arrow.visible = false;
       return arrow;
     };
-    this.#arrows = { fletched: nocked(true), bare: nocked(false) };
-    this.group.add(this.#limbs, grip, ...this.#strings, this.#arrows.fletched, this.#arrows.bare);
+    this.#arrows = { fletched: nocked('fletched'), bare: nocked('bare'), duster: nocked('duster') };
+    this.group.add(this.#limbs, grip, ...this.#strings, ...Object.values(this.#arrows));
     this.setDraw(0);
   }
 
   /** Which arrow is on the string, if any. */
-  setArrow(kind: 'fletched' | 'bare' | undefined): void {
+  setArrow(kind: NockedArrow | undefined): void {
     this.#nocked = kind;
-    this.#arrows.fletched.visible = kind === 'fletched';
-    this.#arrows.bare.visible = kind === 'bare';
+    for (const [name, arrow] of Object.entries(this.#arrows)) arrow.visible = name === kind;
   }
 
-  get nocked(): 'fletched' | 'bare' | undefined {
+  get nocked(): NockedArrow | undefined {
     return this.#nocked;
   }
 

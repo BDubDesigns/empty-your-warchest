@@ -19,6 +19,7 @@ import type {
   ArcheryFeel,
   BrewingFeel,
   FiremakingFeel,
+  FletchingFeel,
   RunnerFeel,
   SiegeFeel,
   SplittingFeel,
@@ -38,6 +39,7 @@ import { brewingFeel } from '../stations/brewing/feel';
 import { checkBrews } from '../stations/brewing/logic/brew';
 import { checkForts } from '../stations/siege/logic/fairness';
 import { firemakingFeel } from '../stations/firemaking/feel';
+import { fletchingFeel } from '../stations/fletching/feel';
 import {
   ghostChoice,
   siegeFeel,
@@ -69,6 +71,7 @@ export interface Booted {
     firemaking: LiveTuning<FiremakingFeel>;
     brewing: LiveTuning<BrewingFeel>;
     archery: LiveTuning<ArcheryFeel>;
+    fletching: LiveTuning<FletchingFeel>;
     siege: LiveTuning<SiegeFeel>;
     runner: LiveTuning<RunnerFeel>;
   };
@@ -160,6 +163,7 @@ export async function bootGame(buildLabel: string): Promise<Booted> {
     firemaking: firemakingFeel(data.firemaking.feel, localStorageStore()),
     brewing: brewingFeel(data.brewing.feel, localStorageStore()),
     archery: archeryFeel(data.archery.feel, localStorageStore()),
+    fletching: fletchingFeel(data.fletching.feel, localStorageStore()),
     siege: siegeFeel(data.siege.feel, localStorageStore()),
     runner: runnerFeel(data.runner.feel, localStorageStore()),
   };

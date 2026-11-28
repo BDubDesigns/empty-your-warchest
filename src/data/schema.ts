@@ -1815,9 +1815,10 @@ const fletchingTierLookSchema = z.object({
   /** The most device pixels drawn per CSS pixel, and whether the sun casts shadows. */
   pixelRatio: positive,
   shadows: z.boolean(),
-  /** Feathers stuck on a duster, and heaped in the bucket. */
+  /** Feathers stuck on a duster, and heaped in the bucket; trees along the forest edge. */
   dusterFeathers: z.number().int().nonnegative(),
   bucketFeathers: z.number().int().nonnegative(),
+  trees: z.number().int().nonnegative(),
   /** The textured grass round the bench (else plain green). */
   grass: z.boolean(),
 });
@@ -1855,17 +1856,23 @@ const fletchingSchema = z.object({
   starBonus: z.object({ two: nonNegative, three: nonNegative }),
   /**
    * Looks. The camera fits `frameWidth` (metres) across the screen, looking down `pitch` degrees
-   * from `distance` away. The shaft is `shaftLength` long and `shaftRadius` round, and a full tar
-   * level coats `tarLength` of it from the back end. Feathers are `featherLength` long.
+   * from `distance` away, and moves in to `closeDistance` from the shaft's back end while the
+   * feathers go on. The shaft is `shaftLength` long and `shaftRadius` round, and a full tar level
+   * coats `tarLength` of it from the back end. Feathers are `featherLength` long. Trees stand
+   * `treeDistance` away, `treeHeight` tall, placed from `seed`.
    */
   looks: z.object({
     frameWidth: positive,
     pitch: z.number().min(0).max(80),
     distance: positive,
+    closeDistance: positive,
     shaftLength: positive,
     shaftRadius: positive,
     tarLength: positive,
     featherLength: positive,
+    treeDistance: rangeSchema,
+    treeHeight: rangeSchema,
+    seed: z.number().int(),
     tiers: z.object({ high: fletchingTierLookSchema, low: fletchingTierLookSchema }),
   }),
   feel: fletchingFeelSchema,

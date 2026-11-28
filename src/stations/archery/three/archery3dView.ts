@@ -8,7 +8,7 @@ import type { ScreenView } from '../../../app/screen';
 import { Sfx } from '../../../app/sfx';
 import { SkillBar, type XpDeposit } from '../../../app/skillBar';
 import { releaseContext, restoreContext } from '../../../app/trouble';
-import { WarchestHud, arrowModel, type ScreenPoint } from '../../../app/warchestHud';
+import { WarchestHud, arrowModel, dusterModel, type ScreenPoint } from '../../../app/warchestHud';
 import { textureBytes } from '../../../bench/logic/stats';
 import type {
   EventLogger,
@@ -29,7 +29,7 @@ import {
   type ShotArrow,
 } from '../logic/round';
 import { BirdKit, flap, type BirdModel } from './birdModel';
-import { Bow } from './bow';
+import { Bow, type NockedArrow } from './bow';
 import { Clouds, SKY, TreeLine, skyTexture } from './scenery';
 
 export interface Archery3DDeps {
@@ -134,7 +134,7 @@ export class Archery3DView implements ScreenView {
   readonly #trees: TreeLine;
   readonly #preview: THREE.InstancedMesh;
   readonly #feathers: THREE.InstancedMesh;
-  readonly #arrowModels: Record<'fletched' | 'bare', THREE.Object3D>;
+  readonly #arrowModels: Record<NockedArrow, THREE.Object3D>;
   #tier: GraphicsTier;
   #look: Archery['looks']['tiers']['high'];
   #round: ArcheryRound | undefined;
@@ -226,7 +226,11 @@ export class Archery3DView implements ScreenView {
 
     this.#bow = new Bow(looks.bowSize);
     this.#bowSpot.add(this.#bow.group);
-    this.#arrowModels = { fletched: arrowModel(true), bare: arrowModel(false) };
+    this.#arrowModels = {
+      fletched: arrowModel(true),
+      bare: arrowModel(false),
+      duster: dusterModel(14),
+    };
 
     this.#preview = new THREE.InstancedMesh(
       new THREE.CircleGeometry(0.14, 8),
@@ -373,11 +377,11 @@ export class Archery3DView implements ScreenView {
     const feel = this.#deps.feel.values;
     const { haptics } = this.#deps;
     if (event.type === 'shot') {
-      const fletched =
-        this.#deps.game.data.items.find((item) => item.id === event.arrow.flight.kind.item)
-          ?.look !== 'shaft';
+      const look = this.#deps.game.data.items.find(
+        (item) => item.id === event.arrow.flight.kind.item,
+      )?.look;
       const mesh = new THREE.Group();
-      const model = this.#arrowModels[fletched ? 'fletched' : 'bare'].clone(true);
+      const model = this.#arrowModels[nockedFor(look)].clone(true);
       // Along +x, its point at the group's origin (where the rules have the arrow).
       model.rotation.y = Math.PI / 2;
       model.position.x = -0.55;
@@ -648,7 +652,7 @@ export class Archery3DView implements ScreenView {
       ? this.#deps.game.data.items.find((item) => item.id === quiver)?.look
       : undefined;
     const has = quiver !== undefined && this.#deps.game.inventory.count(quiver) > 0;
-    this.#bow.setArrow(ready && has ? (look === 'shaft' ? 'bare' : 'fletched') : undefined);
+    this.#bow.setArrow(ready && has ? nockedFor(look) : undefined);
     // The aim preview: the first part of the arrow's plain path.
     const kind = quiver && round ? round.kind(quiver) : undefined;
     const feel = this.#deps.feel.values;
@@ -1001,7 +1005,7 @@ export class Archery3DView implements ScreenView {
       (sum, arrow) => sum + game.inventory.count(arrow.item),
       0,
     );
-    if (left === 0) lines.push('Out of arrows: Fletching will make more soon');
+    if (left === 0) lines.push("Out of arrows: make more at the Fletcher's bench");
     ui.cardTitle.textContent = `${String(result.points)} / ${String(result.par)} points`;
     ui.cardText.textContent = lines.join('\n');
     ui.next.hidden = left === 0;
@@ -1021,10 +1025,14 @@ export class Archery3DView implements ScreenView {
     const ui = this.#ui;
     ui.cardStars.replaceChildren();
     ui.cardTitle.textContent = 'Out of arrows';
-    ui.cardText.textContent =
-      "The quiver's empty. Arrows will come from the Fletching bench (coming soon).";
+    ui.cardText.textContent = "The quiver's empty. Make more at the Fletcher's bench, next door.";
     ui.next.hidden = true;
     ui.card.hidden = false;
     this.#cardShown = true;
   }
+}
+
+/** The arrow model for an arrow item's look: a duster, a bare shaft, or fletched. */
+function nockedFor(look: string | undefined): NockedArrow {
+  return look === 'duster' ? 'duster' : look === 'shaft' ? 'bare' : 'fletched';
 }

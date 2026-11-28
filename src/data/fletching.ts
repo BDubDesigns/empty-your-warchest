@@ -31,24 +31,38 @@ export const fletching = {
   starBonus: { two: 0, three: 0.5 },
   looks: {
     // The camera fits a box `frameWidth` across (metres) to the screen's width, looking down
-    // `pitch` degrees at the bench from `distance` away.
-    frameWidth: 0.82,
-    pitch: 24,
-    distance: 1.5,
+    // `pitch` degrees at the bench from `distance` away. While the feathers go on it moves in to
+    // `closeDistance` from the shaft's back end, so the marks read on a phone.
+    frameWidth: 0.52,
+    pitch: 26,
+    distance: 1.2,
+    closeDistance: 0.36,
     // The shaft: `shaftLength` long, `shaftRadius` round (thicker than a real one, to read on a
     // phone). A full tar level (1) coats `tarLength` of it, from its back end up.
-    shaftLength: 0.62,
+    shaftLength: 0.5,
     shaftRadius: 0.012,
     tarLength: 0.2,
     // Feathers: `featherLength` long; the duster's feathers poke out at every angle.
     featherLength: 0.13,
+    // The forest edge behind the bench, as at the hunting stand next door.
+    treeDistance: { min: 9, max: 18 },
+    treeHeight: { min: 4, max: 7 },
+    seed: 11,
     tiers: {
-      high: { pixelRatio: 2, shadows: true, dusterFeathers: 34, bucketFeathers: 46, grass: true },
+      high: {
+        pixelRatio: 2,
+        shadows: true,
+        dusterFeathers: 34,
+        bucketFeathers: 46,
+        trees: 22,
+        grass: true,
+      },
       low: {
         pixelRatio: 1.5,
         shadows: false,
         dusterFeathers: 20,
         bucketFeathers: 22,
+        trees: 10,
         grass: false,
       },
     },
