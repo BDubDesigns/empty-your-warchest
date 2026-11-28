@@ -160,9 +160,10 @@
   background: #6a4a32;
 }
 
+/* The one being poured on glows (a scale here would scale its placement too). */
 .fa-gauge-pouring {
-  transform-origin: bottom;
-  scale: 1.15;
+  border-color: #fff;
+  box-shadow: 0 0 10px rgb(143 211 255 / 0.95);
 }
 
 .fa-hint {
