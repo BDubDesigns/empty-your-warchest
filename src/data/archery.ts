@@ -131,8 +131,9 @@ export const archery = {
   ],
   aim: { min: 8, max: 172 },
   arrowSeconds: 6,
-  // Birds hit per arrow, and at least 3 hits for any star (Brandon, Nov 27).
-  stars: { minHits: 3, one: 0.25, two: 0.4, three: 0.6 },
+  // Points (a hit or a scare, each 1) against par, every bird that flew by (Brandon, Nov 27):
+  // 3 stars at par, 2 from 70% of it, 1 from 40%.
+  stars: { one: 0.4, two: 0.7 },
   // 3 stars gives bonus seeds (the Archery page): half as many again.
   starBonus: { two: 0, three: 0.5 },
   looks: {
@@ -157,7 +158,8 @@ export const archery = {
     arrowSpeed: 1,
     birdSpeed: 1,
     hitRadius: 1,
-    nearMiss: 2.6,
+    // The graze ring: just outside the hit radius (it was a flat 2.6, six times a hit's area).
+    graze: 0.6,
     fullDrawPx: 150,
     minDraw: 0.15,
     previewSeconds: 0.3,

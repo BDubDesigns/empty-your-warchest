@@ -1596,13 +1596,14 @@ export const archeryFeelSchema = z.object({
    * The flight, fixed when a round starts (so sliders apply from the next round): gravity on the
    * arrows (field units a second, every second), every arrow kind's speed and every bird's speed
    * multiplied by `arrowSpeed` and `birdSpeed`, and every bird's hit radius by `hitRadius`. An
-   * arrow passing within `nearMiss` field units of a bird's middle without hitting it scares it.
+   * arrow that grazes a bird, passing through the thin ring `graze` field units wide just outside
+   * its hit radius, scares it (a skill shot: the ring is small, so missing on purpose isn't easy).
    */
   gravity: positive,
   arrowSpeed: positive,
   birdSpeed: positive,
   hitRadius: positive,
-  nearMiss: positive,
+  graze: positive,
   /**
    * The draw: dragging back `fullDrawPx` (CSS px) is a full draw, the bow's full power; less is
    * that share of it. A release under `minDraw` of a full draw lets the string down: no shot.
@@ -1742,10 +1743,12 @@ const archerySchema = z.object({
   /** An arrow still flying after this long (seconds) is lost. */
   arrowSeconds: positive,
   /**
-   * Stars from birds hit per arrow shot (`one`, `two`, `three` at least that share), and never
-   * any with fewer than `minHits` hits.
+   * Stars from points against par (Brandon, Nov 27): a hit is a point and a scare is a point, so
+   * a bird is worth 2 at most (graze it, then hit it as it flees). Par is every bird that flew by
+   * in the round, shot at or not. 3 stars at par or more, 2 from `two` of par, 1 from `one` of
+   * it, else none.
    */
-  stars: z.object({ minHits: positiveInt, one: fraction, two: fraction, three: fraction }),
+  stars: z.object({ one: fraction, two: fraction }),
   /** Bonus seeds for 2 and 3 stars, a share of the seeds the round earned, as at every station. */
   starBonus: z.object({ two: nonNegative, three: nonNegative }),
   /**

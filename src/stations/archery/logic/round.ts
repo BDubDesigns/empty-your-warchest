@@ -39,8 +39,9 @@ export interface ShotArrow {
   /** The bird it hit, and whether it broke (else it comes back). */
   bird: LiveBird | undefined;
   broke: boolean;
-  /** Birds it scared on the way past. */
+  /** Birds it grazed (and so scared) on the way past, and how far outside each one's hit radius. */
   scared: LiveBird[];
+  grazes: number[];
   /** The nearest it has come to each bird so far, by the bird's number. */
   readonly passing: Map<number, number>;
 }
@@ -52,6 +53,9 @@ export interface ArcheryResult {
   shots: number;
   hits: number;
   scares: number;
+  /** A point a hit and a point a scare, against par: every bird that flew by. */
+  points: number;
+  par: number;
   stars: number;
   /** Seeds banked (hits and scares), by item, and the bonus the stars added. */
   seeds: Stack[];
@@ -99,7 +103,7 @@ const MAX_STEPS = 30;
 
 /**
  * One round of the bird hunt, without any rendering: flocks cross the field on seeded paths, and
- * arrows shot from the bow fly in arcs; a hit downs a bird, a near miss scares one. Runs in fixed
+ * arrows shot from the bow fly in arcs; a hit downs a bird, a graze scares one. Runs in fixed
  * steps, so the same seed and the same shots at the same times play out the same. A view feeds it
  * shots and time, and draws it.
  */
@@ -153,6 +157,8 @@ export class ArcheryRound {
       seed: hooks.seed,
       level: hooks.level,
       birds: kinds,
+      // Par: every bird that flies by.
+      par: this.birds.length,
       flocks: rules.round.flockAt.map(
         (_, flock) => this.birds.filter((bird) => bird.plan.flock === flock).length,
       ),
@@ -179,6 +185,16 @@ export class ArcheryRound {
 
   get flying(): boolean {
     return this.arrows.some((arrow) => arrow.state === 'flying');
+  }
+
+  /** Points so far: a hit or a scare is one each. */
+  get points(): number {
+    return this.#hits + this.#scares;
+  }
+
+  /** Par: every bird that flies by in the round, shot at or not. */
+  get par(): number {
+    return this.birds.length;
   }
 
   /** Seconds left in the round. */
@@ -217,6 +233,7 @@ export class ArcheryRound {
       bird: undefined,
       broke: false,
       scared: [],
+      grazes: [],
       passing: new Map(),
     };
     this.arrows.push(arrow);
@@ -298,11 +315,12 @@ export class ArcheryRound {
         hit = bird;
         nearest = distance;
       }
-      // A near miss: it came within reach of the bird and is now going away from it.
+      // A graze: it passed through the thin ring just outside the bird's hit radius, and is now
+      // going away from it.
       const passing = arrow.passing.get(bird.plan.index) ?? Infinity;
       if (distance < passing) arrow.passing.set(bird.plan.index, distance);
-      else if (passing <= this.feel.nearMiss && bird.scaredAt === undefined) {
-        this.#scare(arrow, bird);
+      else if (passing <= bird.radius + this.feel.graze && bird.scaredAt === undefined) {
+        this.#scare(arrow, bird, passing - bird.radius);
       }
     }
     if (hit) {
@@ -349,11 +367,12 @@ export class ArcheryRound {
     this.#hooks.onEvent?.({ type: 'hit', arrow, bird, drops, xp: species.xp });
   }
 
-  #scare(arrow: ShotArrow, bird: LiveBird): void {
+  #scare(arrow: ShotArrow, bird: LiveBird, graze: number): void {
     const species = bird.plan.bird;
     bird.scaredAt = this.now;
     bird.speed *= this.rules.scare.speedUp;
     arrow.scared.push(bird);
+    arrow.grazes.push(graze);
     const drops: Stack[] = [{ item: species.seed, count: this.rules.scare.seeds }];
     this.#scares += 1;
     this.#seeds.set(species.seed, (this.#seeds.get(species.seed) ?? 0) + this.rules.scare.seeds);
@@ -374,7 +393,7 @@ export class ArcheryRound {
   #finish(reason: ArcheryEndReason): void {
     this.phase = 'done';
     const shots = this.arrows.length;
-    const stars = starsFor(this.rules.stars, this.#hits, shots);
+    const stars = starsFor(this.rules.stars, this.points, this.par);
     const seeds = [...this.#seeds].map(([item, count]) => ({ item, count }));
     const bonus = seeds
       .map((stack) => ({
@@ -387,6 +406,8 @@ export class ArcheryRound {
       shots,
       hits: this.#hits,
       scares: this.#scares,
+      points: this.points,
+      par: this.par,
       stars,
       seeds,
       bonus,
@@ -405,8 +426,6 @@ export class ArcheryRound {
       level: this.#hooks.level,
       ...result,
       seconds: Math.round(this.now * 100) / 100,
-      accuracy: shots > 0 ? Math.round((this.#hits / shots) * 100) / 100 : 0,
-      birdsIn: this.birds.length,
       arrowsLeft: this.arrowsLeft,
     });
     this.#hooks.onEvent?.({ type: 'end', ...result });
@@ -427,6 +446,8 @@ export class ArcheryRound {
       species: arrow.bird?.plan.bird.id ?? arrow.closestBird ?? null,
       closest: Number.isFinite(arrow.closest) ? round2(arrow.closest) : null,
       scared: arrow.scared.map((bird) => bird.plan.bird.id),
+      // How far outside each grazed bird's hit radius it passed.
+      graze: arrow.grazes.map(round2),
       ...(arrow.state === 'hit' && { broke: arrow.broke }),
       seconds: round2(arrow.flight.age),
       drift: round2(arrow.flight.drift),
@@ -435,15 +456,13 @@ export class ArcheryRound {
 }
 
 /**
- * Stars from birds hit per arrow shot: none under `minHits` hits, else 3, 2 or 1 at those shares
- * (0 under the one-star share).
+ * Stars from points against par: 3 at par or more, 2 and 1 from those shares of it, else none.
  */
-export function starsFor(rules: Archery['stars'], hits: number, shots: number): number {
-  if (hits < rules.minHits || shots <= 0) return 0;
-  const accuracy = hits / shots;
-  if (accuracy >= rules.three) return 3;
-  if (accuracy >= rules.two) return 2;
-  return accuracy >= rules.one ? 1 : 0;
+export function starsFor(rules: Archery['stars'], points: number, par: number): number {
+  if (par <= 0) return 0;
+  if (points >= par) return 3;
+  if (points >= rules.two * par) return 2;
+  return points >= rules.one * par ? 1 : 0;
 }
 
 /** The best arrow kind there's any of (the data lists them best first), for the quiver. */

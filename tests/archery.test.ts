@@ -45,6 +45,20 @@ function aimAt(target: FieldPoint): number {
   return best.angle;
 }
 
+/** The full-draw angle whose plain flight passes `distance` from `target`'s middle, at its nearest. */
+function aimPast(target: FieldPoint, distance: number): number {
+  let best = { angle: 90, off: Infinity };
+  for (let angle = rules.aim.min; angle <= rules.aim.max; angle += 0.02) {
+    const off = Math.abs(nearest(angle, 1, target) - distance);
+    if (off < best.off) best = { angle, off };
+  }
+  return best.angle;
+}
+
+/** The finch's hit radius and its graze ring's outer edge, as a round has them. */
+const finchRadius = must(rules.birds.find((bird) => bird.id === 'finch')).radius * feel.hitRadius;
+const grazeEdge = finchRadius + feel.graze;
+
 /**
  * A round over one finch that hangs still at (`x`, `altitude`), with `arrows` fletched arrows:
  * so a test can aim a fletched arrow (which flies plain) exactly. Records what's banked.
@@ -265,10 +279,15 @@ describe('a round of the bird hunt', () => {
     untilLanded(played);
     const finch = played.round.birds[0];
     expect(finch?.state).toBe('down');
-    expect(banked(played, 'sunflower_seed')).toBeGreaterThanOrEqual(1);
-    expect(banked(played, 'sunflower_seed')).toBeLessThanOrEqual(2);
-    expect(banked(played, 'feather')).toBeGreaterThanOrEqual(2);
-    expect(banked(played, 'feather')).toBeLessThanOrEqual(4);
+    // What the hit dropped (the round's over now too, and its stars add bonus seeds).
+    const hit = played.events.find((event) => event.type === 'hit');
+    const dropped = (item: string) =>
+      hit?.type === 'hit' ? (hit.drops.find((stack) => stack.item === item)?.count ?? 0) : 0;
+    expect(dropped('sunflower_seed')).toBeGreaterThanOrEqual(1);
+    expect(dropped('sunflower_seed')).toBeLessThanOrEqual(2);
+    expect(dropped('feather')).toBeGreaterThanOrEqual(2);
+    expect(dropped('feather')).toBeLessThanOrEqual(4);
+    expect(banked(played, 'feather')).toBe(dropped('feather'));
     expect(played.xp).toBe(8);
     // The arrow came back with the bird.
     expect(played.counts.fletched_arrow).toBe(20);
@@ -284,12 +303,12 @@ describe('a round of the bird hunt', () => {
     expect(played.counts.fletched_arrow).toBe(19);
   });
 
-  it('a near miss scares the bird: it poops one seed and flies off faster', () => {
+  it('a graze scares the bird: it poops one seed and flies off faster', async () => {
     const played = play(stillBird());
     const bird = untilBirdIn(played);
     const before = played.round.birds[0]?.speed ?? 0;
-    // Just over the finch: past its body, inside the near miss.
-    played.round.shoot('fletched_arrow', aimAt({ x: bird.x, y: bird.y + 1.7 }), 1);
+    // Through the thin ring just outside the finch's hit radius.
+    played.round.shoot('fletched_arrow', aimPast(bird, (finchRadius + grazeEdge) / 2), 1);
     untilLanded(played);
     const finch = played.round.birds[0];
     expect(finch?.state).toBe('flying');
@@ -299,16 +318,51 @@ describe('a round of the bird hunt', () => {
     expect(banked(played, 'feather')).toBe(0);
     expect(played.round.arrows[0]?.state).toBe('lost');
     expect(played.events.filter((event) => event.type === 'scare')).toHaveLength(1);
+    expect(played.round.points).toBe(1);
+    await played.log.logger.flush();
+    const shot = played.log.sink.events.find((event) => event.type === 'archery.shot');
+    expect(shot?.data?.scared).toEqual(['finch']);
+    const graze = (shot?.data?.graze as number[] | undefined)?.[0] ?? -1;
+    expect(graze).toBeGreaterThan(0);
+    expect(graze).toBeLessThanOrEqual(feel.graze);
     // A bird is only scared once.
-    played.round.shoot('fletched_arrow', aimAt({ x: finch?.x ?? 0, y: (finch?.y ?? 0) + 1.7 }), 1);
+    played.round.shoot(
+      'fletched_arrow',
+      aimPast({ x: finch?.x ?? 0, y: finch?.y ?? 0 }, (finchRadius + grazeEdge) / 2),
+      1,
+    );
     untilLanded(played);
     expect(banked(played, 'sunflower_seed')).toBe(rules.scare.seeds);
+    expect(played.round.points).toBe(1);
+  });
+
+  it('the graze ring is thin: an arrow just past it does nothing', () => {
+    const played = play(stillBird());
+    const bird = untilBirdIn(played);
+    played.round.shoot('fletched_arrow', aimPast(bird, grazeEdge + 0.3), 1);
+    untilLanded(played);
+    expect(played.round.birds[0]?.scaredAt).toBeUndefined();
+    expect(played.banked).toEqual([]);
+    expect(played.round.points).toBe(0);
+  });
+
+  it('a bird is worth 2 points at most: graze it, then hit it as it flees', () => {
+    const played = play(stillBird((raw) => (must(raw.archery.arrows[0]).breakChance = 0)));
+    const bird = untilBirdIn(played);
+    played.round.shoot('fletched_arrow', aimPast(bird, (finchRadius + grazeEdge) / 2), 1);
+    untilLanded(played);
+    const finch = must(played.round.birds[0]);
+    played.round.shoot('fletched_arrow', aimAt({ x: finch.x, y: finch.y }), 1);
+    untilLanded(played);
+    expect(finch.state).toBe('down');
+    played.round.tick(rules.step);
+    expect(played.round.result).toMatchObject({ hits: 1, scares: 1, points: 2, par: 1, stars: 3 });
   });
 
   it('a wide miss is lost, and logs how close it came and to what', async () => {
     const played = play(stillBird());
     const bird = untilBirdIn(played);
-    played.round.shoot('fletched_arrow', aimAt({ x: bird.x, y: bird.y + 6 }), 0.95);
+    played.round.shoot('fletched_arrow', aimPast(bird, 4), 0.95);
     untilLanded(played);
     expect(played.round.arrows[0]?.state).toBe('lost');
     expect(played.banked).toEqual([]);
@@ -321,7 +375,7 @@ describe('a round of the bird hunt', () => {
       draw: 0.95,
       scared: [],
     });
-    expect(shot?.data?.closest).toBeGreaterThan(feel.nearMiss);
+    expect(shot?.data?.closest).toBeGreaterThan(grazeEdge);
     expect(typeof shot?.data?.angle).toBe('number');
   });
 
@@ -353,7 +407,10 @@ describe('a round of the bird hunt', () => {
     expect(types).toContain('archery.roundStart');
     expect(types).toContain('archery.roundEnd');
     const start = played.log.sink.events.find((event) => event.type === 'archery.roundStart');
-    expect(start?.data).toMatchObject({ seed: 1, level: 1, feel });
+    expect(start?.data).toMatchObject({ seed: 1, level: 1, feel, par: played.round.birds.length });
+    // Par is every bird that flew by, shot at or not.
+    expect(played.round.result).toMatchObject({ points: 0, par: played.round.birds.length });
+    expect(played.round.par).toBeGreaterThanOrEqual(rules.round.flockAt.length * 3);
   });
 
   it('plays out the same from the same seed and the same shots', () => {
@@ -372,7 +429,6 @@ describe('a round of the bird hunt', () => {
   it('pays bonus seeds for 3 stars', () => {
     const played = play(
       stillBird((raw) => {
-        raw.archery.stars.minHits = 1;
         must(raw.archery.birds.find((bird) => bird.id === 'finch')).seeds = { min: 2, max: 2 };
       }),
     );
@@ -388,12 +444,15 @@ describe('a round of the bird hunt', () => {
 
 describe('stars', () => {
   const stars = rules.stars;
-  it('come from birds hit per arrow, with at least 3 hits for any', () => {
-    expect(starsFor(stars, 2, 2)).toBe(0);
-    expect(starsFor(stars, 3, 3)).toBe(3);
-    expect(starsFor(stars, 3, 6)).toBe(2);
-    expect(starsFor(stars, 3, 10)).toBe(1);
-    expect(starsFor(stars, 3, 20)).toBe(0);
+  it('come from points against par: 3 at par, 2 and 1 at shares of it', () => {
+    // Par 10 (ten birds flew by): 0.4 and 0.7 of it in data.
+    expect(starsFor(stars, 10, 10)).toBe(3);
+    expect(starsFor(stars, 14, 10)).toBe(3);
+    expect(starsFor(stars, 9, 10)).toBe(2);
+    expect(starsFor(stars, 7, 10)).toBe(2);
+    expect(starsFor(stars, 6, 10)).toBe(1);
+    expect(starsFor(stars, 4, 10)).toBe(1);
+    expect(starsFor(stars, 3, 10)).toBe(0);
     expect(starsFor(stars, 0, 0)).toBe(0);
   });
 });
@@ -432,6 +491,12 @@ describe('archery data', () => {
     expect(() => parseGameData(raw)).toThrow(GameDataError);
     expect(() => parseGameData(raw)).toThrow(message);
   };
+
+  it('fails loudly on a two-star share under the one-star share', () => {
+    invalid((raw) => {
+      raw.archery.stars = { one: 0.8, two: 0.5 };
+    }, 'More stars must not need less');
+  });
 
   it('fails loudly on a flock with an unknown bird', () => {
     invalid((raw) => {

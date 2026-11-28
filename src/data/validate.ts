@@ -643,8 +643,8 @@ function checkArchery(
     }
   });
   if (archery.aim.min >= archery.aim.max) issue(['archery', 'aim'], 'min must be under max');
-  const { one, two, three } = archery.stars;
-  if (one > two || two > three) issue(['archery', 'stars'], 'More stars must not need less');
+  const { one, two } = archery.stars;
+  if (one > two) issue(['archery', 'stars'], 'More stars must not need less');
   // The trees stand behind the field, so they never hide a bird or an arrow.
   if (archery.looks.treeDistance.min <= archery.looks.distance) {
     issue(['archery', 'looks', 'treeDistance', 'min'], 'The trees must stand behind the field');

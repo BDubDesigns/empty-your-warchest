@@ -404,6 +404,7 @@ export class Archery3DView implements ScreenView {
       this.#shake = Math.max(this.#shake, 0.12 * feel.shakeStrength);
       haptics.pulse(feel.buzzHitMs);
       this.#sfx.play('hit', 0.8, 300);
+      this.#flash('🎯 Hit! +1');
       this.#pour(event.drops, event.xp, this.#fieldToScreen(event.bird.x, event.bird.y));
       return;
     }
@@ -417,7 +418,7 @@ export class Archery3DView implements ScreenView {
       haptics.pulse(feel.buzzPoopMs);
       this.#sfx.play('plop', 0.7, 1100);
       this.#pour(event.drops, 0, this.#fieldToScreen(event.bird.x, event.bird.y - 0.6));
-      this.#flash('💩 Scared it!');
+      this.#flash('💩 Grazed it! +1');
       return;
     }
     if (event.type === 'end') {
@@ -917,8 +918,11 @@ export class Archery3DView implements ScreenView {
     if (document.body.dataset.archery !== phase) document.body.dataset.archery = phase;
     const hits = round?.arrows.filter((arrow) => arrow.state === 'hit').length ?? 0;
     const shots = round?.arrows.length ?? 0;
+    // Points (a hit or a graze each) against par: every bird that flies by.
+    const points = round?.points ?? 0;
+    const par = round?.par ?? 0;
     const status = round
-      ? `⏱ ${String(Math.ceil(round.left))} s · 🎯 ${String(hits)} / ${String(shots)}`
+      ? `⏱ ${String(Math.ceil(round.left))} s · ⭐ ${String(points)} / ${String(par)}`
       : '';
     if (status !== this.#shownStatus) {
       this.#shownStatus = status;
@@ -926,6 +930,8 @@ export class Archery3DView implements ScreenView {
       ui.status.hidden = !round;
       this.#element.dataset.shots = String(shots);
       this.#element.dataset.hits = String(hits);
+      this.#element.dataset.points = String(points);
+      this.#element.dataset.par = String(par);
     }
     const flying = round?.birds.filter((bird) => bird.state === 'flying').length ?? 0;
     if (this.#element.dataset.birds !== String(flying))
@@ -966,7 +972,19 @@ export class Archery3DView implements ScreenView {
       );
     }
     const lines: string[] = [];
-    lines.push(`${String(result.hits)} of ${String(result.shots)} arrows hit`);
+    const plural = (count: number, word: string) =>
+      `${String(count)} ${word}${count === 1 ? '' : 's'}`;
+    // How the points add up, and what a star more would take.
+    lines.push(
+      `🎯 ${plural(result.hits, 'hit')} + 💩 ${plural(result.scares, 'graze')} · par ${String(result.par)}, every bird that flew by`,
+    );
+    lines.push('A hit or a graze is a point: graze a bird, then hit it as it flees, for 2');
+    const { one, two } = this.#rules.stars;
+    const nextShare = result.stars === 0 ? one : result.stars === 1 ? two : 1;
+    if (result.stars < 3) {
+      const need = Math.ceil(nextShare * result.par - 1e-9) - result.points;
+      if (need > 0) lines.push(`${plural(need, 'point')} more for ${'★'.repeat(result.stars + 1)}`);
+    }
     if (result.seeds.length > 0) {
       lines.push(
         result.seeds.map((stack) => `${name(stack.item)} ×${String(stack.count)}`).join(' · '),
@@ -977,22 +995,14 @@ export class Archery3DView implements ScreenView {
     if (result.broken > 0) arrows.push(`${String(result.broken)} broke`);
     if (result.lost > 0) arrows.push(`${String(result.lost)} lost`);
     if (result.shots > 0) lines.push(`Arrows: ${arrows.join(', ')}`);
-    if (result.scares > 0) {
-      lines.push(
-        `💩 ${String(result.scares)} scared bird${result.scares === 1 ? '' : 's'} dropped a seed`,
-      );
-    }
     const bonus = result.bonus.reduce((sum, stack) => sum + stack.count, 0);
     if (bonus > 0) lines.push(`${'★'.repeat(result.stars)} bonus +${String(bonus)} seeds`);
-    if (result.hits < this.#rules.stars.minHits) {
-      lines.push(`Down ${String(this.#rules.stars.minHits)} birds for a star`);
-    }
     const left = this.#rules.arrows.reduce(
       (sum, arrow) => sum + game.inventory.count(arrow.item),
       0,
     );
     if (left === 0) lines.push('Out of arrows: Fletching will make more soon');
-    ui.cardTitle.textContent = `${String(result.hits)} bird${result.hits === 1 ? '' : 's'}`;
+    ui.cardTitle.textContent = `${String(result.points)} / ${String(result.par)} points`;
     ui.cardText.textContent = lines.join('\n');
     ui.next.hidden = left === 0;
     ui.card.hidden = false;

@@ -7,7 +7,7 @@ export const archeryTunables: readonly Tunable[] = [
   { key: 'arrowSpeed', label: 'Arrow speed × (next round)', min: 0.4, max: 2, step: 0.05 },
   { key: 'birdSpeed', label: 'Bird speed × (next round)', min: 0.3, max: 2.5, step: 0.05 },
   { key: 'hitRadius', label: 'Bird hit size × (next round)', min: 0.4, max: 2.5, step: 0.05 },
-  { key: 'nearMiss', label: 'Near miss scares within (next round)', min: 0, max: 6, step: 0.1 },
+  { key: 'graze', label: 'Graze ring past the hit (next round)', min: 0.05, max: 3, step: 0.05 },
   { key: 'fullDrawPx', label: 'Drag for a full draw (px)', min: 40, max: 320, step: 5 },
   { key: 'minDraw', label: 'Least draw that shoots (share)', min: 0, max: 0.6, step: 0.01 },
   { key: 'previewSeconds', label: 'Aim preview (s of flight)', min: 0, max: 1.5, step: 0.05 },
