@@ -1375,6 +1375,59 @@ body:not([data-view='camp']) #build-label {
   background: #f0705c;
 }
 
+/* Fell the rest: at 3 stars, under the live stars. */
+.w3d-fell-rest {
+  position: absolute;
+  top: calc(var(--safe-top) + 118px);
+  left: 50%;
+  transform: translateX(-50%);
+  min-height: 40px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 10px;
+  background: #f0cd5c;
+  color: #2a2110;
+  box-shadow: 0 2px 8px rgb(0 0 0 / 0.45);
+  font:
+    800 15px system-ui,
+    sans-serif;
+  white-space: nowrap;
+  touch-action: manipulation;
+  z-index: 4;
+  animation: w3d-fell-rest-in 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.w3d-fell-rest:active {
+  background: #d9b545;
+}
+
+.w3d-fell-rest[hidden],
+.w3d-summary > .w3d-fell-rest-summary[hidden] {
+  display: none;
+}
+
+@keyframes w3d-fell-rest-in {
+  0% {
+    transform: translateX(-50%) scale(0.6);
+    opacity: 0;
+  }
+  100% {
+    transform: translateX(-50%) scale(1);
+    opacity: 1;
+  }
+}
+
+/* While it shows, the fast-fall switch moves down out of its way. */
+.w3d-ui:has(.w3d-fell-rest:not([hidden])) .w3d-fast {
+  top: calc(var(--safe-top) + 166px);
+}
+
+.w3d-summary > .w3d-button.w3d-fell-rest-summary {
+  background: #f0cd5c;
+  color: #2a2110;
+  font-size: 18px;
+}
+
 @media (max-width: 400px) {
   .w3d-live-stars {
     top: calc(var(--safe-top) + 116px);
@@ -1383,6 +1436,14 @@ body:not([data-view='camp']) #build-label {
   /* The level bar and stars take the second row there: the fast-fall switch goes under them. */
   .w3d-fast {
     top: calc(var(--safe-top) + 180px);
+  }
+
+  .w3d-fell-rest {
+    top: calc(var(--safe-top) + 172px);
+  }
+
+  .w3d-ui:has(.w3d-fell-rest:not([hidden])) .w3d-fast {
+    top: calc(var(--safe-top) + 220px);
   }
 }
 
@@ -2600,8 +2661,8 @@ body:not([data-view='camp']) #build-label {
   display: none !important;
 }
 
-/* The forts: each one open, and the next locked until the one before is won. */
-.sg-forts {
+/* The vantage points: tap one to shoot from there. */
+.sg-vantages {
   position: absolute;
   top: calc(var(--safe-top) + 104px);
   left: 0;
@@ -2612,7 +2673,7 @@ body:not([data-view='camp']) #build-label {
   padding: 0 12px;
 }
 
-.sg-fort {
+.sg-vantage {
   min-height: 38px;
   padding: 0 12px;
   border: 2px solid transparent;
@@ -2625,13 +2686,9 @@ body:not([data-view='camp']) #build-label {
   touch-action: manipulation;
 }
 
-.sg-fort[aria-checked='true'] {
+.sg-vantage[aria-checked='true'] {
   border-color: #f0cd5c;
   background: rgb(80 50 12 / 0.8);
-}
-
-.sg-fort-locked {
-  opacity: 0.55;
 }
 
 .sg-status {
@@ -2658,21 +2715,28 @@ body:not([data-view='camp']) #build-label {
   text-shadow: 0 1px 4px rgb(0 0 0 / 0.9);
 }
 
-/* What the position asks for, just under the throws and par. */
-.sg-goal {
+/* The round's objectives, just under the throws and par, each ticked off as it's done. */
+.sg-objectives {
   position: absolute;
   top: calc(var(--safe-top) + 170px);
   left: 12px;
   right: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
   text-align: center;
   font:
-    800 15px system-ui,
+    700 13px/1.45 system-ui,
     sans-serif;
   color: #f0cd5c;
   text-shadow: 0 1px 4px rgb(0 0 0 / 0.9);
 }
 
-/* The next position's name, big, as the ballista rolls on to it. */
+.sg-objectives .sg-done {
+  color: #9fe08a;
+}
+
+/* An objective done, big, a moment. */
 .sg-title {
   position: absolute;
   top: 30%;
@@ -2702,7 +2766,7 @@ body:not([data-view='camp']) #build-label {
   }
 }
 
-/* Where the ballista stands, and how it shoots, at the bottom. */
+/* The ghost line, Sense and Withdraw, then how the ballista shoots, at the bottom. */
 .sg-controls {
   position: absolute;
   left: 0;
@@ -2713,44 +2777,23 @@ body:not([data-view='camp']) #build-label {
   gap: 8px;
 }
 
-.sg-spots {
+.sg-extras {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 3px 4px 3px 10px;
-  border-radius: 999px;
-  background: rgb(20 16 12 / 0.55);
 }
 
-.sg-spots-label {
+.sg-withdraw {
+  min-height: 36px;
+  padding: 0 10px;
+  border: 2px solid rgb(255 255 255 / 0.35);
+  border-radius: 999px;
+  background: rgb(20 16 12 / 0.55);
+  color: var(--fg);
   font:
     700 12px system-ui,
     sans-serif;
-  color: var(--muted);
-}
-
-.sg-spot-buttons {
-  display: flex;
-  gap: 4px;
-}
-
-.sg-spot {
-  width: 40px;
-  height: 40px;
-  border: 2px solid rgb(255 255 255 / 0.5);
-  border-radius: 50%;
-  background: transparent;
-  color: var(--fg);
-  font:
-    800 16px system-ui,
-    sans-serif;
   touch-action: manipulation;
-}
-
-.sg-spot[aria-checked='true'] {
-  border-color: #f0cd5c;
-  background: rgb(240 205 92 / 0.25);
-  color: #f0cd5c;
 }
 
 /* Aimed or Barrage: how the ballista shoots, and what it costs. */
@@ -2798,11 +2841,9 @@ body:not([data-view='camp']) #build-label {
   content: '⚠ ';
 }
 
-/* The sight: fixed in the middle, a ring with ticks in to the point (a barrage's ring is wider). */
+/* The sight, where it's been dragged: a ring with ticks in to the point (a barrage's is wider). */
 .sg-crosshair {
   position: absolute;
-  top: 50%;
-  left: 50%;
   transform: translate(-50%, -50%);
   pointer-events: none;
 }
@@ -2832,7 +2873,7 @@ body:not([data-view='camp']) #build-label {
   stroke-dasharray: 6 5;
 }
 
-/* Scout, the shot buttons and Fire, in a row along the bottom. */
+/* The shot buttons and Fire, in a row along the bottom. */
 .sg-shoot {
   display: flex;
   align-items: center;
@@ -2862,23 +2903,9 @@ body:not([data-view='camp']) #build-label {
   opacity: 0.45;
 }
 
-.sg-scout {
-  min-width: 58px;
-  min-height: 46px;
-  border: 2px solid rgb(255 255 255 / 0.55);
-  border-radius: 12px;
-  background: rgb(20 16 12 / 0.62);
-  color: var(--fg);
-  font:
-    700 14px system-ui,
-    sans-serif;
-  touch-action: manipulation;
-}
-
 /* The last shot's line, on or off. */
 .sg-ghost {
   min-height: 36px;
-  margin-left: 4px;
   padding: 0 10px;
   border: 2px solid rgb(255 255 255 / 0.35);
   border-radius: 999px;
@@ -2892,7 +2919,6 @@ body:not([data-view='camp']) #build-label {
 
 .sg-potion {
   min-height: 36px;
-  margin-left: 4px;
   padding: 0 10px;
   border: 2px solid rgb(255 90 90 / 0.6);
   border-radius: 999px;
@@ -2912,11 +2938,6 @@ body:not([data-view='camp']) #build-label {
 .sg-ghost[aria-pressed='true'] {
   border-color: #7fe8ff;
   color: #7fe8ff;
-}
-
-.sg-scout[aria-pressed='true'] {
-  border-color: #f0cd5c;
-  color: #f0cd5c;
 }
 
 .sg-card {

@@ -86,8 +86,8 @@ async function campColours(page: Page): Promise<number> {
 }
 
 test('going in and out of the stations many times keeps the camp drawing', async ({ page }) => {
-  // Software 3D on CI, and a dozen station visits.
-  test.setTimeout(300_000);
+  // Software 3D on CI, and a dozen station visits (the siege's castle the heaviest).
+  test.setTimeout(420_000);
   const errors: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));
   await page.addInitScript(() => {

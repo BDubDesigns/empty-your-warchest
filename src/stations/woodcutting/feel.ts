@@ -130,6 +130,30 @@ export const woodcuttingTunables: readonly Tunable[] = [
     step: 1,
     more: true,
   },
+  {
+    key: 'fellRestGap',
+    label: 'Fell the rest: gap between trees (s)',
+    min: 0,
+    max: 0.3,
+    step: 0.01,
+    more: true,
+  },
+  {
+    key: 'fellRestSpread',
+    label: 'Fell the rest: whole ripple at most (s)',
+    min: 0,
+    max: 3,
+    step: 0.1,
+    more: true,
+  },
+  {
+    key: 'fellRestFallSeconds',
+    label: 'Fell the rest: each tree topples in (s)',
+    min: 0.2,
+    max: 2,
+    step: 0.05,
+    more: true,
+  },
 ];
 
 export function woodcuttingFeel(
