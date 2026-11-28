@@ -5,6 +5,7 @@ import { archery } from './archery';
 import { brewing } from './brewing';
 import { camp } from './camp';
 import { castle } from './castle';
+import { characters } from './characters';
 import { firemaking } from './firemaking';
 import { graphics } from './graphics';
 import { items } from './items';
@@ -28,6 +29,7 @@ export * from './schema';
 export { GameDataError, parseGameData } from './validate';
 export * from './siegePieces';
 export * from './castleLayout';
+export * from './characterSchema';
 
 export const rawGameData: GameDataInput = {
   skills,
@@ -51,6 +53,7 @@ export const rawGameData: GameDataInput = {
   tuning,
   graphics,
   castle,
+  characters,
 };
 
 /** The validated game data. Throws a GameDataError if anything in src/data is wrong. */

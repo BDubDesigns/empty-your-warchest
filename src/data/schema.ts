@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { charactersSchema } from './characterSchema';
 import { buildFort } from './siegePieces';
 
 /** lower_snake_case id used to reference one piece of data from another. */
@@ -2171,6 +2172,7 @@ export const gameDataShape = z.object({
   tuning: tuningSchema,
   graphics: graphicsSchema,
   castle: castleSchema,
+  characters: charactersSchema,
 });
 
 export type GameDataInput = z.input<typeof gameDataShape>;
