@@ -599,7 +599,7 @@ export class SiegeRound {
     this.#vantage = index;
     this.#hooks.logger.log('siege.vantage', {
       from: this.vantages[from]?.id,
-      to: this.vantages[index]?.id,
+      to: this.vantages[index].id,
       throws: this.#throws,
       step: this.#steps,
     });

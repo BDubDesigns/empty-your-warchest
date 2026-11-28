@@ -188,7 +188,7 @@ describe('the castle as bodies', () => {
     const [x, y, z] = walk?.points[0]?.at ?? [0, 0, 0];
     const under = bodies.parts.filter((part) => standsOn(part, [x, y, z], 0.2));
     expect(under.map((part) => part.kind)).toEqual(['wallChunk']);
-    expect(standsOn(under[0] ?? bodies.parts[0]!, [x, y + 2, z], 0.2)).toBe(false);
+    for (const part of under) expect(standsOn(part, [x, y + 2, z], 0.2)).toBe(false);
     const lookout = LAYOUT.anchors.lookouts[0];
     const top = bodies.parts.filter((part) => lookout && standsOn(part, lookout.at, 0.2));
     expect(top.map((part) => part.kind)).toEqual(['towerChunk']);
