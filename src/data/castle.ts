@@ -125,7 +125,10 @@ export const castle = {
     { id: 'crate_1', piece: 'crate', at: [-6.6, 10.4], turn: 15 },
     { id: 'wagon', piece: 'wagon', at: [11, -3], turn: 160 },
   ],
-  bell: { id: 'alarm_bell', at: [-11, -7], turn: 90, size: [2.8, 3.8], bell: 1.1 },
+  // Its rope hangs to just in front of the frame, on the keep's side, where a guard rings it. In
+  // front of the keep's west end, where the siege tower sees it over the east wall (behind the
+  // keep, as it stood at first, no vantage point could): the bell can be broken before it rings.
+  bell: { id: 'alarm_bell', at: [-11, -3], turn: 90, size: [2.8, 3.8], bell: 1.1, rope: [0, 0.6] },
   stairs: [{ id: 'west_stair', wall: 'west', start: 10, run: 10, width: 1.8 }],
   stairRise: 0.35,
   anchors: {
@@ -175,6 +178,43 @@ export const castle = {
     lookouts: [
       { id: 'south_west_top', tower: 'south_west', at: [0.6, 1.4] },
       { id: 'south_east_top', tower: 'south_east', at: [-0.6, 1.4] },
+    ],
+    // The front battlement's ways to the bell's rope: through the south-west tower to the west
+    // walk, down its stair (the castle's only one) and across the courtyard; from the right of the
+    // gate, through the gatehouse first. From a front tower's top, down inside it.
+    bellRoutes: [
+      {
+        id: 'down_west_stair',
+        from: ['south_west_top'],
+        points: [
+          { tower: 'south_west' },
+          { walk: 'west', at: 3.5 },
+          { stair: 'west_stair' },
+          { ground: [-13.5, 6] },
+        ],
+      },
+      {
+        id: 'along_front_left',
+        from: ['front_left_walk'],
+        points: [{ walk: 'front_left', at: 14.5 }],
+        then: 'down_west_stair',
+      },
+      {
+        id: 'through_gatehouse',
+        from: ['front_right_walk'],
+        points: [
+          { walk: 'front_right', at: 13.5 },
+          { tower: 'gatehouse' },
+          { walk: 'front_left', at: 4.5 },
+        ],
+        then: 'along_front_left',
+      },
+      {
+        id: 'down_south_east',
+        from: ['south_east_top'],
+        points: [{ tower: 'south_east' }, { walk: 'front_right', at: 3.5 }],
+        then: 'through_gatehouse',
+      },
     ],
   },
   vantages: [

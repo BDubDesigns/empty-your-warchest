@@ -1,10 +1,12 @@
 // Screenshots of the siege at a phone's size (Playwright's Pixel 7): each vantage point as it
 // starts and turned all the way left and right, the follow shot behind a spear, the spear rack's
-// gold, a Sense potion's outlines, a wrecked wall, a collapsed tower, and the Low tier. Prints
-// what each view costs to draw (draw calls, triangles, texture memory).
+// gold, a Sense potion's outlines, a wrecked wall, a collapsed tower, the alarm (guards panicking
+// and hiding, the runner, the bell and its timer, the captain at a window after it), the end card
+// for each number of stars, and the Low tier. Prints what each view costs to draw (draw calls,
+// triangles, texture memory).
 // usage: node tools/siege/shots.mjs <the game's URL, e.g. http://localhost:5173/> <out dir> [parts]
-// `parts`: some of castle,tower,low,guards,boxes,keep (all by default; drawn in software, each takes
-// minutes).
+// `parts`: some of castle,tower,low,guards,boxes,keep,alarm,stars (or one card: card3 … card0)
+// (all by default; drawn in software, each takes minutes).
 import { mkdir, readFile } from 'node:fs/promises';
 import { chromium, devices } from '@playwright/test';
 
@@ -27,12 +29,16 @@ const browser = await chromium.launch({
   args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'],
 });
 
-/** A page at the War tent, drawn at `tier` (with the guards' hit boxes drawn, if `boxes`). */
-async function openTent(tier, boxes = false) {
+/**
+ * A page at the War tent, drawn at `tier` (with the guards' hit boxes drawn, if `boxes`), the
+ * siege's feel with `tuning` changed (as Debug's sliders leave it).
+ */
+async function openTent(tier, boxes = false, tuning = {}) {
   const page = await browser.newPage({ ...devices['Pixel 7'] });
   page.on('pageerror', (error) => console.error('page error:', error.message));
   await page.addInitScript(
-    ({ tier, skills, boxes }) => {
+    ({ tier, skills, boxes, tuning }) => {
+      localStorage.setItem('warchest.tuning.siege', JSON.stringify(tuning));
       localStorage.setItem('warchest.graphics', tier);
       localStorage.setItem('warchest.siege.hitBoxes', boxes ? 'on' : 'off');
       localStorage.setItem(
@@ -52,7 +58,7 @@ async function openTent(tier, boxes = false) {
         }),
       );
     },
-    { tier, skills, boxes },
+    { tier, skills, boxes, tuning },
   );
   await page.goto(url);
   await page.locator('body[data-view=camp]').waitFor({ timeout: 60_000 });
@@ -109,21 +115,21 @@ async function drag(page, dx, dy) {
   }
 }
 
-/** Where the round's targets of `kind` are on screen (off its edges too). */
-async function targets(page, kind) {
+/** Where the round's targets of `kind` are on screen (off its edges too), doing `mood` if given. */
+async function targets(page, kind, mood) {
   const list = JSON.parse((await view(page).getAttribute('data-targets')) ?? '[]');
-  return list.filter((target) => target.kind === kind);
+  return list.filter((target) => target.kind === kind && (!mood || target.mood === mood));
 }
 
 /**
  * Turns the view until the first target of `kind` is under the crosshair (`below` px under it, to
  * aim lower than the target). Returns false if there's none.
  */
-async function aimAt(page, kind, below = 0) {
+async function aimAt(page, kind, below = 0, mood = undefined) {
   const size = page.viewportSize();
   for (let tries = 0; tries < 8; tries++) {
     await page.waitForTimeout(400);
-    const [target] = await targets(page, kind);
+    const [target] = await targets(page, kind, mood);
     if (!target) return false;
     const dx = target.x - size.width / 2;
     const dy = target.y + below - size.height / 2;
@@ -295,5 +301,158 @@ if (want('low')) {
   await settle(low);
   await shot(low, 'low-hill-wrecked');
   await low.close();
+}
+// The alarm: a volley everyone hears, guards panicking and ducking, the runner on his way, the bell
+// with its timer, and the captain at a window after it (he shows for a long while, to be found).
+const ALARM = {
+  alertSpearRadius: 500,
+  reactSeconds: 0,
+  runnerDelaySeconds: 4,
+  runnerSpeed: 8,
+  captainHideMinSeconds: 2,
+  captainHideMaxSeconds: 3,
+  captainShowMinSeconds: 25,
+  captainShowMaxSeconds: 25,
+};
+if (want('alarm')) {
+  const page = await openTent('high', false, ALARM);
+  await vantage(page, 'Hill');
+  await shot(page, 'alarm-quiet');
+  await drag(page, 0, 600);
+  await fire(page);
+  await settle(page);
+  await drag(page, 0, -600);
+  await page.waitForTimeout(500);
+  (await aimAt(page, 'guard', 0, 'panic')) || (await aimAt(page, 'guard'));
+  await shot(page, 'alarm-panic-hide');
+  await page.getByRole('button', { name: /Sense/ }).click();
+  await page.waitForTimeout(600);
+  await shot(page, 'alarm-hiding-sense');
+  await page.locator('#screen-siege3d:not([data-runner=""])').waitFor({ timeout: 60_000 });
+  for (const name of ['Hill', 'Siege tower']) {
+    await vantage(page, name);
+    if (await aimAt(page, 'guard', 0, 'run')) {
+      await shot(page, `alarm-runner-${slug(name)}`);
+      break;
+    }
+  }
+  await page.waitForTimeout(3000);
+  await shot(page, 'alarm-runner-later');
+  await page.locator('#screen-siege3d[data-alarm=rang]').waitFor({ timeout: 300_000 });
+  await page.waitForTimeout(300);
+  await shot(page, 'alarm-bell-timer');
+  (await aimAt(page, 'guard', 0, 'ring')) && (await shot(page, 'alarm-ringer'));
+  // The captain, once he shows at a window: from wherever sees him.
+  await page.waitForFunction(
+    () =>
+      JSON.parse(document.querySelector('#screen-siege3d')?.dataset.targets ?? '[]').some(
+        (target) => target.kind === 'captain',
+      ),
+    undefined,
+    { timeout: 60_000 },
+  );
+  for (const name of ['Hill', 'Siege tower', 'Low ground']) {
+    await vantage(page, name);
+    await aimAt(page, 'captain');
+    const [captain] = await targets(page, 'captain');
+    if (captain?.on) {
+      await shot(page, `alarm-captain-window-${slug(name)}`);
+      break;
+    }
+  }
+  await page.close();
+}
+
+/**
+ * Plays a round to its end card: takes the objectives in turn (the captain, the spear rack from the
+ * siege tower, then the battlement's guards), as many as `objectives` of them, then waits for the
+ * round to end (all done, or reinforcements).
+ */
+async function playTo(page, objectives) {
+  const done = async () => Number((await view(page).getAttribute('data-done')) ?? 0);
+  const over = async () => (await page.locator('body').getAttribute('data-siege')) === 'done';
+  for (let shots = 0; shots < 30 && (await done()) < objectives && !(await over()); shots++) {
+    const [captain] = await targets(page, 'captain');
+    const [rack] = await targets(page, 'rack');
+    if (captain) {
+      await vantage(page, 'Hill');
+      if (!(await aimAt(page, 'captain'))) continue;
+    } else if (rack) {
+      await vantage(page, 'Siege tower');
+      await aimAt(page, 'rack');
+    } else {
+      await vantage(page, 'Hill');
+      if (!(await aimAt(page, 'guard'))) await vantage(page, 'Siege tower');
+      await aimAt(page, 'guard');
+    }
+    // The last shot may still have finished it (or reinforcements come) while it aimed.
+    if ((await page.locator('body').getAttribute('data-siege')) !== 'aim') break;
+    await fire(page).catch(() => undefined);
+    await page.waitForTimeout(1500);
+    if (!(await over())) await settle(page);
+  }
+  await page.locator('#screen-siege3d .sg-card:not(.sg-confirm):not([hidden])').waitFor({
+    timeout: 240_000,
+  });
+  await page.waitForTimeout(1500);
+}
+
+// The end card for each number of stars: every objective without the bell (no runner ever sets
+// off); every objective after the bell rang (the first volley alerts everyone and a fast runner
+// rings it, but the guards never get round to hiding, so a bot can still hit them); the captain
+// and then reinforcements; and nothing but reinforcements (on the Low tier).
+const card = (stars) => want('stars') || want(`card${String(stars)}`);
+if (card(3)) {
+  const three = await openTent('high', false, { runnerDelaySeconds: 999 });
+  await playTo(three, 3);
+  await shot(three, 'card-3-stars');
+  await three.close();
+}
+if (card(2)) {
+  const two = await openTent('high', false, {
+    alertSpearRadius: 500,
+    reactSeconds: 999,
+    runnerDelaySeconds: 0,
+    runnerSpeed: 40,
+  });
+  await playTo(two, 3);
+  await shot(two, 'card-2-stars');
+  await two.close();
+}
+if (card(1)) {
+  const one = await openTent('high', false, {
+    ...ALARM,
+    alertSpearRadius: 0,
+    alertDeathRadius: 500,
+    alertBreakRadius: 500,
+    runnerDelaySeconds: 0,
+    runnerSpeed: 40,
+    reinforcementSeconds: 3,
+  });
+  await playTo(one, 1);
+  await shot(one, 'card-1-star');
+  await one.close();
+}
+if (card(0)) {
+  const none = await openTent('low', false, {
+    ...ALARM,
+    runnerDelaySeconds: 0,
+    runnerSpeed: 40,
+    reinforcementSeconds: 3,
+  });
+  await vantage(none, 'Hill');
+  await drag(none, 0, 600);
+  await fire(none);
+  await none.locator('#screen-siege3d[data-alarm=rang]').waitFor({ timeout: 300_000 });
+  await settle(none);
+  await drag(none, 0, -600);
+  await none.waitForTimeout(500);
+  await shot(none, 'low-alarm-timer');
+  await none.locator('#screen-siege3d .sg-card:not(.sg-confirm):not([hidden])').waitFor({
+    timeout: 120_000,
+  });
+  await none.waitForTimeout(1500);
+  await shot(none, 'low-card-0-stars');
+  await none.close();
 }
 await browser.close();

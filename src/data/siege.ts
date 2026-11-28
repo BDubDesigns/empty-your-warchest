@@ -1,6 +1,6 @@
 import type { GameDataInput } from './schema';
 
-// The siege (siege 2a), fought at the castle (castle.ts). Every number is a first guess, meant to
+// The siege (siege 2b), fought at the castle (castle.ts). Every number is a first guess, meant to
 // be tuned on a phone. Metres and seconds, in the castle's world: its middle at the origin, its gate
 // facing +z. You shoot from the castle's vantage points (the camera stands at each and turns), with
 // the ballista just in front of and under the camera; a drag turns the view under the crosshair, and
@@ -86,6 +86,14 @@ export const siege = {
   },
   // A guard walks his stretch of the walk (2.4 m) in about 3 s.
   guardMoves: { patrolSpeed: 0.8, patrolPause: 1.2 },
+  // A guard hears a spear or a crash near him through stone, but sees a comrade fall only if
+  // nothing's in the way. Ducked, he's 0.8 m tall, under the parapet's 1 m. The first runner, and
+  // one more if he's brought down.
+  alarm: {
+    sight: { shot: false, break: false, death: true },
+    hideHeight: 0.8,
+    runners: 2,
+  },
   // Kenney's Castle Kit and the Quaternius characters (CC0): skins over the rules' boxes.
   skins: {
     // The spear is the ballista's bolt.
@@ -99,7 +107,16 @@ export const siege = {
     // their body fills the box less its margin. He staggers at a hit that leaves him standing.
     guard: {
       fill: 0.91,
-      clips: { stand: 'idle', patrol: 'walk', hit: 'hit', down: 'die' },
+      clips: {
+        stand: 'idle',
+        patrol: 'walk',
+        hit: 'hit',
+        down: 'die',
+        panic: 'run',
+        hide: 'cower',
+        run: 'run',
+        ring: 'alarm',
+      },
     },
     // At his window he leans on its sill.
     captain: {
@@ -169,9 +186,8 @@ export const siege = {
     crashPerSpeed: 25,
     knockSpeed: 3.5,
   },
-  // Two throws fewer than when the walls were twice as tough: a volley under a guard now drops him.
-  par: 6,
-  // The same as woodcutting's, splitting's and firemaking's.
+  // Stars: 3 for every objective without the bell ringing, 2 for every objective, 1 for some. The
+  // bonus is the same as woodcutting's, splitting's and firemaking's.
   starBonus: { two: 0.1, three: 0.25 },
   rewards: { xpPerPart: 2, xpPerGuard: 10, xpPerObjective: 40, winXp: 80 },
   feel: {
@@ -194,6 +210,30 @@ export const siege = {
     kickTilt: 1.5,
     kickSeconds: 0.22,
     senseSeconds: 10,
+    // A spear thuds within about two guards' stretches of him; a part breaking is heard further
+    // off; a comrade falling is seen from across his walk and the next tower. Half panic.
+    alertSpearRadius: 6,
+    alertBreakRadius: 10,
+    alertDeathRadius: 14,
+    // About a person's reaction time, and more than an aimed volley takes to land (0.2 s).
+    reactSeconds: 0.6,
+    panicShare: 0.5,
+    panicSpeed: 2.5,
+    // Ducked a few seconds, up for a second or two: long enough to aim at as he peeks.
+    hideMinSeconds: 2.5,
+    hideMaxSeconds: 5,
+    peekMinSeconds: 1.5,
+    peekMaxSeconds: 2.5,
+    // From the front battlement to the rope is about 45 m (the left of the gate) to 70 m (the
+    // right): 13 to 20 s at a run, time for a volley or two at him.
+    runnerDelaySeconds: 1.5,
+    runnerSpeed: 3.5,
+    reinforcementSeconds: 120,
+    // After the bell the captain shows at a window every 6 to 12 s, for 3 to 5 s.
+    captainHideMinSeconds: 6,
+    captainHideMaxSeconds: 12,
+    captainShowMinSeconds: 3,
+    captainShowMaxSeconds: 5,
     markSize: 1.6,
     followBack: 9,
     followRise: 2.2,

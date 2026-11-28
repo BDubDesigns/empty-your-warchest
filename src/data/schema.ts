@@ -1108,6 +1108,38 @@ export const siegeFeelSchema = z.object({
   kickSeconds: positive,
   /** A Sense potion shows every guard's outline in red through walls for `senseSeconds`. */
   senseSeconds: positive,
+  /**
+   * The alarm (see the siege's `alarm`). A guard is alerted by a spear landing within
+   * `alertSpearRadius` m of him, a part breaking within `alertBreakRadius`, or another guard
+   * going down within `alertDeathRadius`. Alerted, he takes it in for `reactSeconds` (a volley on
+   * its way still lands), then `panicShare` of the guards with a walk run up and down it at
+   * `panicSpeed` m/s; the rest duck behind the parapet for `hideSeconds` (from the least to the
+   * most, at random), then peek up for `peekSeconds`, and so on.
+   */
+  alertSpearRadius: nonNegative,
+  alertBreakRadius: nonNegative,
+  alertDeathRadius: nonNegative,
+  reactSeconds: nonNegative,
+  panicShare: fraction,
+  panicSpeed: positive,
+  hideMinSeconds: positive,
+  hideMaxSeconds: positive,
+  peekMinSeconds: positive,
+  peekMaxSeconds: positive,
+  /**
+   * `runnerDelaySeconds` after the first alert (or after a runner goes down), the alerted guard
+   * nearest the bell runs for it at `runnerSpeed` m/s. Once it rings, reinforcements arrive in
+   * `reinforcementSeconds`, and the captain hides in the keep, showing at a window (at random)
+   * every `captainHideMinSeconds` to `captainHideMaxSeconds`, for `captainShowMinSeconds` to
+   * `captainShowMaxSeconds`.
+   */
+  runnerDelaySeconds: nonNegative,
+  runnerSpeed: positive,
+  reinforcementSeconds: positive,
+  captainHideMinSeconds: positive,
+  captainHideMaxSeconds: positive,
+  captainShowMinSeconds: positive,
+  captainShowMaxSeconds: positive,
   /** The gold mark over each objective's targets, `markSize` metres tall. */
   markSize: positive,
   /**
@@ -1182,6 +1214,11 @@ const skinSchema = z.object({
 
 /** The characters' clips a guard (or the captain) plays (see `skins`). */
 const guardClipsSchema = z.object({ stand: id, patrol: id, hit: id, down: id });
+/**
+ * And a guard's, once alerted: panicking up and down his walk, ducked behind the parapet (peeking
+ * up, he stands), running for the bell, and ringing it.
+ */
+const alertedClipsSchema = guardClipsSchema.extend({ panic: id, hide: id, run: id, ring: id });
 
 /**
  * The siege's looks on one graphics tier. `shadows`: the sun's real-time shadow map, or a blob
@@ -1280,6 +1317,20 @@ const siegeSchema = z.object({
   /** A guard walks his stretch at `patrolSpeed` m/s, pausing `patrolPause` s at each end. */
   guardMoves: z.object({ patrolSpeed: positive, patrolPause: nonNegative }),
   /**
+   * The alarm (its timings and reach are feel numbers). Guards start unaware. What alerts one (a
+   * spear landing, a part breaking, another guard going down) does so only within its radius,
+   * and, where `sight` says so, only if he can see where it happened (no stone in the way). An
+   * alerted guard panics or hides; one with no walk to run on (at a lookout) hides. Ducked, his
+   * box is `hideHeight` m tall, so the parapet covers him. Up to `runners` alerted guards, one at a
+   * time, run for the bell along the castle's bell routes; one that gets there rings it. A bell
+   * broken or knocked down never rings.
+   */
+  alarm: z.object({
+    sight: z.object({ shot: z.boolean(), break: z.boolean(), death: z.boolean() }),
+    hideHeight: positive,
+    runners: z.number().int().nonnegative(),
+  }),
+  /**
    * How the siege's things look: a model over a rules' box, only a skin (the physics stays the
    * box). `fit: box` stretches it to the box on every axis; `height` scales it evenly to the box's
    * height. `turn` turns it about the up axis first (degrees). `node` picks one part of the model by
@@ -1290,7 +1341,7 @@ const siegeSchema = z.object({
    */
   skins: z.object({
     bolt: skinSchema,
-    guard: z.object({ fill: z.number().positive().max(1), clips: guardClipsSchema }),
+    guard: z.object({ fill: z.number().positive().max(1), clips: alertedClipsSchema }),
     captain: z.object({ character: id, clips: guardClipsSchema }),
   }),
   /**
@@ -1393,12 +1444,9 @@ const siegeSchema = z.object({
     knockSpeed: positive,
   }),
   /**
-   * The throws a good player takes (a throw is one shot, aimed or barrage alike). Stars: 3 for
-   * every objective in `par` throws or fewer, 2 for every objective, 1 for some. (Par stands in
-   * for "no alarm bell" until the bell arrives.)
+   * Stars: 3 for every objective with the bell never rung, 2 for every objective, 1 for some.
+   * Bonus XP and recovered spears for 2 and 3 stars, as a share of each, as at every station.
    */
-  par: positiveInt,
-  /** Bonus XP and recovered spears for 2 and 3 stars, as a share of each, as at every station. */
   starBonus: z.object({ two: nonNegative, three: nonNegative }),
   /**
    * Command XP for each part broken or knocked down, each guard brought down, each objective
@@ -1894,6 +1942,20 @@ const castleWaypointSchema = z.union([
 ]);
 
 /**
+ * A way to the alarm bell's rope (the siege's runner takes it): the guard waypoints, and `tower`,
+ * through a tower at its walks' height (in at one wall's walk, out at another's; from a lookout on
+ * its top, down inside it). Its guards (on `from`'s posts) go on along `then`'s route after its
+ * own `points`, and the last route of the chain ends on the courtyard's ground, from where they
+ * cross to the rope.
+ */
+const castleRouteWaypointSchema = z.union([
+  z.object({ walk: id, at: z.number() }),
+  z.object({ ground: castlePoint }),
+  z.object({ stair: id }),
+  z.object({ tower: id }),
+]);
+
+/**
  * A place the player shoots from: the camera there, looking at `look` to start with, `fov`
  * degrees high. The player turns the view from there: up to `yaw` degrees left or right of
  * `look`, and from `pitch[0]` degrees under it to `pitch[1]` over it (far enough to see the whole
@@ -2021,13 +2083,18 @@ export const castleSchema = z.object({
    */
   boxes: z.record(id, z.object({ size: castleVec3, middle: castleVec3 })),
   props: z.array(castlePropSchema),
-  /** The alarm bell: a timber frame `size` (width, height), its bell `bell` m across. */
+  /**
+   * The alarm bell: a timber frame `size` (width, height), its bell `bell` m across. Its rope
+   * hangs from the bell to where its ringer stands, `rope` m from the frame's middle (along the
+   * frame, and out of it), turned with it.
+   */
   bell: z.object({
     id,
     at: castlePoint,
     turn: z.number().default(0),
     size: z.tuple([positive, positive]),
     bell: positive,
+    rope: castlePoint,
   }),
   stairs: z.array(castleStairSchema),
   /** Each step of a stair rises this much (m). */
@@ -2035,8 +2102,8 @@ export const castleSchema = z.object({
   /**
    * What the siege plays with: the windows the captain shows at (a building's side, storey and
    * module, counted from 0 as its facade is), the places the spear rack may stand (props; a siege
-   * picks one), the guards' ways round, and their lookouts on the towers (standing `at` m from a
-   * tower's middle, on its top).
+   * picks one), the guards' ways round, their lookouts on the towers (standing `at` m from a
+   * tower's middle, on its top), and the ways from their posts to the alarm bell's rope.
    */
   anchors: z.object({
     captainWindows: z
@@ -2054,6 +2121,17 @@ export const castleSchema = z.object({
       z.object({ id, loop: z.boolean(), points: z.array(castleWaypointSchema).min(2) }),
     ),
     lookouts: z.array(z.object({ id, tower: id, at: castlePoint })).default([]),
+    /** The ways to the bell's rope, from the guards' posts (see the route waypoints). */
+    bellRoutes: z
+      .array(
+        z.object({
+          id,
+          from: z.array(id).default([]),
+          points: z.array(castleRouteWaypointSchema).default([]),
+          then: id.optional(),
+        }),
+      )
+      .default([]),
   }),
   vantages: z.array(castleVantageSchema).min(1),
   /** The castle's own stonework (drawn in code) in the kit's materials. */

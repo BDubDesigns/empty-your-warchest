@@ -1,7 +1,9 @@
 import { Rng, type EventLogger } from '../../../core';
 import {
+  bellRouteFrom,
   layoutCastle,
   middleOf,
+  pathLength,
   pointAlong,
   type Castle,
   type CastleLayout,
@@ -87,14 +89,44 @@ export type SiegeEvent =
   | { type: 'objective'; objective: number; done: number; needed: number; complete: boolean }
   /** The camera (and the ballista) moved to another vantage point. */
   | { type: 'vantage'; vantage: number }
+  /** A guard was alerted (by `cause`), and does `reaction`. */
+  | { type: 'alert'; guard: number; cause: AlertCause; reaction: AlertReaction }
+  /** A guard set off for the bell, was brought down on the way, got there, or gave up. */
+  | { type: 'runner'; guard: number; what: 'start' | 'killed' | 'reached' | 'gaveUp' }
+  /** The alarm bell rang (and reinforcements are on their way), or it broke before it could. */
+  | { type: 'bell'; rang: boolean }
+  /** After the bell, the captain shows at window `window` (index in the castle's). */
+  | { type: 'captainWindow'; window: number }
+  /** Reinforcements arrived: the round is lost. */
+  | { type: 'reinforcements' }
   /** Every objective is done. The round ends once it all settles. */
   | { type: 'won' }
   | { type: 'end'; result: SiegeResult };
 
 export type GuardDownBy = 'spear' | 'fall' | 'crush';
 
-/** How the round ended: every objective done, out of spears, or withdrawn. */
-export type SiegeEnding = 'all' | 'spears' | 'withdrew';
+/** What alerted a guard: a shot (a spear) landing near him, a part breaking, a guard going down, the bell. */
+export type AlertCause = 'shot' | 'break' | 'death' | 'bell';
+/** What an alerted guard does: runs up and down his walk, or ducks behind the parapet. */
+export type AlertReaction = 'panic' | 'hide';
+
+/**
+ * What a guard is about. Unaware (`calm`): walking his stretch, or at his lookout (the captain at
+ * his window). Alerted: running up and down his walk (`panic`), ducked behind the parapet
+ * (`hide`) or up from it a moment (`peek`); running for the bell (`run`), and ringing it
+ * (`ring`). The captain, once it's rung: hidden in the keep (`inside`) or showing at a window
+ * (`window`).
+ */
+export type GuardMood = 'calm' | 'panic' | 'hide' | 'peek' | 'run' | 'ring' | 'inside' | 'window';
+
+/**
+ * The alarm, as far as it's got: no guard alerted; some alerted; the bell rung (reinforcements on
+ * their way); or the bell broken before it rang (it never will).
+ */
+export type AlarmState = 'quiet' | 'alerted' | 'rang' | 'broken';
+
+/** How the round ended: every objective done, out of spears, withdrawn, or reinforcements came. */
+export type SiegeEnding = 'all' | 'spears' | 'withdrew' | 'reinforcements';
 
 export interface SiegeResult extends SiegeRewards {
   ending: SiegeEnding;
@@ -105,9 +137,11 @@ export interface SiegeResult extends SiegeRewards {
   total: number;
   /** Spears shot. */
   used: number;
-  /** Throws: shots of the ballista, aimed or barrage alike (what stars count). */
+  /** Throws: shots of the ballista, aimed or barrage alike. */
   throws: number;
-  par: number;
+  /** The alarm bell rang (no 3 stars), or broke first (it never could). */
+  rang: boolean;
+  bellBroken: boolean;
   /** Parts knocked down or broken (each counted once), and broken. */
   partsDown: number;
   partsBroken: number;
@@ -187,6 +221,25 @@ export interface GuardState {
   heading: 1 | -1;
   /** Seconds left of his pause at the end of his stretch. */
   pause: number;
+  /**
+   * What he's about, what alerted him (none while he's unaware), and what he'll do about it once
+   * he's taken it in.
+   */
+  mood: GuardMood;
+  alertedBy: AlertCause | undefined;
+  reacting: AlertReaction | undefined;
+  /**
+   * Where his feet are, off his post's stretch: running for the bell or at its rope; the
+   * captain at his window or in the keep.
+   */
+  spot: Vec3 | undefined;
+  /** Seconds left taking an alert in, ducked or peeking; the captain's, in the keep or at a window. */
+  timer: number;
+  /** His way to the bell (from where he set off), and the point of it he's heading for. */
+  route: Vec3[] | undefined;
+  leg: number;
+  /** The captain's window (index in the castle's), while he's at one. */
+  window: number | undefined;
 }
 
 /** A shot spear. */
@@ -239,6 +292,12 @@ const FOOTING = 0.2;
 const OFF_FIELD = 3;
 /** Mixed into the seed for the guards' looks: a draw of their own, apart from the rules'. */
 const LOOKS_SALT = 0x2c1b3c6d;
+/** Mixed into the seed for the alarm (reactions, hiding, the captain's windows): its own draw. */
+const ALARM_SALT = 0x5bd1e995;
+/** How far over a guard's box middle his eyes are, as a share of his height (for sight). */
+const EYES = 0.4;
+/** How much short of what alerted him still counts as seen (m): what was hit is in the way. */
+const SIGHT_SLACK = 1.2;
 
 /** `items` in an order shuffled by `rng` (Fisher–Yates). */
 function shuffled<T>(items: readonly T[], rng: Rng): T[] {
@@ -327,6 +386,20 @@ export class SiegeRound {
   #shifted = false;
   #calmFor = 0;
   #wonAt = 0;
+  /** The alarm's own random numbers (reactions, hiding, the captain's windows). */
+  readonly #alarmRng: Rng;
+  /** What could alert a guard this step, in order: dealt with once the step's been counted. */
+  #alerts: { cause: Exclude<AlertCause, 'bell'>; at: Vec3 }[] = [];
+  #alerted = false;
+  /** The guard running for the bell, the runners sent so far, and when the next may go. */
+  #runner: number | undefined;
+  #runnersSent = 0;
+  #runnerAt = Infinity;
+  /** When the bell rang (round seconds), or that it broke first. */
+  #rangAt: number | undefined;
+  #bellBroken = false;
+  /** Guards moved to a new place this step (the captain to a window): not drawn sliding there. */
+  readonly #jumped = new Set<number>();
 
   constructor(
     physics: Physics,
@@ -345,6 +418,7 @@ export class SiegeRound {
     this.#recovery = data.tuning.weaponRecoveryOnWin;
     this.#seed = options.seed;
     this.#rng = new Rng(options.seed);
+    this.#alarmRng = new Rng((options.seed ^ ALARM_SALT) >>> 0);
     this.#vantage = Math.min(Math.max(options.vantage ?? 0, 0), this.vantages.length - 1);
     this.#middle = middleOf(data.castle);
     // Where things go is drawn apart from the shots, so the shots don't move them.
@@ -449,6 +523,7 @@ export class SiegeRound {
         along: 0,
         heading: planned.heading,
         pause: 0,
+        ...unaware(),
       };
       if (planned.slot.kind === 'path') {
         state.along = planned.slot.from + (planned.slot.to - planned.slot.from) * planned.start;
@@ -457,7 +532,7 @@ export class SiegeRound {
       state.facing = this.#outward(feet);
       this.guards.push(state);
       this.#guardBodies.push(this.#addGuard(index, feet, state));
-      this.#footing.push(this.#footingFor(state));
+      this.#footing.push(this.#footingAlong(this.#stretchOf(state)));
     }
     const captain = this.plan.objectives.findIndex((objective) => objective.kind === 'captain');
     const window =
@@ -467,7 +542,6 @@ export class SiegeRound {
     if (captain >= 0 && window) {
       const rules = this.rules.captain;
       const height = guard.size[1] * rules.scale;
-      const floor = window.at[1] - this.castle.windowMiddle;
       const shows = Math.max(height - rules.sill, 0.1);
       const index = this.guards.length;
       const state: GuardState = {
@@ -487,22 +561,13 @@ export class SiegeRound {
         along: 0,
         heading: 1,
         pause: 0,
-      };
-      const feet: Vec3 = {
-        x: window.at[0] - window.out[0] * rules.inset,
-        y: floor,
-        z: window.at[2] - window.out[1] * rules.inset,
+        ...unaware(),
+        spot: this.#windowFeet(window),
+        window: this.plan.captainWindow,
       };
       this.guards.push(state);
-      this.#guardBodies.push(this.#addGuard(index, feet, state));
-      // In a storey that comes apart, he stands in one of its blocks, and goes down with it.
-      this.#footing.push(
-        this.parts.flatMap((part, at) =>
-          part.kind === 'storeyChunk' && within(part.body, [feet.x, feet.y + rules.sill, feet.z])
-            ? [at]
-            : [],
-        ),
-      );
+      this.#guardBodies.push(this.#addGuard(index, this.#feetOf(state), state));
+      this.#footing.push(this.#windowFooting(this.#feetOf(state)));
     }
     this.progress = this.plan.objectives.map((objective, index) =>
       objectiveProgress(objective, this.#objectiveView(index)),
@@ -516,7 +581,6 @@ export class SiegeRound {
       seed: options.seed,
       spears: hooks.spears(),
       aimed: options.aimed,
-      par: this.rules.par,
       vantage: this.vantages[this.#vantage]?.id,
       parts: this.parts.length,
       objectives: this.plan.objectives.map((objective, index) => ({
@@ -525,6 +589,7 @@ export class SiegeRound {
       })),
       captainWindow: this.plan.captainWindow,
       rack: this.plan.rack,
+      alarm: this.rules.alarm,
       guards: this.plan.guards.map((planned, index) => ({
         post: planned.slot.post,
         look: this.guards[index]?.look,
@@ -592,6 +657,24 @@ export class SiegeRound {
   /** Objectives done. */
   get done(): number {
     return this.progress.filter((progress) => progress.done >= progress.needed).length;
+  }
+
+  /** How far the alarm has got. */
+  get alarm(): AlarmState {
+    if (this.#rangAt !== undefined) return 'rang';
+    if (this.#bellBroken) return 'broken';
+    return this.#alerted ? 'alerted' : 'quiet';
+  }
+
+  /** The guard running for the bell, if one is. */
+  get runner(): number | undefined {
+    return this.#runner;
+  }
+
+  /** Round seconds until reinforcements arrive, once the bell has rung. */
+  get reinforcementsIn(): number | undefined {
+    if (this.#rangAt === undefined) return undefined;
+    return Math.max(this.#hooks.feel().reinforcementSeconds - (this.seconds - this.#rangAt), 0);
   }
 
   /** The last shot is still leaving the ballista, or its spears are in the air and it's too soon. */
@@ -764,9 +847,15 @@ export class SiegeRound {
       body.setAngvel({ x: 0, y: 0, z: 0 }, false);
     });
     for (const tracked of this.#moving()) remember(tracked);
-    this.#walkGuards();
+    this.#moveGuards();
     this.#world.step(this.#queue);
     this.#steps++;
+    // A guard moved somewhere new is drawn there, not sliding over.
+    for (const index of this.#jumped) {
+      const tracked = this.#guardBodies[index];
+      if (tracked?.body) readPose(tracked.body, tracked.before);
+    }
+    this.#jumped.clear();
     const now = this.seconds;
     const feel = this.#hooks.feel();
 
@@ -853,6 +942,10 @@ export class SiegeRound {
       const body = tracked.body;
       if (body && this.guards[index]?.down) readPose(body, tracked.now);
     });
+    // The alarm: the bell broken, guards alerted by what happened this step, a runner sent.
+    this.#checkBell();
+    this.#raiseAlerts(feel);
+    this.#sendRunner(now, feel);
 
     this.#settle(timestep);
     this.#checkObjectives(now);
@@ -861,6 +954,20 @@ export class SiegeRound {
     const settled = this.#calmFor >= this.rules.settle.seconds;
     if (this.phase === 'won' && (settled || now - this.#wonAt >= this.rules.settle.winSeconds)) {
       this.#finish('all');
+    } else if (
+      this.phase === 'aim' &&
+      this.#rangAt !== undefined &&
+      now - this.#rangAt >= feel.reinforcementSeconds
+    ) {
+      this.#hooks.logger.log('siege.reinforcements', {
+        seconds: round2(now - this.#rangAt),
+        done: this.done,
+        total: this.progress.length,
+        throws: this.#throws,
+        step: this.#steps,
+      });
+      this.#hooks.onEvent({ type: 'reinforcements' });
+      this.#finish('reinforcements');
     } else if (
       this.phase === 'aim' &&
       settled &&
@@ -979,8 +1086,9 @@ export class SiegeRound {
     return track(body, [collider]);
   }
 
-  /** Where a guard's feet are now: along his stretch, or at his lookout. */
+  /** Where a guard's feet are now: off his post, along his stretch, or at his lookout. */
   #feetOf(state: GuardState): Vec3 {
+    if (state.spot) return { ...state.spot };
     const slot = state.slot;
     if (!slot) return { x: 0, y: 0, z: 0 };
     if (slot.kind === 'lookout') {
@@ -999,22 +1107,25 @@ export class SiegeRound {
     return Math.atan2(at.x - this.#middle[0], at.z - this.#middle[1]);
   }
 
-  /** The parts under a guard's stretch (or lookout): what he may stand on. */
-  #footingFor(state: GuardState): number[] {
+  /** Points along a guard's stretch (every quarter metre), or his lookout. */
+  #stretchOf(state: GuardState): Vec3[] {
     const slot = state.slot;
     if (!slot) return [];
+    if (slot.kind === 'lookout') return [this.#feetOf(state)];
+    const path = this.layout.anchors.guardPaths.find((entry) => entry.id === slot.post);
+    const steps = Math.max(1, Math.ceil((slot.to - slot.from) / 0.25));
     const points: Vec3[] = [];
-    if (slot.kind === 'lookout') points.push(this.#feetOf(state));
-    else {
-      const path = this.layout.anchors.guardPaths.find((entry) => entry.id === slot.post);
-      const steps = Math.max(1, Math.ceil((slot.to - slot.from) / 0.25));
-      for (let i = 0; i <= steps; i++) {
-        const [x, y, z] = path
-          ? pointAlong(path, slot.from + ((slot.to - slot.from) * i) / steps)
-          : [0, 0, 0];
-        points.push({ x, y, z });
-      }
+    for (let i = 0; i <= steps; i++) {
+      const [x, y, z] = path
+        ? pointAlong(path, slot.from + ((slot.to - slot.from) * i) / steps)
+        : [0, 0, 0];
+      points.push({ x, y, z });
     }
+    return points;
+  }
+
+  /** The parts under these points (a guard's stretch, or his way to the bell): what he may stand on. */
+  #footingAlong(points: readonly Vec3[]): number[] {
     const found = new Set<number>();
     this.parts.forEach((part, index) => {
       if (points.some((point) => standsOn(part.body, [point.x, point.y, point.z], FOOTING))) {
@@ -1024,11 +1135,29 @@ export class SiegeRound {
     return [...found].sort((a, b) => a - b);
   }
 
+  /** Where the captain's feet are at a window: just inside it, on its storey's floor. */
+  #windowFeet(window: CastleLayout['anchors']['captainWindows'][number]): Vec3 {
+    const inset = this.rules.captain.inset;
+    return {
+      x: window.at[0] - window.out[0] * inset,
+      y: window.at[1] - this.castle.windowMiddle,
+      z: window.at[2] - window.out[1] * inset,
+    };
+  }
+
+  /** In a storey that comes apart, the captain stands in one of its blocks, and goes down with it. */
+  #windowFooting(feet: Vec3): number[] {
+    const sill = this.rules.captain.sill;
+    return this.parts.flatMap((part, at) =>
+      part.kind === 'storeyChunk' && within(part.body, [feet.x, feet.y + sill, feet.z]) ? [at] : [],
+    );
+  }
+
   /** Whether what guard `index` stands on has gone from under him (broken, or fallen). */
   #footingGone(index: number): boolean {
     const state = this.guards[index];
     const footing = this.#footing[index];
-    if (!state || !footing || footing.length === 0) return false;
+    if (!state || !footing || footing.length === 0 || state.mood === 'inside') return false;
     const gone = (part: number) => {
       const under = this.parts[part];
       return under !== undefined && (under.mode === 'broken' || under.fallen);
@@ -1044,39 +1173,154 @@ export class SiegeRound {
     return under.every(gone);
   }
 
-  /** One step of every standing guard: walking his stretch, pausing at its ends. */
-  #walkGuards(): void {
+  /**
+   * One step of every standing guard, by what he's about: walking his stretch and pausing at its
+   * ends; panicking up and down his walk; ducked or peeking; running for the bell, or ringing it;
+   * the captain in the keep or at a window.
+   */
+  #moveGuards(): void {
     const { timestep } = this.rules.physics;
     const { patrolSpeed, patrolPause } = this.rules.guardMoves;
+    const feel = this.#hooks.feel();
     this.guards.forEach((state, index) => {
-      const slot = state.slot;
-      if (state.down || slot?.kind !== 'path') return;
-      if (state.pause > 0) {
-        state.pause -= timestep;
-        state.walking = false;
-      } else {
-        state.along += state.heading * patrolSpeed * timestep;
-        if (state.along <= slot.from || state.along >= slot.to) {
-          state.along = Math.min(Math.max(state.along, slot.from), slot.to);
-          state.heading = state.heading === 1 ? -1 : 1;
-          state.pause = patrolPause;
+      if (state.down) return;
+      switch (state.mood) {
+        case 'calm':
+          this.#patrol(state, patrolSpeed, patrolPause);
+          // Alerted, he takes it in a moment before he does anything.
+          if (state.reacting) {
+            state.timer -= timestep;
+            if (state.timer <= 0) this.#react(index, feel);
+          }
+          break;
+        case 'panic':
+          this.#patrol(state, feel.panicSpeed, 0);
+          break;
+        case 'hide':
+        case 'peek':
+          state.walking = false;
+          state.facing = this.#outward(this.#feetOf(state));
+          state.timer -= timestep;
+          if (state.timer <= 0) this.#duck(index, state.mood === 'peek', feel);
+          break;
+        case 'run':
+          this.#runOn(index, feel.runnerSpeed * timestep);
+          break;
+        case 'ring': {
+          state.walking = false;
+          const [x, , z] = this.layout.anchors.bell.at;
+          const feet = this.#feetOf(state);
+          state.facing = Math.atan2(x - feet.x, z - feet.z);
+          break;
         }
-        state.walking = true;
+        case 'inside':
+        case 'window':
+          state.timer -= timestep;
+          if (state.timer <= 0) {
+            if (state.mood === 'inside') this.#showCaptain(index, feel);
+            else this.#hideCaptain(index, feel);
+          }
+          break;
       }
-      const feet = this.#feetOf(state);
-      if (state.walking) {
-        const path = this.layout.anchors.guardPaths.find((entry) => entry.id === slot.post);
-        if (path) {
-          const [ax, , az] = pointAlong(path, state.along - 0.05 * state.heading);
-          const [bx, , bz] = pointAlong(path, state.along + 0.05 * state.heading);
-          if (Math.hypot(bx - ax, bz - az) > 1e-6) state.facing = Math.atan2(bx - ax, bz - az);
-        }
-      } else state.facing = this.#outward(feet);
       const body = this.#guardBodies[index]?.body;
       if (!body) return;
-      body.setNextKinematicTranslation({ x: feet.x, y: feet.y + state.feet, z: feet.z });
-      body.setNextKinematicRotation(turnQuat(state.facing));
+      const feet = this.#feetOf(state);
+      const middle = { x: feet.x, y: feet.y + state.feet, z: feet.z };
+      if (this.#jumped.has(index)) {
+        body.setTranslation(middle, true);
+        body.setRotation(turnQuat(state.facing), true);
+      } else {
+        body.setNextKinematicTranslation(middle);
+        body.setNextKinematicRotation(turnQuat(state.facing));
+      }
     });
+  }
+
+  /** A guard walking his stretch at `speed`, pausing `pause` at its ends (a lookout stands). */
+  #patrol(state: GuardState, speed: number, pause: number): void {
+    const slot = state.slot;
+    if (slot?.kind !== 'path') {
+      state.walking = false;
+      return;
+    }
+    const { timestep } = this.rules.physics;
+    if (state.pause > 0) {
+      state.pause -= timestep;
+      state.walking = false;
+    } else {
+      state.along += state.heading * speed * timestep;
+      if (state.along <= slot.from || state.along >= slot.to) {
+        state.along = Math.min(Math.max(state.along, slot.from), slot.to);
+        state.heading = state.heading === 1 ? -1 : 1;
+        state.pause = pause;
+      }
+      state.walking = true;
+    }
+    if (state.walking) {
+      const path = this.layout.anchors.guardPaths.find((entry) => entry.id === slot.post);
+      if (path) {
+        const [ax, , az] = pointAlong(path, state.along - 0.05 * state.heading);
+        const [bx, , bz] = pointAlong(path, state.along + 0.05 * state.heading);
+        if (Math.hypot(bx - ax, bz - az) > 1e-6) state.facing = Math.atan2(bx - ax, bz - az);
+      }
+    } else state.facing = this.#outward(this.#feetOf(state));
+  }
+
+  /**
+   * Guard `index` ducks behind the parapet (his box down to `alarm.hideHeight`, so it covers
+   * him), or stands up from it to peek; either for a while, at random.
+   */
+  #duck(index: number, down: boolean, feel: SiegeFeel): void {
+    const state = this.guards[index];
+    if (!state) return;
+    state.mood = down ? 'hide' : 'peek';
+    state.timer = down
+      ? between2(this.#alarmRng, feel.hideMinSeconds, feel.hideMaxSeconds)
+      : between2(this.#alarmRng, feel.peekMinSeconds, feel.peekMaxSeconds);
+    this.#resize(index, down ? this.rules.alarm.hideHeight : this.rules.guard.size[1]);
+  }
+
+  /** A guard's box made `height` tall, his feet where they were. */
+  #resize(index: number, height: number): void {
+    const state = this.guards[index];
+    const collider = this.#guardBodies[index]?.colliders[0];
+    if (!state || state.size[1] === height) return;
+    state.size[1] = height;
+    state.feet = height / 2;
+    collider?.setHalfExtents({ x: state.size[0] / 2, y: height / 2, z: state.size[2] / 2 });
+  }
+
+  /** The runner goes `reach` m on along his way to the bell; there, he rings it. */
+  #runOn(index: number, reach: number): void {
+    const state = this.guards[index];
+    const route = state?.route;
+    if (!state || !route || !state.spot) return;
+    state.walking = true;
+    let left = reach;
+    const spot = state.spot;
+    while (left > 0 && state.leg < route.length) {
+      const target = route[state.leg];
+      if (!target) break;
+      const dx = target.x - spot.x;
+      const dy = target.y - spot.y;
+      const dz = target.z - spot.z;
+      const distance = Math.hypot(dx, dy, dz);
+      if (Math.hypot(dx, dz) > 1e-6) state.facing = Math.atan2(dx, dz);
+      if (distance <= left) {
+        spot.x = target.x;
+        spot.y = target.y;
+        spot.z = target.z;
+        left -= distance;
+        state.leg++;
+      } else {
+        const share = left / distance;
+        spot.x += dx * share;
+        spot.y += dy * share;
+        spot.z += dz * share;
+        left = 0;
+      }
+    }
+    if (state.leg >= route.length) this.#ring(index);
   }
 
   /** The bodies that move: loose parts, spears that are still bodies, guards. */
@@ -1136,6 +1380,7 @@ export class SiegeRound {
     if (!spear || !tracked || !body) return;
     const before = tracked.velocity;
     const speed = length(before);
+    const first = spear.flying;
     if (spear.flying) {
       spear.flying = false;
       // A spear that's hit something is spent: it glances off slowly (never on across the castle).
@@ -1146,6 +1391,8 @@ export class SiegeRound {
       body.setAngularDamping(this.rules.projectile.landedSpinDamping);
     }
     const at = tip(body, this.rules.projectile.length / 2);
+    // Where a spear first comes down, the guards near it hear it.
+    if (first) this.#alerts.push({ cause: 'shot', at });
     if (other.kind !== 'part' && other.kind !== 'guard') {
       if (speed >= feel.thudSpeed) this.#hooks.onEvent({ type: 'land', spear: index, speed, at });
       return;
@@ -1303,6 +1550,7 @@ export class SiegeRound {
       const entry = this.spears[spear];
       if (entry) entry.gone = true;
     }
+    this.#alerts.push({ cause: 'break', at: centre });
     this.#hooks.onEvent({ type: 'break', part: index, kind: state.material, at: centre });
   }
 
@@ -1368,9 +1616,29 @@ export class SiegeRound {
         true,
       );
     }
+    this.#alerts.push({ cause: 'death', at });
+    if (index === this.#runner) {
+      // On his way to the bell: it's not rung, and another may try in a moment.
+      this.#runner = undefined;
+      this.#runnerAt = this.seconds + this.#hooks.feel().runnerDelaySeconds;
+      const route = state.route ?? [];
+      const ahead = state.spot ? [state.spot, ...route.slice(state.leg)] : route;
+      this.#hooks.logger.log('siege.runner', {
+        event: 'killed',
+        guard: index,
+        post: state.slot?.post,
+        by,
+        metresLeft: round2(lengthAlong(ahead)),
+        runners: this.#runnersSent,
+        seconds: round2(this.seconds),
+        step: this.#steps,
+      });
+      this.#hooks.onEvent({ type: 'runner', guard: index, what: 'killed' });
+    }
     this.#hooks.logger.log('siege.guardDown', {
       guard: index,
       role: state.role,
+      mood: state.mood,
       by,
       vantage: this.vantages[this.#vantage]?.id,
       throws: this.#throws,
@@ -1456,6 +1724,299 @@ export class SiegeRound {
     for (const collider of tracked.colliders) this.#owners.delete(collider.handle);
     this.#world.removeRigidBody(body);
     tracked.body = undefined;
+  }
+
+  // The alarm
+
+  /** The bell broken or knocked down before it rang: it never will, and a runner gives up. */
+  #checkBell(): void {
+    if (this.#rangAt !== undefined || this.#bellBroken) return;
+    const bell = this.parts.find((part) => part.kind === 'bell');
+    if (!bell || (bell.mode !== 'broken' && !bell.fallen)) return;
+    this.#bellBroken = true;
+    this.#hooks.logger.log('siege.bell', {
+      event: 'broken',
+      knocked: bell.mode !== 'broken',
+      runner: this.#runner,
+      throws: this.#throws,
+      seconds: round2(this.seconds),
+      step: this.#steps,
+    });
+    this.#hooks.onEvent({ type: 'bell', rang: false });
+    const runner = this.#runner;
+    const state = runner === undefined ? undefined : this.guards[runner];
+    if (runner === undefined || !state) return;
+    // Nothing to run for: he ducks where he is.
+    this.#runner = undefined;
+    state.walking = false;
+    this.#duck(runner, true, this.#hooks.feel());
+    this.#hooks.logger.log('siege.runner', {
+      event: 'gaveUp',
+      guard: runner,
+      seconds: round2(this.seconds),
+      step: this.#steps,
+    });
+    this.#hooks.onEvent({ type: 'runner', guard: runner, what: 'gaveUp' });
+  }
+
+  /**
+   * Every unaware guard within reach of something that alerts (a spear landing, a part breaking,
+   * a guard going down, each its own radius), and who can see it where the data says he must, is
+   * alerted. In order, so it replays.
+   */
+  #raiseAlerts(feel: SiegeFeel): void {
+    const sources = this.#alerts;
+    this.#alerts = [];
+    const radius = {
+      shot: feel.alertSpearRadius,
+      break: feel.alertBreakRadius,
+      death: feel.alertDeathRadius,
+    };
+    for (const source of sources) {
+      const sight = this.rules.alarm.sight[source.cause];
+      this.guards.forEach((state, index) => {
+        if (state.role !== 'guard' || state.down || state.alertedBy !== undefined) return;
+        const middle = this.#guardBodies[index]?.body?.translation();
+        if (!middle) return;
+        const distance = Math.hypot(
+          middle.x - source.at.x,
+          middle.y - source.at.y,
+          middle.z - source.at.z,
+        );
+        if (distance > radius[source.cause]) return;
+        const eyes = { x: middle.x, y: middle.y + state.height * EYES, z: middle.z };
+        if (sight && !this.#canSee(eyes, source.at)) return;
+        this.#alert(index, source.cause, distance, feel);
+      });
+    }
+  }
+
+  /** Whether nothing the castle has (its parts, its stonework, the field) is between the two. */
+  #canSee(from: Vec3, to: Vec3): boolean {
+    const way = { x: to.x - from.x, y: to.y - from.y, z: to.z - from.z };
+    const far = Math.hypot(way.x, way.y, way.z);
+    if (far <= SIGHT_SLACK) return true;
+    const dir = { x: way.x / far, y: way.y / far, z: way.z / far };
+    const hit = this.#world.castRay(
+      new this.#physics.Ray(from, dir),
+      far,
+      true,
+      undefined,
+      groups(0xffff, GROUND | PART),
+    );
+    return !hit || hit.timeOfImpact >= far - SIGHT_SLACK;
+  }
+
+  /**
+   * Guard `index` is alerted (by `cause`, `distance` m off): he'll panic up and down his walk, or
+   * duck behind the parapet, at random (with no walk, at a lookout, he ducks), once he's taken it
+   * in (`reactSeconds`: a volley already on its way still lands).
+   */
+  #alert(index: number, cause: AlertCause, distance: number | undefined, feel: SiegeFeel): void {
+    const state = this.guards[index];
+    if (!state || state.role !== 'guard' || state.down || state.alertedBy !== undefined) return;
+    state.alertedBy = cause;
+    const slot = state.slot;
+    const reaction: AlertReaction =
+      slot?.kind === 'path' && this.#alarmRng.chance(feel.panicShare) ? 'panic' : 'hide';
+    state.reacting = reaction;
+    state.timer = feel.reactSeconds;
+    if (feel.reactSeconds <= 0) this.#react(index, feel);
+    if (!this.#alerted) {
+      this.#alerted = true;
+      this.#runnerAt = this.seconds + feel.runnerDelaySeconds;
+    }
+    this.#hooks.logger.log('siege.alert', {
+      guard: index,
+      post: slot?.post,
+      cause,
+      ...(distance !== undefined && { distance: round2(distance) }),
+      reaction,
+      throws: this.#throws,
+      seconds: round2(this.seconds),
+      step: this.#steps,
+    });
+    this.#hooks.onEvent({ type: 'alert', guard: index, cause, reaction });
+  }
+
+  /** An alerted guard does what he was going to: panics up and down his walk, or ducks. */
+  #react(index: number, feel: SiegeFeel): void {
+    const state = this.guards[index];
+    const reaction = state?.reacting;
+    if (!state || !reaction) return;
+    state.reacting = undefined;
+    const slot = state.slot;
+    const path =
+      slot?.kind === 'path'
+        ? this.layout.anchors.guardPaths.find((entry) => entry.id === slot.post)
+        : undefined;
+    if (reaction === 'panic' && slot && path) {
+      // Up and down the whole of his walk, without stopping.
+      state.mood = 'panic';
+      state.slot = { post: slot.post, kind: 'path', from: 0, to: pathLength(path) };
+      state.pause = 0;
+      this.#footing[index] = this.#footingAlong(this.#stretchOf(state));
+    } else this.#duck(index, true, feel);
+  }
+
+  /**
+   * Once it's time, if the bell can still ring and no one's on his way, the alerted guard nearest
+   * it (by his way there) runs for it: as many as the data lets try, one at a time.
+   */
+  #sendRunner(now: number, feel: SiegeFeel): void {
+    if (this.#runner !== undefined || this.#rangAt !== undefined || this.#bellBroken) return;
+    if (this.#runnersSent >= this.rules.alarm.runners || now < this.#runnerAt) return;
+    let best: { index: number; route: Vec3[]; metres: number } | undefined;
+    this.guards.forEach((state, index) => {
+      if (state.role !== 'guard' || state.down || state.alertedBy === undefined) return;
+      const post = state.slot?.post;
+      const way = post === undefined ? undefined : bellRouteFrom(this.layout, post);
+      if (!way) return;
+      const route = [this.#feetOf(state), ...way.points.map(({ at: [x, y, z] }) => ({ x, y, z }))];
+      const metres = lengthAlong(route);
+      if (!best || metres < best.metres) best = { index, route, metres };
+    });
+    if (!best) return;
+    const { index, route, metres } = best;
+    const state = this.guards[index];
+    if (!state) return;
+    this.#runner = index;
+    this.#runnersSent++;
+    this.#resize(index, this.rules.guard.size[1]);
+    state.reacting = undefined;
+    state.mood = 'run';
+    state.spot = { ...(route[0] ?? this.#feetOf(state)) };
+    state.route = route;
+    state.leg = 1;
+    state.pause = 0;
+    // What he may stand on is what's under his way now.
+    const points: Vec3[] = [];
+    for (let leg = 1; leg < route.length; leg++) {
+      const a = route[leg - 1];
+      const b = route[leg];
+      if (!a || !b) continue;
+      const steps = Math.max(1, Math.ceil(Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z) / 0.25));
+      for (let i = 0; i <= steps; i++) {
+        const t = i / steps;
+        points.push({
+          x: a.x + (b.x - a.x) * t,
+          y: a.y + (b.y - a.y) * t,
+          z: a.z + (b.z - a.z) * t,
+        });
+      }
+    }
+    this.#footing[index] = this.#footingAlong(points);
+    this.#hooks.logger.log('siege.runner', {
+      event: 'start',
+      guard: index,
+      post: state.slot?.post,
+      metres: round2(metres),
+      speed: feel.runnerSpeed,
+      runner: this.#runnersSent,
+      of: this.rules.alarm.runners,
+      throws: this.#throws,
+      seconds: round2(now),
+      step: this.#steps,
+    });
+    this.#hooks.onEvent({ type: 'runner', guard: index, what: 'start' });
+  }
+
+  /**
+   * The runner got to the rope: the bell rings. Every guard is alerted, the captain hides in the
+   * keep, and reinforcements are on their way.
+   */
+  #ring(index: number): void {
+    const state = this.guards[index];
+    if (!state) return;
+    const feel = this.#hooks.feel();
+    state.mood = 'ring';
+    state.walking = false;
+    this.#runner = undefined;
+    this.#rangAt = this.seconds;
+    this.#hooks.logger.log('siege.runner', {
+      event: 'reached',
+      guard: index,
+      post: state.slot?.post,
+      runner: this.#runnersSent,
+      seconds: round2(this.seconds),
+      step: this.#steps,
+    });
+    this.#hooks.onEvent({ type: 'runner', guard: index, what: 'reached' });
+    this.#hooks.logger.log('siege.bell', {
+      event: 'rang',
+      guard: index,
+      throws: this.#throws,
+      done: this.done,
+      reinforcementSeconds: feel.reinforcementSeconds,
+      seconds: round2(this.seconds),
+      step: this.#steps,
+    });
+    this.#hooks.onEvent({ type: 'bell', rang: true });
+    this.guards.forEach((guard, at) => {
+      if (guard.role === 'guard') this.#alert(at, 'bell', undefined, feel);
+      else if (!guard.down) this.#hideCaptain(at, feel);
+    });
+  }
+
+  /** The captain hides in the keep a while: out of reach (drawn only under Sense). */
+  #hideCaptain(index: number, feel: SiegeFeel): void {
+    const state = this.guards[index];
+    const collider = this.#guardBodies[index]?.colliders[0];
+    if (!state || state.down) return;
+    const window = this.layout.anchors.captainWindows[state.window ?? this.plan.captainWindow ?? 0];
+    const building = this.layout.buildings.find((entry) => entry.id === window?.building);
+    const [x, z] = building
+      ? [(building.min[0] + building.max[0]) / 2, (building.min[1] + building.max[1]) / 2]
+      : [state.spot?.x ?? 0, state.spot?.z ?? 0];
+    state.mood = 'inside';
+    state.window = undefined;
+    state.spot = { x, y: 0, z };
+    state.timer = between2(this.#alarmRng, feel.captainHideMinSeconds, feel.captainHideMaxSeconds);
+    this.#footing[index] = [];
+    collider?.setEnabled(false);
+    this.#jumped.add(index);
+  }
+
+  /** The captain shows at a window, at random (one whose block still stands), a while. */
+  #showCaptain(index: number, feel: SiegeFeel): void {
+    const state = this.guards[index];
+    const collider = this.#guardBodies[index]?.colliders[0];
+    if (!state || state.down) return;
+    const windows = this.layout.anchors.captainWindows.flatMap((window, at) => {
+      const footing = this.#windowFooting(this.#windowFeet(window));
+      const standing = footing.every((part) => {
+        const block = this.parts[part];
+        return block !== undefined && block.mode !== 'broken' && !block.fallen;
+      });
+      return standing ? [at] : [];
+    });
+    const chosen = windows.length > 0 ? this.#alarmRng.pick(windows) : undefined;
+    const window = chosen === undefined ? undefined : this.layout.anchors.captainWindows[chosen];
+    if (chosen === undefined || !window) {
+      state.timer = between2(
+        this.#alarmRng,
+        feel.captainHideMinSeconds,
+        feel.captainHideMaxSeconds,
+      );
+      return;
+    }
+    const feet = this.#windowFeet(window);
+    state.mood = 'window';
+    state.window = chosen;
+    state.spot = feet;
+    state.facing = Math.atan2(window.out[0], window.out[1]);
+    state.timer = between2(this.#alarmRng, feel.captainShowMinSeconds, feel.captainShowMaxSeconds);
+    this.#footing[index] = this.#windowFooting(feet);
+    collider?.setEnabled(true);
+    this.#jumped.add(index);
+    this.#hooks.logger.log('siege.captainWindow', {
+      window: chosen,
+      shows: round2(state.timer),
+      throws: this.#throws,
+      seconds: round2(this.seconds),
+      step: this.#steps,
+    });
+    this.#hooks.onEvent({ type: 'captainWindow', window: chosen });
   }
 
   /** What an objective's check sees. */
@@ -1550,7 +2111,7 @@ export class SiegeRound {
       {
         done: this.done,
         objectives: this.progress.length,
-        throws: this.#throws,
+        rang: this.#rangAt !== undefined,
         used: this.#used,
         partsDown: this.partsDown,
         guardsDown: this.guardsDown,
@@ -1578,7 +2139,8 @@ export class SiegeRound {
       total: this.progress.length,
       used: this.#used,
       throws: this.#throws,
-      par: this.rules.par,
+      rang: this.#rangAt !== undefined,
+      bellBroken: this.#bellBroken,
       partsDown,
       partsBroken: this.partsBroken,
       guardsDown,
@@ -1592,11 +2154,15 @@ export class SiegeRound {
       ending,
       won: result.won,
       stars: result.stars,
+      starsWhy: result.starsWhy,
       done,
       total: result.total,
       objectives: result.objectives,
       throws: result.throws,
-      par: result.par,
+      alarm: this.alarm,
+      rangAt: this.#rangAt === undefined ? undefined : round2(this.#rangAt),
+      alerted: this.guards.filter((guard) => guard.alertedBy !== undefined).length,
+      runners: this.#runnersSent,
       spearsUsed: result.used,
       xp: result.xp,
       recovered: result.recovered,
@@ -1613,6 +2179,39 @@ export class SiegeRound {
     this.#hooks.finish(result);
     this.#hooks.onEvent({ type: 'end', result });
   }
+}
+
+/** A guard as he starts a round: unaware, on his post. */
+function unaware(): Pick<
+  GuardState,
+  'mood' | 'alertedBy' | 'reacting' | 'spot' | 'timer' | 'route' | 'leg' | 'window'
+> {
+  return {
+    mood: 'calm',
+    alertedBy: undefined,
+    reacting: undefined,
+    spot: undefined,
+    timer: 0,
+    route: undefined,
+    leg: 0,
+    window: undefined,
+  };
+}
+
+/** A random time from `a` to `b` seconds (either way round, as sliders may leave them). */
+function between2(rng: Rng, a: number, b: number): number {
+  return rng.range(Math.min(a, b), Math.max(a, b));
+}
+
+/** How long a run of points is (m), end to end. */
+function lengthAlong(points: readonly Vec3[]): number {
+  let total = 0;
+  for (let i = 1; i < points.length; i++) {
+    const a = points[i - 1];
+    const b = points[i];
+    if (a && b) total += Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z);
+  }
+  return total;
 }
 
 const scratchPose: Pose = { position: { x: 0, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0, w: 1 } };

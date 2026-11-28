@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { castleProblems, layoutCastle, postSlots } from './castleLayout';
+import { bellRouteFrom, castleProblems, layoutCastle, postSlots } from './castleLayout';
 import { gameDataShape, type GameData } from './schema';
 
 type Path = (string | number)[];
@@ -512,6 +512,12 @@ function checkSiege(data: GameData, issue: (path: Path, message: string) => void
       if (!posts.has(post)) issue([...path, 'posts', postIndex], `Unknown post "${post}"`);
     });
     if (!layout || objective.posts.some((post) => !posts.has(post))) return;
+    // Any of its guards may run for the bell.
+    objective.posts.forEach((post, postIndex) => {
+      if (siege.alarm.runners > 0 && !bellRouteFrom(layout, post)) {
+        issue([...path, 'posts', postIndex], `No way to the bell from "${post}"`);
+      }
+    });
     const room = objective.posts.flatMap((post) => postSlots(layout, post, objective.slot)).length;
     if (room < objective.guards) {
       issue(

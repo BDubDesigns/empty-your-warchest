@@ -2,7 +2,8 @@ import * as THREE from 'three';
 import { drawSplitGrain } from '../../../app/woodGrain';
 import { Rng } from '../../../core';
 
-// The siege's drawn looks: block faces and their damage, the banner's cloth, dust, and a whoosh.
+// The siege's drawn looks: block faces and their damage, the banner's cloth, dust, a whoosh and
+// the alarm bell.
 
 /** Darker as it takes damage. */
 export function stageTint(color: number, stage: number): THREE.Color {
@@ -155,6 +156,54 @@ export function whooshUrl(): string {
     low += (rng.range(-1, 1) - low) * cutoff;
     data[index] = Math.round(low * envelope * 0.9 * 32767);
   }
+  return wavUrl(data, rate);
+}
+
+/**
+ * The alarm bell's toll, made rather than recorded (a stand-in for a real recording): a big
+ * bronze bell's inharmonic partials (the hum an octave under its strike note, the minor third, the
+ * fifth and the rest), each ringing on and dying away at its own rate, the high ones soonest, and
+ * a sharp strike at the start.
+ */
+export function bellUrl(): string {
+  const rate = 22050;
+  const seconds = 3.2;
+  const length = Math.round(rate * seconds);
+  const data = new Float32Array(length);
+  const strike = 392;
+  // (share of the strike note, loudness, seconds to die away to a third)
+  const partials: [number, number, number][] = [
+    [0.5, 0.55, 2.6],
+    [1, 0.8, 1.8],
+    [1.2, 0.45, 1.4],
+    [1.5, 0.3, 1.1],
+    [2, 0.35, 0.9],
+    [2.51, 0.2, 0.6],
+    [2.66, 0.18, 0.55],
+    [3.01, 0.12, 0.4],
+  ];
+  let most = 0;
+  for (let index = 0; index < length; index++) {
+    const t = index / rate;
+    let sample = 0;
+    for (const [share, loud, decay] of partials) {
+      sample += loud * Math.exp(-t / decay) * Math.sin(2 * Math.PI * strike * share * t);
+    }
+    // The strike: a few milliseconds of clang.
+    sample *= Math.min(t / 0.004, 1);
+    data[index] = sample;
+    most = Math.max(most, Math.abs(sample));
+  }
+  const pcm = new Int16Array(length);
+  for (let index = 0; index < length; index++) {
+    pcm[index] = Math.round(((data[index] ?? 0) / (most || 1)) * 0.9 * 32767);
+  }
+  return wavUrl(pcm, rate);
+}
+
+/** 16-bit mono samples as a WAV in memory. */
+function wavUrl(data: Int16Array, rate: number): string {
+  const length = data.length;
   const header = new DataView(new ArrayBuffer(44));
   const text = (at: number, value: string) => {
     for (let index = 0; index < value.length; index++) {
@@ -174,5 +223,7 @@ export function whooshUrl(): string {
   header.setUint16(34, 16, true);
   text(36, 'data');
   header.setUint32(40, length * 2, true);
-  return URL.createObjectURL(new Blob([header.buffer, data.buffer], { type: 'audio/wav' }));
+  return URL.createObjectURL(
+    new Blob([header.buffer, data.buffer as ArrayBuffer], { type: 'audio/wav' }),
+  );
 }
