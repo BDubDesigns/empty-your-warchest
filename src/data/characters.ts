@@ -1,8 +1,23 @@
 import type { GameDataInput } from './schema';
 
-// The siege's guards and captain, from the Quaternius Source kits (tools/characters/build.py). Shown
-// in Debug → Character preview until the siege moves onto them. Each model is only a look: the
-// siege sizes it to its rules' box. Looks here are first guesses, tuned by eye from the preview.
+// The siege's guards (five looks) and its captain, from the Quaternius Source kits
+// (tools/characters/build.py), shown in Debug → Character preview too. Each model is only a look:
+// the siege sizes it to its rules' box. Looks here are first guesses, tuned by eye from the preview.
+
+/** A guard's look: its GLB on each tier, its colour maps, and the guards' triangle budget. */
+function guard(id: string, name: string, maps: string[]) {
+  return {
+    id,
+    name,
+    files: {
+      high: `models/characters/${id}-high.glb`,
+      low: `models/characters/${id}-low.glb`,
+    },
+    maps,
+    triangles: { high: 5000, low: 2500 },
+    turn: 0,
+  };
+}
 
 export const characters = {
   clipFile: 'models/characters/clips.glb',
@@ -21,16 +36,19 @@ export const characters = {
   idleClip: 'idle',
   fadeSeconds: 0.2,
   models: [
-    // The knight's tabard over his arm and leg armour, a closed armet, spiked pauldrons.
-    {
-      id: 'guard',
-      name: 'Guard',
-      files: { high: 'models/characters/guard-high.glb', low: 'models/characters/guard-low.glb' },
-      maps: ['guard'],
-      triangles: { high: 5000, low: 2500 },
-      turn: 0,
-    },
-    // The knight's full plate in gold, bare headed: grey hair and a beard.
+    // The guards' five looks, all on the knight's two guard maps (the red colourway and the dark
+    // one), the bare head on the heads' map besides. The man's tabard (red, a gold cross) over his
+    // arm and leg armour, a closed armet, spiked pauldrons and the red scarf.
+    guard('guard', 'Guard (armet)', ['guard']),
+    // The dark tabard, the horned helmet, round pauldrons, no scarf.
+    guard('guard_horns', 'Guard (horns)', ['guard_dark']),
+    // The red tabard, bare headed (brown buzzed hair and a beard), round pauldrons, the scarf.
+    guard('guard_bare', 'Guard (bare head)', ['guard', 'heads']),
+    // The woman's outfit: the dark tabard, a closed armet, spiked pauldrons, the scarf.
+    guard('guard_woman', 'Guard (woman, armet)', ['guard_dark']),
+    // The woman's steel plate (in the red colourway), the horned helmet, round pauldrons.
+    guard('guard_woman_plate', 'Guard (woman, plate)', ['guard']),
+    // The knight's full plate in gold (that colourway his alone), bare headed: grey hair, a beard.
     {
       id: 'captain',
       name: 'Captain',
@@ -38,23 +56,29 @@ export const characters = {
         high: 'models/characters/captain-high.glb',
         low: 'models/characters/captain-low.glb',
       },
-      maps: ['captain', 'captain_head'],
+      maps: ['captain', 'heads'],
       triangles: { high: 8000, low: 5000 },
       turn: 0,
     },
   ],
+  // The siege's guards wear these (each guard's look picked from the round's seed).
+  guards: ['guard', 'guard_horns', 'guard_bare', 'guard_woman', 'guard_woman_plate'],
+  // The knight's body through the idle clip (the build measures it; every look the same, as the
+  // woman's outfit is scaled to the man's hip height), without what only decorates it (horns,
+  // pauldrons, scarf, hair): across his trunk, arms and head; his height to the armet's top; deep.
+  body: [0.73, 1.81, 0.56],
   tiers: {
-    // About 12 MB of colour maps for both.
+    // About 17 MB of colour maps: the two guard maps, the captain's and the heads'.
     high: {
-      textureSizes: { guard: 1024, captain: 1024, captain_head: 512 },
+      textureSizes: { guard: 1024, guard_dark: 1024, captain: 1024, heads: 512 },
       shadows: true,
-      maxTextureMB: 13,
+      maxTextureMB: 18,
     },
-    // About 3 MB, and no shadow map (as the siege's and the castle's Low).
+    // About 4.3 MB, and no shadow map (as the siege's and the castle's Low).
     low: {
-      textureSizes: { guard: 512, captain: 512, captain_head: 256 },
+      textureSizes: { guard: 512, guard_dark: 512, captain: 512, heads: 256 },
       shadows: false,
-      maxTextureMB: 4,
+      maxTextureMB: 4.5,
     },
   },
   // The kit's skeleton without its twelve leaf bones (finger and toe tips).
@@ -72,8 +96,8 @@ export const characters = {
     dragDegrees: 240,
     zoomStep: 1.12,
     // About as many guards as the siege shows at once.
+    // The guards' looks in turn.
     crowd: {
-      model: 'guard',
       count: 12,
       columns: 3,
       spacing: 1.5,

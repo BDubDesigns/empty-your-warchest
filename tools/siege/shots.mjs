@@ -3,7 +3,8 @@
 // gold, a Sense potion's outlines, a wrecked wall, a collapsed tower, and the Low tier. Prints
 // what each view costs to draw (draw calls, triangles, texture memory).
 // usage: node tools/siege/shots.mjs <the game's URL, e.g. http://localhost:5173/> <out dir> [parts]
-// `parts`: some of castle,tower,low (all three by default; drawn in software, each takes minutes).
+// `parts`: some of castle,tower,low,guards,boxes,keep (all by default; drawn in software, each takes
+// minutes).
 import { mkdir, readFile } from 'node:fs/promises';
 import { chromium, devices } from '@playwright/test';
 
@@ -26,13 +27,14 @@ const browser = await chromium.launch({
   args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'],
 });
 
-/** A page at the War tent, drawn at `tier`. */
-async function openTent(tier) {
+/** A page at the War tent, drawn at `tier` (with the guards' hit boxes drawn, if `boxes`). */
+async function openTent(tier, boxes = false) {
   const page = await browser.newPage({ ...devices['Pixel 7'] });
   page.on('pageerror', (error) => console.error('page error:', error.message));
   await page.addInitScript(
-    ({ tier, skills }) => {
+    ({ tier, skills, boxes }) => {
       localStorage.setItem('warchest.graphics', tier);
+      localStorage.setItem('warchest.siege.hitBoxes', boxes ? 'on' : 'off');
       localStorage.setItem(
         'warchest.save',
         JSON.stringify({
@@ -50,7 +52,7 @@ async function openTent(tier) {
         }),
       );
     },
-    { tier, skills },
+    { tier, skills, boxes },
   );
   await page.goto(url);
   await page.locator('body[data-view=camp]').waitFor({ timeout: 60_000 });
@@ -208,6 +210,71 @@ if (want('tower')) {
   }
   await shot(tower, 'high-tower-collapsed');
   await tower.close();
+}
+
+// The guards and the captain up close: each vantage turned to a battlement guard, the captain at
+// his window, Sense on them, and a guard falling with his battlement (the kill look follows him).
+if (want('guards')) {
+  const page = await openTent('high');
+  for (const name of ['Hill', 'Siege tower']) {
+    await vantage(page, name);
+    await aimAt(page, 'guard');
+    await shot(page, `high-guards-${slug(name)}`);
+  }
+  await vantage(page, 'Hill');
+  await aimAt(page, 'captain');
+  await shot(page, 'high-captain');
+  await page.getByRole('button', { name: /Sense/ }).click();
+  await page.waitForTimeout(800);
+  await shot(page, 'high-captain-sense');
+  await aimAt(page, 'guard');
+  await shot(page, 'high-guards-sense');
+  // Volleys low on the wall under a guard: the kill look holds on him as he falls.
+  if (await aimAt(page, 'guard', 85)) {
+    for (let volley = 0; volley < 3; volley++) {
+      await fire(page);
+      await page.waitForTimeout(700);
+      if ((await view(page).getAttribute('data-camera')) === 'kill') {
+        for (let index = 0; index < 3; index++) {
+          await shot(page, `high-guard-falling-${String(volley)}-${String(index)}`);
+          await page.waitForTimeout(350);
+        }
+        break;
+      }
+      await settle(page);
+    }
+  }
+  await page.close();
+}
+
+// The guards' hit boxes (Debug → Options), from the hill and the siege tower.
+if (want('boxes')) {
+  const page = await openTent('high', true);
+  for (const name of ['Hill', 'Siege tower']) {
+    await vantage(page, name);
+    await aimAt(page, 'guard');
+    await shot(page, `high-hitboxes-${slug(name)}`);
+  }
+  await vantage(page, 'Hill');
+  await aimAt(page, 'captain');
+  await shot(page, 'high-hitboxes-captain');
+  await page.close();
+}
+
+// The keep's top storey broken open: barrages at the captain's window from the hill, then the
+// inside of the keep through what's left.
+if (want('keep')) {
+  const page = await openTent('high');
+  await vantage(page, 'Hill');
+  await aimAt(page, 'captain');
+  await shot(page, 'high-keep-before');
+  for (let volley = 0; volley < 3; volley++) {
+    await fire(page, 'Barrage');
+    await page.waitForTimeout(5000);
+    await settle(page);
+    await shot(page, `high-keep-broken-${String(volley)}`);
+  }
+  await page.close();
 }
 
 if (want('low')) {

@@ -165,6 +165,8 @@ export interface PartState {
 /** One of the guards (the battlement's, or the captain). */
 export interface GuardState {
   role: 'guard' | 'captain';
+  /** The character he's drawn as (only a look: the rules never read it). */
+  look: string;
   /** The objective (by index) he's part of. */
   objective: number;
   /** His box (what's hit: for the captain, only what shows above the sill), and how far his feet are below its middle. */
@@ -235,6 +237,22 @@ const WAKE_REACH = 4;
 const FOOTING = 0.2;
 /** A spear this far below the field, or past its edge, is gone (m). */
 const OFF_FIELD = 3;
+/** Mixed into the seed for the guards' looks: a draw of their own, apart from the rules'. */
+const LOOKS_SALT = 0x2c1b3c6d;
+
+/** `items` in an order shuffled by `rng` (Fisher–Yates). */
+function shuffled<T>(items: readonly T[], rng: Rng): T[] {
+  const out = [...items];
+  for (let index = out.length - 1; index > 0; index--) {
+    const other = rng.int(0, index);
+    const swap = out[index];
+    const picked = out[other];
+    if (swap === undefined || picked === undefined) continue;
+    out[index] = picked;
+    out[other] = swap;
+  }
+  return out;
+}
 
 /** The castle laid out once per castle: it's the same every round. */
 const layouts = new WeakMap<Castle, CastleLayout>();
@@ -312,7 +330,7 @@ export class SiegeRound {
 
   constructor(
     physics: Physics,
-    data: Pick<GameData, 'siege' | 'castle' | 'tuning'>,
+    data: Pick<GameData, 'siege' | 'castle' | 'tuning' | 'characters'>,
     hooks: SiegeHooks,
     options: SiegeOptions,
   ) {
@@ -407,12 +425,16 @@ export class SiegeRound {
     this.#supports = bodies.parts.map((part) => [...part.supports]);
     this.#lastThud = this.parts.map(() => -Infinity);
 
-    // The battlement's guards, each on his stretch, and the captain at his window.
+    // The battlement's guards, each on his stretch, and the captain at his window. Each guard's
+    // look is dealt from the characters' guard looks, shuffled by a draw of the seed of its own
+    // (so the looks never move anything the rules draw).
     const guard = this.rules.guard;
+    const looks = shuffled(data.characters.guards, new Rng((options.seed ^ LOOKS_SALT) >>> 0));
     for (const planned of this.plan.guards) {
       const index = this.guards.length;
       const state: GuardState = {
         role: 'guard',
+        look: looks[index % looks.length] ?? '',
         objective: planned.objective,
         size: [...guard.size],
         feet: guard.size[1] / 2,
@@ -450,6 +472,7 @@ export class SiegeRound {
       const index = this.guards.length;
       const state: GuardState = {
         role: 'captain',
+        look: this.rules.skins.captain.character,
         objective: captain,
         size: [guard.size[0] * rules.scale, shows, guard.size[2] * rules.scale],
         feet: rules.sill + shows / 2,
@@ -502,8 +525,9 @@ export class SiegeRound {
       })),
       captainWindow: this.plan.captainWindow,
       rack: this.plan.rack,
-      guards: this.plan.guards.map((planned) => ({
+      guards: this.plan.guards.map((planned, index) => ({
         post: planned.slot.post,
+        look: this.guards[index]?.look,
         ...(planned.slot.kind === 'path' && {
           from: round2(planned.slot.from),
           to: round2(planned.slot.to),
@@ -1520,23 +1544,28 @@ export class SiegeRound {
     });
   }
 
+  /** What the round pays if it ends now (what withdrawing gets: Withdraw's confirm says it). */
+  get paysNow(): SiegeRewards {
+    return siegeRewards(
+      {
+        done: this.done,
+        objectives: this.progress.length,
+        throws: this.#throws,
+        used: this.#used,
+        partsDown: this.partsDown,
+        guardsDown: this.guardsDown,
+      },
+      this.rules,
+      this.#recovery,
+    );
+  }
+
   #finish(ending: SiegeEnding): void {
     this.#logTally();
     const partsDown = this.partsDown;
     const guardsDown = this.guardsDown;
     const done = this.done;
-    const rewards = siegeRewards(
-      {
-        done,
-        objectives: this.progress.length,
-        throws: this.#throws,
-        used: this.#used,
-        partsDown,
-        guardsDown,
-      },
-      this.rules,
-      this.#recovery,
-    );
+    const rewards = this.paysNow;
     const result: SiegeResult = {
       ...rewards,
       ending,

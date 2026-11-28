@@ -7,10 +7,10 @@ import type { Characters } from '../../data';
 import { loadCharacterKit, type CharacterKit, type PlacedCharacter } from './characterKit';
 import './characters.css';
 
-// Debug → Character preview: the siege's guard and captain side by side, to judge their looks
-// before the siege moves onto them. Each clip has a button (both play it); High or Low draws them
-// as that graphics tier would (it starts on this phone's). Crowd shows about as many guards as the
-// siege does, all animating, to see what that costs. Drag to orbit, pinch or scroll to zoom. What
+// Debug → Character preview: one of the siege's guard looks and its captain side by side, to judge
+// their looks (Look shows the guards' next). Each clip has a button (both play it); High or Low
+// draws them as that graphics tier would (it starts on this phone's). Crowd shows about as many
+// guards as the siege does, in all their looks, all animating, to see what that costs. Drag to orbit, pinch or scroll to zoom. What
 // it costs to draw (draw calls, triangles, texture memory, the frame time) shows at the top and is
 // logged as `characters.preview` once each build has settled.
 
@@ -53,6 +53,7 @@ class CharacterPreview {
   readonly #tierButtons = new Map<GraphicsTier, HTMLButtonElement>();
   readonly #clipButtons = new Map<string, HTMLButtonElement>();
   readonly #crowdButton: HTMLButtonElement;
+  readonly #lookButton: HTMLButtonElement;
   readonly #closed: Promise<void>;
   readonly #timer = new THREE.Timer();
   #close: () => void = () => undefined;
@@ -60,6 +61,8 @@ class CharacterPreview {
   #placed: PlacedCharacter[] = [];
   #tier: GraphicsTier;
   #mode: Mode = 'pair';
+  /** The guards' look on show in the pair (by its place in `guards`). */
+  #look = 0;
   /** The clip the buttons last asked for (the crowd plays its mix until one is). */
   #clip: string | undefined;
   /** Bumped by every build, so a slow one that's been overtaken is thrown away. */
@@ -150,6 +153,10 @@ class CharacterPreview {
     this.#crowdButton.addEventListener('click', () => {
       this.#setMode(this.#mode === 'crowd' ? 'pair' : 'crowd');
     });
+    this.#lookButton = el('button', { type: 'button', className: 'character-look' });
+    this.#lookButton.addEventListener('click', () => {
+      this.#nextLook();
+    });
     this.#root = el(
       'div',
       {
@@ -166,11 +173,15 @@ class CharacterPreview {
           close,
           this.#status,
         ]),
-        el('div', { className: 'character-bottom' }, [clips, this.#crowdButton]),
+        el('div', { className: 'character-bottom' }, [
+          clips,
+          el('div', { className: 'character-row' }, [this.#lookButton, this.#crowdButton]),
+        ]),
       ],
     );
     host.append(this.#root);
     this.#root.dataset.mode = this.#mode;
+    this.#markLook();
     this.#markButtons();
     this.#listen(this.#renderer.domElement);
     new ResizeObserver(() => {
@@ -234,16 +245,17 @@ class CharacterPreview {
     const { characters } = this.#deps;
     const { preview } = characters;
     if (this.#mode === 'pair') {
-      characters.models.forEach((model, index) => {
-        const placed = kit.place(model.id);
-        placed.root.position.x = (index - (characters.models.length - 1) / 2) * preview.spacing;
+      const pair = this.#pair();
+      pair.forEach((model, index) => {
+        const placed = kit.place(model);
+        placed.root.position.x = (index - (pair.length - 1) / 2) * preview.spacing;
         this.#placed.push(placed);
       });
     } else {
       const { crowd } = preview;
       const rows = Math.ceil(crowd.count / crowd.columns);
       for (let index = 0; index < crowd.count; index++) {
-        const placed = kit.place(crowd.model);
+        const placed = kit.place(characters.guards[index % characters.guards.length] ?? '');
         const column = index % crowd.columns;
         const row = Math.floor(index / crowd.columns);
         placed.root.position.set(
@@ -281,6 +293,31 @@ class CharacterPreview {
     });
     this.#root.dataset.clip = clip ?? 'mix';
     this.#markButtons();
+  }
+
+  /** The pair: the guards' look on show, and every other character (the captain). */
+  #pair(): string[] {
+    const { characters } = this.#deps;
+    const look = characters.guards[this.#look % characters.guards.length] ?? '';
+    const others = characters.models.filter((model) => !characters.guards.includes(model.id));
+    return [look, ...others.map((model) => model.id)];
+  }
+
+  /** The guards' next look (back to the pair, if the crowd's on show). */
+  #nextLook(): void {
+    const { characters } = this.#deps;
+    this.#look = (this.#look + 1) % characters.guards.length;
+    this.#markLook();
+    this.#deps.logger.log('characters.previewLook', { look: this.#pair()[0], tier: this.#tier });
+    if (this.#mode === 'pair') this.#populate();
+    else this.#setMode('pair');
+  }
+
+  #markLook(): void {
+    const [look] = this.#pair();
+    const name = this.#deps.characters.models.find((model) => model.id === look)?.name ?? '';
+    this.#lookButton.textContent = `Look ${String(this.#look + 1)}/${String(this.#deps.characters.guards.length)}: ${name}`;
+    this.#root.dataset.look = look ?? '';
   }
 
   #setMode(mode: Mode): void {
@@ -328,8 +365,11 @@ class CharacterPreview {
     const lead =
       this.#mode === 'crowd'
         ? `Crowd of ${String(this.#placed.length)} on ${tier}`
-        : `${tier}: ${this.#deps.characters.models
-            .map((model) => `${model.name} ${String(kit.triangles.get(model.id) ?? 0)}`)
+        : `${tier}: ${this.#pair()
+            .map((id) => {
+              const name = this.#deps.characters.models.find((model) => model.id === id)?.name;
+              return `${name ?? id} ${String(kit.triangles.get(id) ?? 0)}`;
+            })
             .join(', ')} tris, ${String(kit.bones)} bones`;
     this.#status.textContent =
       `${lead} · ${String(info.calls)} draws · ${(info.triangles / 1000).toFixed(1)}k tris drawn · ` +
@@ -347,6 +387,7 @@ class CharacterPreview {
       this.#deps.logger.log('characters.preview', {
         tier: this.#tier,
         mode: this.#mode,
+        looks: this.#mode === 'pair' ? this.#pair() : this.#deps.characters.guards,
         characters: this.#placed.length,
         drawCalls: info.calls,
         triangles: info.triangles,

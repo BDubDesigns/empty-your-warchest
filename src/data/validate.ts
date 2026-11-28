@@ -460,6 +460,29 @@ function checkSiege(data: GameData, issue: (path: Path, message: string) => void
       );
     }
   }
+  // The guards' and the captain's looks are characters, playing the characters' clips, and the
+  // body each is drawn with fits in his box.
+  const { characters } = data;
+  const { skins } = siege;
+  if (!characters.models.some((model) => model.id === skins.captain.character)) {
+    issue(
+      ['siege', 'skins', 'captain', 'character'],
+      `Unknown character "${skins.captain.character}"`,
+    );
+  }
+  for (const who of ['guard', 'captain'] as const) {
+    for (const [use, clip] of Object.entries(skins[who].clips)) {
+      if (!characters.clips.some((entry) => entry.id === clip)) {
+        issue(['siege', 'skins', who, 'clips', use], `Unknown clip "${clip}"`);
+      }
+    }
+  }
+  const drawn = (siege.guard.size[1] * skins.guard.fill) / characters.body[1];
+  for (const axis of [0, 2] as const) {
+    if (characters.body[axis] * drawn > siege.guard.size[axis]) {
+      issue(['siege', 'guard', 'size', axis], 'Too small for the body the characters draw in it');
+    }
+  }
   const { objectives } = siege;
   if (objectives.count > objectives.pool.length) {
     issue(['siege', 'objectives', 'count'], 'Pick no more objectives than the pool has');

@@ -10,6 +10,8 @@ const PUBLIC = join(import.meta.dirname, '..', 'public');
 
 interface Accessor {
   count: number;
+  min?: number[];
+  max?: number[];
 }
 interface Primitive {
   attributes: Record<string, number>;
@@ -79,10 +81,46 @@ function jointNames(gltf: Gltf): string[] {
 
 describe('the characters', () => {
   it('validate as shipped', () => {
-    expect(characters.models.map((model) => model.id)).toEqual(['guard', 'captain']);
+    expect(characters.models.map((model) => model.id)).toEqual([
+      'guard',
+      'guard_horns',
+      'guard_bare',
+      'guard_woman',
+      'guard_woman_plate',
+      'captain',
+    ]);
     expect(characters.clips.map((clip) => clip.id)).toEqual(
       expect.arrayContaining(['idle', 'walk', 'run', 'die', 'hit', 'cower', 'alarm']),
     );
+  });
+
+  it('give the guards 4 to 6 looks, sharing their colour maps, the gold the captain’s alone', () => {
+    const looks = characters.guards.map((id) => characters.models.find((model) => model.id === id));
+    expect(looks.length).toBeGreaterThanOrEqual(4);
+    expect(looks.length).toBeLessThanOrEqual(6);
+    const maps = new Set(looks.flatMap((look) => look?.maps ?? []));
+    // Two knight colourways and the bare heads' map (shared with the captain): nothing more.
+    expect([...maps].sort()).toEqual(['guard', 'guard_dark', 'heads']);
+    expect(characters.models.find((model) => model.id === 'captain')?.maps).toContain('captain');
+    expect(maps.has('captain')).toBe(false);
+  });
+
+  it('reject guard looks that are not characters, or twice over', () => {
+    expect(() =>
+      dataWith((raw) => {
+        raw.characters.guards = ['guard', 'dragon'];
+      }),
+    ).toThrow('Unknown model "dragon"');
+    expect(() =>
+      dataWith((raw) => {
+        raw.characters.guards = ['guard', 'guard_horns', 'guard'];
+      }),
+    ).toThrow('Duplicate look "guard"');
+    expect(() =>
+      dataWith((raw) => {
+        raw.characters.guards = [];
+      }),
+    ).toThrow(GameDataError);
   });
 
   it('reject clips, models and maps that are not there', () => {
@@ -103,14 +141,9 @@ describe('the characters', () => {
     ).toThrow('Unknown clip "moonwalk"');
     expect(() =>
       dataWith((raw) => {
-        raw.characters.preview.crowd.model = 'dragon';
+        delete raw.characters.tiers.low.textureSizes.heads;
       }),
-    ).toThrow('Unknown model "dragon"');
-    expect(() =>
-      dataWith((raw) => {
-        delete raw.characters.tiers.low.textureSizes.captain_head;
-      }),
-    ).toThrow('No size for map "captain_head"');
+    ).toThrow('No size for map "heads"');
     expect(() =>
       dataWith((raw) => {
         raw.characters.tiers.high.textureSizes.guard = 2048 as 1024;
@@ -166,6 +199,21 @@ describe('the characters', () => {
 
     it('has the same skeleton on both tiers', () => {
       expect(jointNames(glbJson(model.files.low))).toEqual(jointNames(glbJson(model.files.high)));
+    });
+
+    it('has the bones the clips play on, and the characters’ body height (feet at 0)', () => {
+      const gltf = glbJson(model.files.high);
+      // Every look has the guard's skeleton (the clips play on it by name).
+      expect(jointNames(gltf)).toEqual(jointNames(glbJson(characters.models[0]?.files.high ?? '')));
+      const bounds = (gltf.meshes ?? [])
+        .flatMap((mesh) => mesh.primitives)
+        .map((primitive) => gltf.accessors[primitive.attributes.POSITION ?? -1]);
+      const bottom = Math.min(...bounds.map((accessor) => accessor?.min?.[1] ?? Infinity));
+      const top = Math.max(...bounds.map((accessor) => accessor?.max?.[1] ?? -Infinity));
+      expect(Math.abs(bottom)).toBeLessThan(0.05);
+      // As tall as the body every look is drawn by (horns may stand above it).
+      expect(top).toBeGreaterThan(characters.body[1] - 0.06);
+      expect(top).toBeLessThan(characters.body[1] + 0.3);
     });
   });
 

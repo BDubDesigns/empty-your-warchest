@@ -79,3 +79,10 @@
   font-variant-numeric: tabular-nums;
   color: #d8d0b8;
 }
+
+.character-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+}

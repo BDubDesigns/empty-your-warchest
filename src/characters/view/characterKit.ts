@@ -34,14 +34,38 @@ export interface CharacterKit {
   dispose(): void;
 }
 
+/**
+ * A matte copy of `source` (its colour map only), one per colour map: several characters share a
+ * map (the guards' looks), and each GLB loads its own copy of the image, so the first is kept for
+ * all of them and the others freed (one texture on the graphics card per map, not one per GLB).
+ */
 function lambert(
   source: THREE.MeshStandardMaterial,
   anisotropy: number,
+  shared: Map<string, THREE.MeshLambertMaterial>,
 ): THREE.MeshLambertMaterial {
+  const known = shared.get(source.name);
+  if (known) {
+    if (source.map !== known.map) source.map?.dispose();
+    source.dispose();
+    return known;
+  }
   if (source.map) source.map.anisotropy = anisotropy;
   const material = new THREE.MeshLambertMaterial({ name: source.name, map: source.map });
   source.dispose();
+  shared.set(source.name, material);
   return material;
+}
+
+/** The files `loadCharacterKit` fetches on `tier` (to warm the browser's cache ahead of it). */
+export function characterFiles(characters: Characters, tier: GraphicsTier): string[] {
+  const sizes = characters.tiers[tier].textureSizes;
+  const maps = new Set(characters.models.flatMap((model) => model.maps));
+  return [
+    characters.clipFile,
+    ...characters.models.map((model) => model.files[tier]),
+    ...[...maps].map((map) => `models/characters/tex-${String(sizes[map] ?? 1024)}/${map}.jpg`),
+  ];
 }
 
 /**
@@ -77,6 +101,8 @@ export async function loadCharacterKit(
   const models = new Map<string, THREE.Object3D>();
   const triangles = new Map<string, number>();
   const materials = new Set<THREE.MeshLambertMaterial>();
+  // One material (and colour map) per map, whichever GLBs use it.
+  const shared = new Map<string, THREE.MeshLambertMaterial>();
   const geometries = new Set<THREE.BufferGeometry>();
   let bones = 0;
   characters.models.forEach((model, index) => {
@@ -89,7 +115,7 @@ export async function loadCharacterKit(
       if (!(material instanceof THREE.MeshStandardMaterial)) {
         throw new Error(`${model.files[tier]}: expected its materials to be glTF's standard ones`);
       }
-      const matte = lambert(material, anisotropy);
+      const matte = lambert(material, anisotropy, shared);
       child.material = matte;
       materials.add(matte);
       const geometry = child.geometry as THREE.BufferGeometry;

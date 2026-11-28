@@ -29,7 +29,7 @@ export interface DebugDeps {
   stressTest?: () => void;
   /** Opens Debug → Castle preview (the siege's castle on its own, to orbit and judge). */
   castlePreview?: () => void;
-  /** Opens Debug → Character preview (the siege's guard and captain, playing their clips). */
+  /** Opens Debug → Character preview (the siege’s guards and captain, playing their clips). */
   characterPreview?: () => void;
 }
 
@@ -549,7 +549,7 @@ export function mountDebugMenu(root: HTMLElement, deps: DebugDeps): void {
               el('p', {
                 className: 'debug-note',
                 textContent:
-                  'The siege’s guard and captain, side by side: play their clips, or a crowd of guards to see what it costs.',
+                  'The siege’s guards (each of their looks) and captain, side by side: play their clips, or a crowd of guards to see what it costs.',
               }),
               characterButton,
             ),
