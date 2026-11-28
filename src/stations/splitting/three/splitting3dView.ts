@@ -327,6 +327,13 @@ export class Splitting3DView implements ScreenView {
     });
   }
 
+  /** Back to camp once the head has dropped loses the cut in progress: nothing is banked. */
+  leaveCost(): string | undefined {
+    const kind = this.#round?.phase.kind;
+    if (kind !== 'swing' && kind !== 'pump') return undefined;
+    return 'Your cut in progress is lost.';
+  }
+
   stop(): void {
     this.#renderer.setAnimationLoop(null);
     this.#round?.exit();

@@ -6,12 +6,19 @@ export interface Screen {
   enter(): void;
   /** Pause the screen's loop and hide it. The screen stays alive for the next `enter`. */
   leave(): void;
+  /** The view's `leaveCost`, once it's built. */
+  leaveCost?(): string | undefined;
 }
 
 /** The running part of a screen: a Phaser game or a three.js renderer. */
 export interface ScreenView {
   start(): void;
   stop(): void;
+  /**
+   * What leaving now would lose, as a sentence for the "Leave this round?" card; `undefined`
+   * when nothing (no round, or its summary showing), and Back to camp leaves at once.
+   */
+  leaveCost?(): string | undefined;
 }
 
 /** A screen whose view loads on first use, and can warm that load ahead of time. */
@@ -47,6 +54,9 @@ export function lazyScreen(
     leave() {
       view?.stop();
       element.hidden = true;
+    },
+    leaveCost() {
+      return view?.leaveCost?.();
     },
   };
 }
