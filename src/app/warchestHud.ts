@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import type { EventLogger, Game } from '../core';
+import { Rng, type EventLogger, type Game } from '../core';
 import type { GameData, ItemLook } from '../data';
 import type { Haptics } from './haptics';
 import { loadModel } from './models';
@@ -59,6 +59,8 @@ const PIECE_LENGTHS: Record<ItemLook, number> = {
   feather: 0.8,
   arrow: 1.6,
   shaft: 1.6,
+  duster: 1.6,
+  dowel: 1.5,
 };
 
 /**
@@ -223,6 +225,20 @@ export function pieceModel(
     piece.add(arrowModel(look === 'arrow'));
     return piece;
   }
+  if (look === 'duster') {
+    piece.add(dusterModel(14));
+    return piece;
+  }
+  if (look === 'dowel') {
+    // An arrow shaft: a thin, pale, round length of wood with nothing on it yet.
+    const dowel = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.024, 0.024, 0.95, 6),
+      new THREE.MeshLambertMaterial({ color: 0xe0bd88 }),
+    );
+    dowel.rotation.x = Math.PI / 2;
+    piece.add(dowel);
+    return piece;
+  }
   if (look === 'split') {
     // A split stave: a squared-off length of pale, fresh wood.
     piece.add(new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.12, 1), wood));
@@ -272,6 +288,41 @@ export function arrowModel(fletched: boolean): THREE.Object3D {
       vane.rotation.z = -turn;
       arrow.add(vane);
     });
+  }
+  return arrow;
+}
+
+/** The feather colours of a duster, a mixed bag from the bucket. */
+const DUSTER_COLORS = [0xf2ede2, 0xc8402c, 0x3f7fd0, 0xe9b824, 0x2b2622, 0xd8cdb8];
+
+/**
+ * A feather duster of an arrow (Fletching's bucket), lying along z like `arrowModel`, about 1 long:
+ * the same shaft and point, and its back third bristling with `feathers` feathers at every angle,
+ * tarred black where they stick. Ridiculous on purpose. The same feathers every time.
+ */
+export function dusterModel(feathers: number): THREE.Object3D {
+  const arrow = arrowModel(false);
+  const tar = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.03, 0.03, 0.3, 6),
+    new THREE.MeshLambertMaterial({ color: 0x1b1612 }),
+  );
+  tar.rotation.x = Math.PI / 2;
+  tar.position.z = -0.29;
+  arrow.add(tar);
+  const geometry = new THREE.PlaneGeometry(0.07, 0.24);
+  // Its base at the shaft, sticking out along +y.
+  geometry.translate(0, 0.12, 0);
+  const materials = DUSTER_COLORS.map(
+    (color) => new THREE.MeshLambertMaterial({ color, side: THREE.DoubleSide }),
+  );
+  const rng = new Rng(17);
+  for (let index = 0; index < feathers; index++) {
+    const material = materials[index % materials.length] ?? materials[0];
+    const feather = new THREE.Mesh(geometry, material);
+    // Anywhere along the tarred end, pointing any which way out of it.
+    feather.position.z = rng.range(-0.44, -0.14);
+    feather.rotation.set(rng.range(-1.2, 1.2), rng.range(0, Math.PI), rng.range(0, Math.PI * 2));
+    arrow.add(feather);
   }
   return arrow;
 }

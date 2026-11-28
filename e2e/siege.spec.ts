@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { expect, test, type Page } from '@playwright/test';
+import { castle } from '../src/data/castle';
 import { siege } from '../src/data/siege';
 import { skills } from '../src/data/skills';
 import { stations } from '../src/data/stations';
@@ -14,20 +15,23 @@ const feel = siege.feel;
 const ballista = siege.weapons.find((weapon) => weapon.id === siege.weapon);
 const volley = ballista?.aimed.start ?? 0;
 
-/** Opens the War tent with `spears` spears in the warchest. */
-async function openTent(page: Page, spears: number) {
+/** Opens the War tent with `spears` spears (and `potions` Sense potions) in the warchest. */
+async function openTent(page: Page, spears: number, potions = 0) {
   if (!tent) throw new Error('No siege station in data');
   // Every skill in data at 0, so the save fits the data and isn't discarded.
   const xp = Object.fromEntries(skills.map((skill) => [skill.id, 0]));
   await page.addInitScript(
-    ({ count, xp }) => {
+    ({ count, potions, xp }) => {
       localStorage.setItem(
         'warchest.save',
         JSON.stringify({
           version: 1,
           savedAt: 1,
           state: {
-            inventory: count > 0 ? [{ item: 'spear', count }] : [],
+            inventory: [
+              ...(count > 0 ? [{ item: 'spear', count }] : []),
+              ...(potions > 0 ? [{ item: 'sense_potion', count: potions }] : []),
+            ],
             skills: xp,
             lastSeenAt: Date.now(),
             done: ['tutorial.woodcutting'],
@@ -35,7 +39,7 @@ async function openTent(page: Page, spears: number) {
         }),
       );
     },
-    { count: spears, xp },
+    { count: spears, potions, xp },
   );
   await page.goto('/');
   await expect(page.locator('body')).toHaveAttribute('data-view', 'camp');
@@ -46,24 +50,20 @@ async function openTent(page: Page, spears: number) {
   await expect(page.locator('body')).toHaveAttribute('data-screen', 'siege3d');
 }
 
-test('Siege: tap the War tent, drag to look, Fire, and the ballista shoots the warchest’s spears', async ({
+test('Siege: the castle from its vantage points, drag the crosshair, Fire, and Sense', async ({
   page,
 }) => {
-  test.setTimeout(90_000);
+  test.setTimeout(150_000);
   const errors: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));
-  await openTent(page, 60);
-  await expect(page.locator('body')).toHaveAttribute('data-siege', 'aim');
-  // The flyover over the fort first: a tap skips it, back to the sights.
+  await openTent(page, 60, 1);
+  // The castle is built (and drawn) first.
+  await expect(page.locator('body')).toHaveAttribute('data-siege', 'aim', { timeout: 90_000 });
   const view = page.locator('#screen-siege3d');
-  await expect(view).toHaveAttribute('data-camera', 'flyover');
+  await expect(view).toHaveAttribute('data-draw-calls', /\d+/, { timeout: 60_000 });
   // Drawn at the phone's graphics tier (CI draws in software, which Auto puts on low).
   await expect(view).toHaveAttribute('data-graphics', /^(high|low)$/);
-  await expect(page.getByRole('button', { name: 'Fire' })).toBeHidden();
-  const canvas = page.locator('#screen-siege3d .sg-canvas');
-  await canvas.tap();
-  await expect(view).toHaveAttribute('data-camera', /sights|kill/);
-  await expect(view).toHaveAttribute('data-camera', 'sights');
+  await expect(view).toHaveAttribute('data-camera', 'vantage');
   const count = page.locator('#screen-siege3d .warchest-count');
   await expect(count).toHaveText('60');
   await expect(page.getByRole('radio', { name: /Aimed/ })).toContainText(
@@ -72,18 +72,27 @@ test('Siege: tap the War tent, drag to look, Fire, and the ballista shoots the w
   await expect(page.getByRole('radio', { name: /Barrage/ })).toContainText(
     `${String(volley * (ballista?.barrageTimes ?? 0))} spears`,
   );
+  // Every objective listed.
+  await expect(page.getByRole('list', { name: 'Objectives' }).getByRole('listitem')).toHaveCount(
+    siege.objectives.count,
+  );
 
-  // Move to another spot first: a tap on its number.
-  await page.getByRole('radio', { name: 'Spot 3' }).tap();
-  await expect(page.locator('#screen-siege3d')).toHaveAttribute('data-spot', '2');
-  await page.waitForTimeout(feel.spotSeconds * 1000 + 300);
+  // The vantage points: the first to start, and a tap moves to another.
+  const [first, second] = castle.vantages;
+  if (!first || !second) throw new Error('Two vantage points needed');
+  await expect(view).toHaveAttribute('data-vantage', first.id);
+  await expect(page.getByRole('radio', { name: first.name })).toHaveAttribute(
+    'aria-checked',
+    'true',
+  );
+  await page.getByRole('radio', { name: second.name }).tap();
+  await expect(view).toHaveAttribute('data-vantage', second.id);
 
-  // Down the sights: the crosshair sits in the middle. A drag turns the view (right and up
-  // here), then Fire.
+  // A drag moves the crosshair over the view (the camera stays put).
   await expect(page.locator('#screen-siege3d .sg-crosshair')).toBeVisible();
   const aim = async () =>
     ((await view.getAttribute('data-aim')) ?? '0 0').split(' ').map(Number) as [number, number];
-  const [yaw, tilt] = await aim();
+  const [x0, y0] = await aim();
   const box = await page.locator('#screen-siege3d .sg-canvas').boundingBox();
   if (!box) throw new Error('No siege canvas');
   const session = await page.context().newCDPSession(page);
@@ -98,20 +107,24 @@ test('Siege: tap the War tent, drag to look, Fire, and the ballista shoots the w
     await touch('touchMove', [{ x: x + step * 8, y: y - step * 4 }]);
   }
   await touch('touchEnd', []);
-  const [turned, tilted] = await aim();
-  expect(turned).toBeCloseTo(yaw + 40 * feel.lookYawPerPx, 1);
-  expect(tilted).toBeCloseTo(Math.min(tilt + 20 * feel.lookTiltPerPx, ballista?.tilt.max ?? 0), 1);
-  await expect(page.locator('#screen-siege3d .sg-crosshair')).toBeVisible();
+  const [x1, y1] = await aim();
+  expect(x1).toBeCloseTo(x0 + 40 * feel.aimPerPx, 0);
+  expect(y1).toBeCloseTo(y0 - 20 * feel.aimPerPx, 0);
+  await expect(view).toHaveAttribute('data-camera', 'vantage');
+
+  // Fire: an aimed volley, out of the warchest.
   const fire = page.getByRole('button', { name: 'Fire' });
   await expect(fire).toBeEnabled();
   await fire.tap();
+  await expect(count).toHaveText(String(60 - volley));
+  await expect(view).toHaveAttribute('data-thrown', String(volley));
 
-  // Scout rises over the fort and back; no shooting while up there.
-  const scout = page.getByRole('button', { name: 'Scout' });
-  await scout.tap();
-  await expect(page.getByRole('button', { name: 'Back', exact: true })).toBeVisible();
-  await expect(fire).toBeDisabled();
-  await page.getByRole('button', { name: 'Back', exact: true }).tap();
+  // A Sense potion: guards in red through walls, counting down.
+  const sense = page.getByRole('button', { name: /Sense/ });
+  await expect(sense).toHaveText('Sense ×1');
+  await sense.tap();
+  await expect(sense).toHaveText(/Sense \d+s/);
+  await expect(sense).toHaveAttribute('aria-pressed', 'true');
 
   // The ghost line of the last shot can be turned off, and stays off.
   const ghost = page.getByRole('button', { name: 'Ghost line' });
@@ -120,12 +133,15 @@ test('Siege: tap the War tent, drag to look, Fire, and the ballista shoots the w
   await expect(ghost).toHaveAttribute('aria-pressed', 'false');
   expect(await page.evaluate(() => localStorage.getItem('warchest.siege.ghost'))).toContain('off');
 
-  // An aimed volley, out of the warchest.
-  await expect(count).toHaveText(String(60 - volley));
-  await expect(page.locator('#screen-siege3d')).toHaveAttribute('data-thrown', String(volley));
+  // Withdraw ends it with what's done, on a card.
+  await page.getByRole('button', { name: 'Withdraw' }).tap();
+  const card = page.locator('#screen-siege3d .sg-card');
+  await expect(card).toBeVisible({ timeout: 10_000 });
+  await expect(card).toContainText('Objectives:');
+  await expect(page.locator('body')).toHaveAttribute('data-siege', 'done');
 
   // It's logged for playtest data.
-  await page.locator('#back-button').tap();
+  await card.getByRole('button', { name: 'Back to camp' }).tap();
   await expect(page.locator('body')).toHaveAttribute('data-view', 'camp');
   await page.getByRole('button', { name: 'Open debug menu' }).tap();
   const download = page.getByRole('button', { name: 'Download logs' });
@@ -135,26 +151,38 @@ test('Siege: tap the War tent, drag to look, Fire, and the ballista shoots the w
   };
   const types = exported.events.map((event) => event.type);
   for (const type of [
-    'siege.start',
-    'siege.spot',
+    'siege.roundStart',
+    'siege.vantage',
     'siege.throw',
-    'siege.scout',
+    'siege.potion',
     'siege.ghost',
-    'siege.flyover',
-    'siege.quit',
+    'siege.end',
+    'siege.cost',
     'graphics.tier',
   ]) {
     expect(types).toContain(type);
   }
+  const started = exported.events.find((event) => event.type === 'siege.roundStart');
+  expect(started?.data?.feel).toMatchObject({ aimPerPx: feel.aimPerPx });
   const thrown = exported.events.find((event) => event.type === 'siege.throw');
-  expect(thrown?.data).toMatchObject({ mode: 'aimed', spears: volley, spot: 2, position: 0 });
+  expect(thrown?.data).toMatchObject({
+    mode: 'aimed',
+    spears: volley,
+    vantage: second.id,
+    power: ballista?.speed,
+  });
+  expect(thrown?.data?.aim).toMatchObject({ yaw: expect.any(Number), tilt: expect.any(Number) });
+  expect(exported.events.find((event) => event.type === 'siege.end')?.data).toMatchObject({
+    ending: expect.stringMatching(/withdrew|all/),
+  });
   expect(errors).toEqual([]);
 });
 
 test('Siege: with no spears in the warchest, it says so', async ({ page }) => {
+  test.setTimeout(120_000);
   await openTent(page, 0);
   const card = page.locator('#screen-siege3d .sg-card');
-  await expect(card).toBeVisible();
+  await expect(card).toBeVisible({ timeout: 90_000 });
   await expect(card).toContainText('No spears');
   await card.getByRole('button', { name: 'Back to camp' }).tap();
   await expect(page.locator('body')).toHaveAttribute('data-view', 'camp');

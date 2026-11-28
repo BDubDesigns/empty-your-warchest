@@ -1,20 +1,21 @@
 import type { Rng } from '../../../core';
 import type { Siege, SiegeFeel, SiegeWeapon } from '../../../data';
 
-/** A point or a velocity in the siege's world (metres): x across, y up, z toward the weapon. */
+/** A point or a velocity in the siege's world (metres): the castle's, x across, y up, z out the gate. */
 export interface Vec3 {
   x: number;
   y: number;
   z: number;
 }
 
-/** Where the weapon stands on the ground. */
+/** Where the weapon stands: on the ground (x, z), `y` m up (on a hill, a siege tower). */
 export interface Spot {
   x: number;
+  y: number;
   z: number;
 }
 
-/** Which way the weapon points: turned `yaw` (radians, + right) and tilted `tilt` (+ up). */
+/** Which way the weapon points: turned `yaw` (radians, + right of −z) and tilted `tilt` (+ up). */
 export interface Aim {
   yaw: number;
   tilt: number;
@@ -69,16 +70,10 @@ export function spearsShot(
   return Math.max(Math.min(volleySize(mode, aimed, weapon), Math.floor(left)), 0);
 }
 
-/** The aim a weapon starts at: straight ahead, at its starting tilt. */
-export function startAim(weapon: SiegeWeapon): Aim {
-  return { yaw: 0, tilt: weapon.tilt.start * DEG };
-}
-
-/** An aim kept to the weapon's turn (`maxAim` either way) and tilt. */
-export function clampAim(aim: Aim, weapon: SiegeWeapon, feel: Pick<SiegeFeel, 'maxAim'>): Aim {
-  const max = feel.maxAim * DEG;
+/** An aim kept to the weapon's tilt (it turns all the way round). */
+export function clampAim(aim: Aim, weapon: SiegeWeapon): Aim {
   return {
-    yaw: Math.min(Math.max(aim.yaw, -max), max),
+    yaw: aim.yaw,
     tilt: Math.min(Math.max(aim.tilt, weapon.tilt.min * DEG), weapon.tilt.max * DEG),
   };
 }
@@ -133,7 +128,7 @@ export function muzzleAt(spot: Spot, aim: Aim, weapon: SiegeWeapon): Vec3 {
   const way = aimDirection(aim);
   return {
     x: spot.x + way.x * weapon.muzzle,
-    y: weapon.pivotHeight + way.y * weapon.muzzle,
+    y: spot.y + weapon.pivotHeight + way.y * weapon.muzzle,
     z: spot.z + way.z * weapon.muzzle,
   };
 }

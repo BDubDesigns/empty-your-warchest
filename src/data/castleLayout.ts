@@ -156,9 +156,12 @@ export interface CastleLayout {
   parts: CastlePart[];
   anchors: {
     captainWindows: CaptainWindow[];
-    spearRack: { at: Vec3; turn: number };
+    /** Where the spear rack may stand: each a prop, its foot and turn (radians). */
+    spearRacks: { id: string; at: Vec3; turn: number }[];
     bell: { at: Vec3; turn: number };
     guardPaths: { id: string; loop: boolean; points: WayPoint[] }[];
+    /** A guard's place on a tower's top: where his feet are, and the tower. */
+    lookouts: { id: string; tower: string; at: Vec3 }[];
   };
 }
 
@@ -510,8 +513,20 @@ export function layoutCastle(castle: Castle): CastleLayout {
       out: sideFrame(anchor.side).out,
     };
   });
-  const rack = castle.props.find((prop) => prop.id === castle.anchors.spearRack);
-  if (!rack) throw new Error(`Unknown prop "${castle.anchors.spearRack}"`);
+  const spearRacks = castle.anchors.spearRacks.map((id) => {
+    const rack = castle.props.find((prop) => prop.id === id);
+    if (!rack) throw new Error(`Unknown prop "${id}"`);
+    return { id, at: [rack.at[0], 0, rack.at[1]] as Vec3, turn: rack.turn * DEG };
+  });
+  const lookouts = castle.anchors.lookouts.map((lookout) => {
+    const tower = castle.towers.find((candidate) => candidate.id === lookout.tower);
+    if (!tower) throw new Error(`Unknown tower "${lookout.tower}"`);
+    return {
+      id: lookout.id,
+      tower: tower.id,
+      at: [tower.at[0] + lookout.at[0], tower.height, tower.at[1] + lookout.at[1]] as Vec3,
+    };
+  });
 
   const guardPaths = castle.anchors.guardPaths.map((path) => {
     const points: WayPoint[] = [];
@@ -548,9 +563,10 @@ export function layoutCastle(castle: Castle): CastleLayout {
     parts: layParts(castle, walls, buildings),
     anchors: {
       captainWindows,
-      spearRack: { at: [rack.at[0], 0, rack.at[1]], turn: rack.turn * DEG },
+      spearRacks,
       bell: { at: [castle.bell.at[0], 0, castle.bell.at[1]], turn: castle.bell.turn * DEG },
       guardPaths,
+      lookouts,
     },
   };
 }
@@ -902,6 +918,74 @@ function layParts(castle: Castle, walls: LaidWall[], buildings: LaidBuilding[]):
   return parts;
 }
 
+/**
+ * A place a guard keeps at a post: his own stretch of a guard path (`from` to `to` m along it),
+ * or a lookout on a tower.
+ */
+export type PostSlot =
+  { post: string; kind: 'path'; from: number; to: number } | { post: string; kind: 'lookout' };
+
+/** How long a guard path is (m), round its loop if it's one. */
+export function pathLength(path: CastleLayout['anchors']['guardPaths'][number]): number {
+  const { points, loop } = path;
+  let total = 0;
+  const legs = points.length - (loop ? 0 : 1);
+  for (let i = 0; i < legs; i++) {
+    const a = points[i]?.at;
+    const b = points[(i + 1) % points.length]?.at;
+    if (a && b) total += Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]);
+  }
+  return total;
+}
+
+/** The point `distance` m along a guard path (kept to its ends; round again, on a loop). */
+export function pointAlong(
+  path: CastleLayout['anchors']['guardPaths'][number],
+  distance: number,
+): Vec3 {
+  const { points, loop } = path;
+  const length = pathLength(path);
+  let left = loop && length > 0 ? ((distance % length) + length) % length : distance;
+  left = Math.min(Math.max(left, 0), length);
+  const legs = points.length - (loop ? 0 : 1);
+  for (let i = 0; i < legs; i++) {
+    const a = points[i]?.at;
+    const b = points[(i + 1) % points.length]?.at;
+    if (!a || !b) continue;
+    const leg = Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]);
+    if (left <= leg || i === legs - 1) {
+      const share = leg > 0 ? Math.min(left / leg, 1) : 0;
+      return [
+        a[0] + (b[0] - a[0]) * share,
+        a[1] + (b[1] - a[1]) * share,
+        a[2] + (b[2] - a[2]) * share,
+      ];
+    }
+    left -= leg;
+  }
+  return points[0]?.at ?? [0, 0, 0];
+}
+
+/**
+ * The places at `post` (a guard path or a lookout) a guard can keep, each `slot` m of the path
+ * (as many as fit, evenly; at least one), or the lookout itself. None if there's no such post.
+ */
+export function postSlots(layout: CastleLayout, post: string, slot: number): PostSlot[] {
+  if (layout.anchors.lookouts.some((lookout) => lookout.id === post)) {
+    return [{ post, kind: 'lookout' }];
+  }
+  const path = layout.anchors.guardPaths.find((candidate) => candidate.id === post);
+  if (!path) return [];
+  const length = pathLength(path);
+  const count = Math.max(1, Math.floor(length / slot + EPS));
+  return Array.from({ length: count }, (_, index) => ({
+    post,
+    kind: 'path' as const,
+    from: (length * index) / count,
+    to: (length * (index + 1)) / count,
+  }));
+}
+
 /** Every reason the castle doesn't hold together; none, if it does. */
 export function castleProblems(castle: Castle): CastleProblem[] {
   const problems: CastleProblem[] = [];
@@ -996,9 +1080,36 @@ export function castleProblems(castle: Castle): CastleProblem[] {
       );
     }
   });
-  if (!castle.props.some((prop) => prop.id === castle.anchors.spearRack)) {
-    issue(['anchors', 'spearRack'], `Unknown prop "${castle.anchors.spearRack}"`);
-  }
+  castle.anchors.spearRacks.forEach((rack, index) => {
+    if (!castle.props.some((prop) => prop.id === rack)) {
+      issue(['anchors', 'spearRacks', index], `Unknown prop "${rack}"`);
+    }
+  });
+  castle.anchors.lookouts.forEach((lookout, index) => {
+    unique(['anchors', 'lookouts', index, 'id'], lookout.id);
+    const tower = towers.get(lookout.tower);
+    if (!tower) {
+      issue(['anchors', 'lookouts', index, 'tower'], `Unknown tower "${lookout.tower}"`);
+      return;
+    }
+    if (tower.top !== 'battlements') {
+      issue(
+        ['anchors', 'lookouts', index, 'tower'],
+        'A lookout stands on a tower with battlements',
+      );
+    }
+    // Inside its parapet (the corbels carry the parapet out past the tower's own face).
+    const inner = tower.size + castle.details.corbel.out - castle.wall.parapet.thickness;
+    const [dx, dz] = lookout.at;
+    const inside =
+      tower.shape === 'round'
+        ? Math.hypot(dx, dz) < inner
+        : Math.abs(dx) < inner && Math.abs(dz) < (tower.depth ?? tower.size) + inner - tower.size;
+    if (!inside) issue(['anchors', 'lookouts', index, 'at'], 'Stand inside the tower’s parapet');
+  });
+  castle.anchors.guardPaths.forEach((guardPath, index) => {
+    unique(['anchors', 'guardPaths', index, 'id'], guardPath.id);
+  });
   castle.anchors.guardPaths.forEach((guardPath, index) => {
     guardPath.points.forEach((point, pointIndex) => {
       const here = ['anchors', 'guardPaths', index, 'points', pointIndex];
@@ -1117,6 +1228,9 @@ export function castleProblems(castle: Castle): CastleProblem[] {
   castle.props.forEach((prop, index) => {
     if (!(prop.piece in castle.pieces))
       issue(['props', index, 'piece'], `Unknown piece "${prop.piece}"`);
+    if (!(prop.piece in castle.boxes)) {
+      issue(['props', index, 'piece'], `Piece "${prop.piece}" needs a box (what spears hit)`);
+    }
     if (!inCourtyard(prop.at) || inBuilding(prop.at, 0.5)) {
       issue(
         ['props', index, 'at'],

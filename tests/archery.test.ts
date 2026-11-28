@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { Game, Rng, newGameState, type GameState, type Stack } from '../src/core';
-import { GameDataError, parseGameData, type Archery, type GameData } from '../src/data';
+import { GameDataError, parseGameData, type GameData } from '../src/data';
 import {
   ArcheryRound,
   apex,
@@ -325,18 +325,54 @@ describe('a round of the bird hunt', () => {
     const graze = (shot?.data?.graze as number[] | undefined)?.[0] ?? -1;
     expect(graze).toBeGreaterThan(0);
     expect(graze).toBeLessThanOrEqual(feel.graze);
-    // A bird is only scared once.
+    // It can be scared again: another seed and another point.
     played.round.shoot(
       'fletched_arrow',
       aimPast({ x: finch?.x ?? 0, y: finch?.y ?? 0 }, (finchRadius + grazeEdge) / 2),
       1,
     );
     untilLanded(played);
-    expect(banked(played, 'sunflower_seed')).toBe(rules.scare.seeds);
-    expect(played.round.points).toBe(1);
+    expect(finch?.scares).toBe(2);
+    expect(banked(played, 'sunflower_seed')).toBe(rules.scare.seeds * 2);
+    expect(played.round.points).toBe(2);
   });
 
-  it('the graze ring is thin: an arrow just past it does nothing', () => {
+  it('one arrow can scare a bird on its way up and again on its way back down', () => {
+    const played = play(stillBird());
+    untilBirdIn(played);
+    const finch = must(played.round.birds[0]);
+    // Hanging just off the line of a shot straight up: passed going up, and coming down.
+    finch.x = (finchRadius + grazeEdge) / 2;
+    played.round.shoot('fletched_arrow', 90, 1);
+    untilLanded(played);
+    expect(finch.scares).toBe(2);
+    expect(played.round.arrows[0]?.scared).toHaveLength(2);
+    expect(played.round.points).toBe(2);
+    expect(finch.speed).toBeCloseTo(finch.baseSpeed * rules.scare.speedUp ** 2);
+  });
+
+  it('scares a bird at most once a cooldown, and caps how fast it flees', () => {
+    const played = play(stillBird());
+    untilBirdIn(played);
+    const finch = must(played.round.birds[0]);
+    finch.x = (finchRadius + grazeEdge) / 2;
+    // Two arrows side by side pass it together: one scare.
+    played.round.shoot('fletched_arrow', 90, 1);
+    played.round.shoot('fletched_arrow', 90, 1);
+    run(played, 0.6);
+    expect(finch.scares).toBe(1);
+    untilLanded(played);
+    // Arrow after arrow, well apart: scared every pass, but never past the cap.
+    for (let shot = 0; shot < 3; shot++) {
+      played.round.shoot('fletched_arrow', 90, 1);
+      run(played, rules.scare.cooldown + 0.3);
+    }
+    untilLanded(played);
+    expect(finch.scares).toBeGreaterThanOrEqual(5);
+    expect(finch.speed).toBeCloseTo(finch.baseSpeed * rules.scare.maxSpeedUp);
+  });
+
+  it('an arrow passing wider than the scare zone does nothing', () => {
     const played = play(stillBird());
     const bird = untilBirdIn(played);
     played.round.shoot('fletched_arrow', aimPast(bird, grazeEdge + 0.3), 1);
@@ -346,7 +382,7 @@ describe('a round of the bird hunt', () => {
     expect(played.round.points).toBe(0);
   });
 
-  it('a bird is worth 2 points at most: graze it, then hit it as it flees', () => {
+  it('a graze and a hit on the same bird both count: graze it, then hit it as it flees', () => {
     const played = play(stillBird((raw) => (must(raw.archery.arrows[0]).breakChance = 0)));
     const bird = untilBirdIn(played);
     played.round.shoot('fletched_arrow', aimPast(bird, (finchRadius + grazeEdge) / 2), 1);
@@ -498,6 +534,12 @@ describe('archery data', () => {
     }, 'More stars must not need less');
   });
 
+  it('fails loudly on a speed cap under one scare’s speed-up', () => {
+    invalid((raw) => {
+      raw.archery.scare.maxSpeedUp = 1.2;
+    }, 'Must not be under one scare’s speed-up');
+  });
+
   it('fails loudly on a flock with an unknown bird', () => {
     invalid((raw) => {
       raw.archery.flocks[0]?.mix.push({ bird: 'eagle', weight: 1 });
@@ -528,23 +570,25 @@ describe('archery data', () => {
     }, 'Above the field');
   });
 
-  it('takes a new arrow kind by data alone (the duster, next slice)', () => {
-    const withDuster = dataWith((raw) => {
-      raw.items.push({ id: 'duster_arrow', name: 'Duster', look: 'arrow' });
-      raw.archery.arrows.push({
-        item: 'duster_arrow',
-        speed: 26,
-        drag: 0.9,
-        drift: 0,
-        wobble: 0,
-        wobbleHz: 0,
-        fishtail: 0,
-        breakChance: 0.1,
-      });
-    });
-    const duster = withDuster.archery.arrows[2] as Archery['arrows'][number];
-    expect(apex(duster, feel, rules.step)).toBeLessThan(apex(bare, feel, rules.step));
-    const played = play(withDuster, { arrows: { duster_arrow: 1 } });
+  it('flies the duster straight but short, like a shuttlecock, and shoots it from the quiver', () => {
+    const duster = must(rules.arrows.find((arrow) => arrow.item === 'duster_arrow'));
+    // Shorter than even a bare arrow, but it still reaches the lower finches.
+    const top = apex(duster, feel, rules.step);
+    expect(top).toBeLessThan(apex(bare, feel, rules.step));
+    const finch = must(rules.birds.find((bird) => bird.id === 'finch'));
+    expect(top).toBeGreaterThan(finch.altitude.min);
+    // Straight: every shot flies its preview exactly (no drift, no wobble).
+    const shot = launch(duster, feel, 70, 1, new Rng(3));
+    for (let step = 0; step < 60; step++) stepArrow(shot, feel.gravity, rules.step);
+    const plain = previewPath(duster, feel, 70, 1, 60 * rules.step, rules.step).at(-1);
+    expect(shot.x).toBeCloseTo(plain?.x ?? NaN, 6);
+    expect(shot.y).toBeCloseTo(plain?.y ?? NaN, 6);
+    // Slow: high drag sheds its speed, so it's soon falling nearly straight down.
+    expect(Math.hypot(shot.vx, shot.vy)).toBeLessThan(duster.speed * 0.6);
+    // The quiver only starts on it when there's nothing better.
+    expect(bestArrow(rules, (item) => (item === 'duster_arrow' ? 4 : 0))).toBe('duster_arrow');
+    expect(bestArrow(rules, (item) => (item === 'duster_arrow' ? 4 : 1))).toBe('fletched_arrow');
+    const played = play(data, { arrows: { duster_arrow: 1 } });
     expect(played.round.shoot('duster_arrow', 90, 1)).toBe(true);
   });
 });

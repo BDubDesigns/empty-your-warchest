@@ -11,6 +11,7 @@ export type ScreenId =
   | 'firemaking3d'
   | 'brewing3d'
   | 'archery3d'
+  | 'fletching3d'
   | 'siege3d';
 
 /** Where a station's mini game runs: a Phaser scene, or its own (three.js) screen. */
@@ -33,6 +34,7 @@ export const mechanics: Readonly<Record<string, MechanicModule>> = {
   firemaking: { screen: { kind: 'screen', screen: 'firemaking3d' } },
   brewing: { screen: { kind: 'screen', screen: 'brewing3d' } },
   archery: { screen: { kind: 'screen', screen: 'archery3d' } },
+  fletching: { screen: { kind: 'screen', screen: 'fletching3d' } },
   siege: { screen: { kind: 'screen', screen: 'siege3d' } },
   // The gate runner (M7a): the War tent's siege replaced it, but it stays playable from the debug
   // menu (Options → War tent opens).

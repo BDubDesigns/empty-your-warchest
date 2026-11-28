@@ -7,6 +7,7 @@ import { camp } from './camp';
 import { castle } from './castle';
 import { characters } from './characters';
 import { firemaking } from './firemaking';
+import { fletching } from './fletching';
 import { graphics } from './graphics';
 import { items } from './items';
 import { levels } from './levels';
@@ -27,7 +28,6 @@ import { parseGameData } from './validate';
 
 export * from './schema';
 export { GameDataError, parseGameData } from './validate';
-export * from './siegePieces';
 export * from './castleLayout';
 export * from './characterSchema';
 
@@ -47,6 +47,7 @@ export const rawGameData: GameDataInput = {
   firemaking,
   brewing,
   archery,
+  fletching,
   siege,
   warchest,
   workers,

@@ -56,9 +56,9 @@ describe('the castle', () => {
     }
   });
 
-  it('puts the captain at windows in the keep, the bell and spear rack in the courtyard', () => {
+  it('puts the captain at windows in the keep, the bell and spear racks in the courtyard', () => {
     const layout = layoutCastle(castle);
-    const { captainWindows, spearRack, bell } = layout.anchors;
+    const { captainWindows, spearRacks, bell, lookouts } = layout.anchors;
     expect(captainWindows).toHaveLength(castle.anchors.captainWindows.length);
     const keep = layout.buildings.find((building) => building.id === 'keep');
     expect(keep).toBeDefined();
@@ -73,9 +73,34 @@ describe('the castle', () => {
       expect(y).toBeGreaterThan(0);
       expect(y).toBeLessThan(keep?.height ?? 0);
     }
-    for (const point of [spearRack.at, bell.at]) {
+    expect(spearRacks.length).toBeGreaterThan(1);
+    for (const point of [...spearRacks.map((rack) => rack.at), bell.at]) {
       expect(insidePolygon([point[0], point[2]], layout.outline)).toBe(true);
     }
+    // Lookouts stand on their towers' tops.
+    expect(lookouts).toHaveLength(castle.anchors.lookouts.length);
+    for (const lookout of lookouts) {
+      const tower = castle.towers.find((candidate) => candidate.id === lookout.tower);
+      expect(lookout.at[1]).toBe(tower?.height);
+    }
+  });
+
+  it('fails on a lookout off its tower or on a roofed one, and a rack that is not a prop', () => {
+    expect(
+      problemsWith((raw) => {
+        raw.anchors.lookouts = [{ id: 'far', tower: 'south_west', at: [9, 0] }];
+      }),
+    ).toContain('Stand inside the tower’s parapet');
+    expect(
+      problemsWith((raw) => {
+        raw.anchors.lookouts = [{ id: 'roofed', tower: 'north_west', at: [0, 0] }];
+      }),
+    ).toContain('A lookout stands on a tower with battlements');
+    expect(
+      problemsWith((raw) => {
+        raw.anchors.spearRacks = ['nowhere'];
+      }),
+    ).toContain('Unknown prop "nowhere"');
   });
 
   it('takes a guard up a stair from the ground to the walk', () => {

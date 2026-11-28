@@ -41,10 +41,19 @@ export const stations = [
     camp: { x: 0.27, y: 0.62 },
   },
   {
+    // Right beside the hunting stand (Brandon, Nov 27), where the chest was: the chest and the
+    // War tent share the bottom row now.
+    id: 'fletchers_bench',
+    name: "Fletcher's bench",
+    skill: 'fletching',
+    mechanic: 'fletching',
+    camp: { x: 0.73, y: 0.62 },
+  },
+  {
     id: 'war_tent',
     name: 'War tent',
     skill: 'command',
     mechanic: 'siege',
-    camp: { x: 0.5, y: 0.82 },
+    camp: { x: 0.27, y: 0.82 },
   },
 ] satisfies GameDataInput['stations'];

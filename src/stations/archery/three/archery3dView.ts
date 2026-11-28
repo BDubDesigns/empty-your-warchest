@@ -8,7 +8,7 @@ import type { ScreenView } from '../../../app/screen';
 import { Sfx } from '../../../app/sfx';
 import { SkillBar, type XpDeposit } from '../../../app/skillBar';
 import { releaseContext, restoreContext } from '../../../app/trouble';
-import { WarchestHud, arrowModel, type ScreenPoint } from '../../../app/warchestHud';
+import { WarchestHud, arrowModel, dusterModel, type ScreenPoint } from '../../../app/warchestHud';
 import { textureBytes } from '../../../bench/logic/stats';
 import type {
   EventLogger,
@@ -29,7 +29,7 @@ import {
   type ShotArrow,
 } from '../logic/round';
 import { BirdKit, flap, type BirdModel } from './birdModel';
-import { Bow } from './bow';
+import { BOW_MODEL, Bow, type NockedArrow } from './bow';
 import { Clouds, SKY, TreeLine, skyTexture } from './scenery';
 
 export interface Archery3DDeps {
@@ -81,7 +81,13 @@ interface ArrowVisual {
   arrow: ShotArrow;
   mesh: THREE.Object3D;
   fade: number;
+  /** The streak behind it: where its tail has been lately (field units, clock seconds). */
+  trail: THREE.Mesh;
+  path: { x: number; y: number; at: number }[];
 }
+
+/** Points along an arrow's streak, at most. */
+const TRAIL_POINTS = 24;
 
 interface Feather {
   x: number;
@@ -134,7 +140,7 @@ export class Archery3DView implements ScreenView {
   readonly #trees: TreeLine;
   readonly #preview: THREE.InstancedMesh;
   readonly #feathers: THREE.InstancedMesh;
-  readonly #arrowModels: Record<'fletched' | 'bare', THREE.Object3D>;
+  readonly #arrowModels: Record<NockedArrow, THREE.Object3D>;
   #tier: GraphicsTier;
   #look: Archery['looks']['tiers']['high'];
   #round: ArcheryRound | undefined;
@@ -146,8 +152,11 @@ export class Archery3DView implements ScreenView {
   /** The arrow kind (its item) the quiver's on. */
   #quiver: string | undefined;
   #pointer: { id: number; startX: number; startY: number; draw: number; angle: number } | undefined;
-  /** Round time (real seconds) the next arrow's on the string. */
+  /** Round time (real seconds) the next arrow's on the string, and the last shot left. */
   #reloadAt = 0;
+  #releasedAt = -Infinity;
+  /** Where the bow last aimed (degrees). */
+  #aim = 90;
   #clock = 0;
   #frozenUntil = 0;
   #shake = 0;
@@ -163,6 +172,7 @@ export class Archery3DView implements ScreenView {
     deps: Archery3DDeps,
     hud: WarchestHud,
     trees: THREE.Object3D[],
+    bowModel: THREE.Object3D,
   ) {
     this.#element = element;
     this.#deps = deps;
@@ -224,9 +234,13 @@ export class Archery3DView implements ScreenView {
     this.#scene.add(this.#clouds.mesh);
     this.#scene.add(this.#field, this.#bowSpot);
 
-    this.#bow = new Bow(looks.bowSize);
+    this.#bow = new Bow(looks.bowSize, bowModel);
     this.#bowSpot.add(this.#bow.group);
-    this.#arrowModels = { fletched: arrowModel(true), bare: arrowModel(false) };
+    this.#arrowModels = {
+      fletched: arrowModel(true),
+      bare: arrowModel(false),
+      duster: dusterModel(14),
+    };
 
     this.#preview = new THREE.InstancedMesh(
       new THREE.CircleGeometry(0.14, 8),
@@ -256,7 +270,7 @@ export class Archery3DView implements ScreenView {
   }
 
   static async create(element: HTMLElement, deps: Archery3DDeps): Promise<Archery3DView> {
-    const [hud, trees] = await Promise.all([
+    const [hud, trees, bow] = await Promise.all([
       WarchestHud.create(element, {
         game: deps.game,
         item: deps.game.data.archery.feathers.item,
@@ -264,13 +278,18 @@ export class Archery3DView implements ScreenView {
         logger: deps.logger,
       }),
       Promise.all(TREES.map((url) => loadModel(url))),
+      loadModel(BOW_MODEL),
     ]);
-    return new Archery3DView(element, deps, hud, trees);
+    return new Archery3DView(element, deps, hud, trees, bow);
   }
 
   /** Loads the models ahead of time (e.g. at the camp), so `create` doesn't wait for them. */
   static async preload(): Promise<void> {
-    await Promise.all([WarchestHud.preload(), ...TREES.map((url) => loadModel(url))]);
+    await Promise.all([
+      WarchestHud.preload(),
+      loadModel(BOW_MODEL),
+      ...TREES.map((url) => loadModel(url)),
+    ]);
   }
 
   // ScreenView
@@ -356,7 +375,7 @@ export class Archery3DView implements ScreenView {
   /** Takes the last round's birds, arrows, feathers and droppings off the field. */
   #clearRound(): void {
     for (const visual of this.#birds) this.#field.remove(visual.model.group);
-    for (const visual of this.#arrows) this.#field.remove(visual.mesh);
+    for (const visual of this.#arrows) this.#removeArrow(visual);
     for (const poop of this.#poops) this.#field.remove(poop.mesh);
     this.#birds = [];
     this.#arrows = [];
@@ -373,18 +392,21 @@ export class Archery3DView implements ScreenView {
     const feel = this.#deps.feel.values;
     const { haptics } = this.#deps;
     if (event.type === 'shot') {
-      const fletched =
-        this.#deps.game.data.items.find((item) => item.id === event.arrow.flight.kind.item)
-          ?.look !== 'shaft';
+      const look = this.#deps.game.data.items.find(
+        (item) => item.id === event.arrow.flight.kind.item,
+      )?.look;
       const mesh = new THREE.Group();
-      const model = this.#arrowModels[fletched ? 'fletched' : 'bare'].clone(true);
+      const model = this.#arrowModels[nockedFor(look)].clone(true);
       // Along +x, its point at the group's origin (where the rules have the arrow).
       model.rotation.y = Math.PI / 2;
       model.position.x = -0.55;
       mesh.add(model);
       mesh.scale.setScalar(this.#rules.looks.arrowLength);
       this.#field.add(mesh);
-      this.#arrows.push({ arrow: event.arrow, mesh, fade: 0 });
+      const trail = new THREE.Mesh(this.#trailGeometry(), this.#trailMaterial);
+      trail.frustumCulled = false;
+      this.#field.add(trail);
+      this.#arrows.push({ arrow: event.arrow, mesh, fade: 0, trail, path: [] });
       return;
     }
     if (event.type === 'hit') {
@@ -418,11 +440,16 @@ export class Archery3DView implements ScreenView {
       haptics.pulse(feel.buzzPoopMs);
       this.#sfx.play('plop', 0.7, 1100);
       this.#pour(event.drops, 0, this.#fieldToScreen(event.bird.x, event.bird.y - 0.6));
-      this.#flash('💩 Grazed it! +1');
+      this.#flash(
+        event.bird.scares > 1
+          ? `💩 Grazed again! ×${String(event.bird.scares)}`
+          : '💩 Grazed it! +1',
+      );
       return;
     }
     if (event.type === 'end') {
       this.#endedAt = this.#clock;
+      this.#element.dataset.reason = `${event.reason} at ${event.seconds.toFixed(1)}`;
       this.#bow.setArrow(undefined);
       // The stars' bonus seeds wait in the chest until the card's up.
       const deposits = event.bonus.map((stack) =>
@@ -482,6 +509,12 @@ export class Archery3DView implements ScreenView {
       looks.eyeHeight + (Math.random() - 0.5) * shake,
       0,
     );
+    // The kick on release: the view jolts up a touch and settles.
+    const feel = this.#deps.feel.values;
+    const since = this.#clock - this.#releasedAt;
+    const kick =
+      since < feel.kickSeconds * 3 ? feel.kickDegrees * Math.exp(-since / feel.kickSeconds) : 0;
+    this.#camera.rotation.set((looks.pitch + kick) * DEG, 0, 0);
     this.#renderer.render(this.#scene, this.#camera);
     const perf = this.#perf;
     perf.frames++;
@@ -545,25 +578,108 @@ export class Archery3DView implements ScreenView {
           mesh.rotation.z += dt * fallen.fall.spin * 0.5;
           mesh.visible = fallen.model.group.visible;
         }
+        this.#drawTrail(visual, undefined);
         if (!fallen?.model.group.visible) {
-          this.#field.remove(mesh);
+          this.#removeArrow(visual);
           return false;
         }
         return true;
       }
       mesh.position.set(flight.x, flight.y, 0.05);
       const fishtail = flight.kind.fishtail * wobbleOf(flight) * DEG;
-      mesh.rotation.z = Math.atan2(flight.vy, flight.vx) + fishtail;
+      const heading = Math.atan2(flight.vy, flight.vx);
+      mesh.rotation.z = heading + fishtail;
+      const length = this.#rules.looks.arrowLength;
+      this.#drawTrail(
+        visual,
+        arrow.state === 'flying'
+          ? { x: flight.x - Math.cos(heading) * length, y: flight.y - Math.sin(heading) * length }
+          : undefined,
+      );
       if (arrow.state === 'lost') {
         visual.fade += dt;
         mesh.visible = visual.fade < FADE_SECONDS && flight.y > -this.#rules.frame.bottom;
         if (visual.fade >= FADE_SECONDS) {
-          this.#field.remove(mesh);
+          this.#removeArrow(visual);
           return false;
         }
       }
       return true;
     });
+  }
+
+  readonly #trailMaterial = new THREE.MeshBasicMaterial({
+    vertexColors: true,
+    transparent: true,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+    fog: false,
+  });
+
+  /** A streak's strip: two points across at each point along it, white fading out to the tail. */
+  #trailGeometry(): THREE.BufferGeometry {
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute(
+      'position',
+      new THREE.BufferAttribute(new Float32Array(TRAIL_POINTS * 2 * 3), 3),
+    );
+    geometry.setAttribute(
+      'color',
+      new THREE.BufferAttribute(new Float32Array(TRAIL_POINTS * 2 * 4), 4),
+    );
+    const index: number[] = [];
+    for (let point = 0; point < TRAIL_POINTS - 1; point++) {
+      const a = point * 2;
+      index.push(a, a + 1, a + 2, a + 1, a + 3, a + 2);
+    }
+    geometry.setIndex(index);
+    geometry.setDrawRange(0, 0);
+    return geometry;
+  }
+
+  /**
+   * The streak behind an arrow: its tail's last `trailSeconds`, `trailWidth` wide at the arrow
+   * and tapering to nothing. `tail` is where the tail is now (none once it's come down: the
+   * streak just fades).
+   */
+  #drawTrail(visual: ArrowVisual, tail: { x: number; y: number } | undefined): void {
+    const feel = this.#deps.feel.values;
+    const path = visual.path;
+    if (tail) path.push({ ...tail, at: this.#clock });
+    while (path.length > 0 && (path[0]?.at ?? 0) < this.#clock - feel.trailSeconds) path.shift();
+    while (path.length > TRAIL_POINTS) path.shift();
+    const geometry = visual.trail.geometry;
+    if (path.length < 2 || feel.trailWidth <= 0) {
+      geometry.setDrawRange(0, 0);
+      return;
+    }
+    const positions = geometry.getAttribute('position') as THREE.BufferAttribute;
+    const colors = geometry.getAttribute('color') as THREE.BufferAttribute;
+    path.forEach((point, index) => {
+      const next = path[Math.min(index + 1, path.length - 1)] ?? point;
+      const before = path[Math.max(index - 1, 0)] ?? point;
+      const dx = next.x - before.x;
+      const dy = next.y - before.y;
+      const across = Math.hypot(dx, dy) || 1;
+      // Newest at the end: widest and brightest there.
+      const share = (index + 1) / path.length;
+      const half = (feel.trailWidth / 2) * share;
+      const nx = (-dy / across) * half;
+      const ny = (dx / across) * half;
+      positions.setXYZ(index * 2, point.x + nx, point.y + ny, 0.04);
+      positions.setXYZ(index * 2 + 1, point.x - nx, point.y - ny, 0.04);
+      const alpha = 0.55 * share * share;
+      colors.setXYZW(index * 2, 1, 1, 1, alpha);
+      colors.setXYZW(index * 2 + 1, 1, 1, 1, alpha);
+    });
+    positions.needsUpdate = true;
+    colors.needsUpdate = true;
+    geometry.setDrawRange(0, (path.length - 1) * 6);
+  }
+
+  #removeArrow(visual: ArrowVisual): void {
+    this.#field.remove(visual.mesh, visual.trail);
+    visual.trail.geometry.dispose();
   }
 
   /** A puff of feathers bursting out of a hit bird, in its colours. */
@@ -638,9 +754,20 @@ export class Archery3DView implements ScreenView {
     const pointer = this.#pointer;
     const round = this.#round;
     const draw = pointer?.draw ?? 0;
-    const angle = pointer?.angle ?? 90;
+    // The bow stays where it last aimed.
+    const angle = pointer?.angle ?? this.#aim;
+    this.#aim = angle;
     this.#bow.group.rotation.z = (angle - 90) * DEG;
-    this.#bow.setDraw(draw);
+    // Just let go: the string snaps forward past rest and rings out.
+    const feel = this.#deps.feel.values;
+    const since = this.#clock - this.#releasedAt;
+    const snap =
+      since < feel.snapSeconds
+        ? feel.snapOvershoot *
+          Math.exp((-3 * since) / feel.snapSeconds) *
+          Math.cos((since / feel.snapSeconds) * Math.PI * 3)
+        : 0;
+    this.#bow.setDraw(draw, snap);
     const ready =
       round?.phase === 'hunt' && this.#quiver !== undefined && this.#clock >= this.#reloadAt;
     const quiver = this.#quiver;
@@ -648,10 +775,9 @@ export class Archery3DView implements ScreenView {
       ? this.#deps.game.data.items.find((item) => item.id === quiver)?.look
       : undefined;
     const has = quiver !== undefined && this.#deps.game.inventory.count(quiver) > 0;
-    this.#bow.setArrow(ready && has ? (look === 'shaft' ? 'bare' : 'fletched') : undefined);
+    this.#bow.setArrow(ready && has ? nockedFor(look) : undefined);
     // The aim preview: the first part of the arrow's plain path.
     const kind = quiver && round ? round.kind(quiver) : undefined;
-    const feel = this.#deps.feel.values;
     if (!pointer || !kind || !round || draw < round.feel.minDraw || !ready) {
       this.#preview.count = 0;
       return;
@@ -716,6 +842,8 @@ export class Archery3DView implements ScreenView {
         const feel = this.#deps.feel.values;
         this.#deps.haptics.pulse(feel.buzzReleaseMs);
         this.#sfx.play('release', 0.6, -300);
+        this.#sfx.whoosh(feel.whooshVolume * (0.5 + pointer.draw / 2), 0.32);
+        this.#releasedAt = this.#clock;
         this.#reloadAt = this.#clock + this.#rules.looks.reloadSeconds;
         if (!this.#deps.game.hasDone('tutorial.archery'))
           this.#deps.game.markDone('tutorial.archery');
@@ -978,7 +1106,7 @@ export class Archery3DView implements ScreenView {
     lines.push(
       `🎯 ${plural(result.hits, 'hit')} + 💩 ${plural(result.scares, 'graze')} · par ${String(result.par)}, every bird that flew by`,
     );
-    lines.push('A hit or a graze is a point: graze a bird, then hit it as it flees, for 2');
+    lines.push('A hit or a graze is a point, and a bird can be grazed again and again as it flees');
     const { one, two } = this.#rules.stars;
     const nextShare = result.stars === 0 ? one : result.stars === 1 ? two : 1;
     if (result.stars < 3) {
@@ -1001,7 +1129,7 @@ export class Archery3DView implements ScreenView {
       (sum, arrow) => sum + game.inventory.count(arrow.item),
       0,
     );
-    if (left === 0) lines.push('Out of arrows: Fletching will make more soon');
+    if (left === 0) lines.push("Out of arrows: make more at the Fletcher's bench");
     ui.cardTitle.textContent = `${String(result.points)} / ${String(result.par)} points`;
     ui.cardText.textContent = lines.join('\n');
     ui.next.hidden = left === 0;
@@ -1021,10 +1149,14 @@ export class Archery3DView implements ScreenView {
     const ui = this.#ui;
     ui.cardStars.replaceChildren();
     ui.cardTitle.textContent = 'Out of arrows';
-    ui.cardText.textContent =
-      "The quiver's empty. Arrows will come from the Fletching bench (coming soon).";
+    ui.cardText.textContent = "The quiver's empty. Make more at the Fletcher's bench, next door.";
     ui.next.hidden = true;
     ui.card.hidden = false;
     this.#cardShown = true;
   }
+}
+
+/** The arrow model for an arrow item's look: a duster, a bare shaft, or fletched. */
+function nockedFor(look: string | undefined): NockedArrow {
+  return look === 'duster' ? 'duster' : look === 'shaft' ? 'bare' : 'fletched';
 }
