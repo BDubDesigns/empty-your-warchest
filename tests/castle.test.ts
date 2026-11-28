@@ -316,6 +316,8 @@ describe('a castle that does not hold together', () => {
   it("never lets a guard's way jump between the ground and the walk, or walk through walls", () => {
     expect(
       problemsWith((c) => {
+        // Without the posts the bell's ways start from.
+        c.anchors.bellRoutes = [];
         c.anchors.guardPaths = [
           { id: 'jump', loop: false, points: [{ ground: [-12, 9] }, { walk: 'west', at: 27 }] },
         ];
@@ -323,6 +325,8 @@ describe('a castle that does not hold together', () => {
     ).toContain('Steps between the ground and the walk without a stair (point 0)');
     expect(
       problemsWith((c) => {
+        // Without the posts the bell's ways start from.
+        c.anchors.bellRoutes = [];
         c.anchors.guardPaths = [
           {
             id: 'corner',
@@ -337,11 +341,70 @@ describe('a castle that does not hold together', () => {
     ).toContain('Leaves wall "west"\'s walk for "north" (point 0)');
     expect(
       problemsWith((c) => {
+        // Without the posts the bell's ways start from.
+        c.anchors.bellRoutes = [];
         c.anchors.guardPaths = [
           { id: 'through', loop: false, points: [{ ground: [0, -2] }, { ground: [0, -13.3] }] },
         ];
       }),
     ).toContain('Walks through a building (point 0)');
+  });
+
+  it('lays each way to the bell from its post to the rope, through towers by their walks', () => {
+    const layout = layoutCastle(castle);
+    const rope = layout.anchors.bell.rope;
+    for (const route of layout.anchors.bellRoutes) {
+      expect(route.points.at(-1)?.at).toEqual(rope);
+      expect(route.points.at(-2)?.level).toBe('ground');
+    }
+    // From the right of the gate: through the gatehouse and the south-west tower, down the stair.
+    const right = layout.anchors.bellRoutes.find((route) =>
+      route.from.includes('front_right_walk'),
+    );
+    expect(right?.points.flatMap((point) => point.tower ?? [])).toEqual([
+      'gatehouse',
+      'south_west',
+    ]);
+    expect(right?.points.some((point) => point.stair === 'west_stair')).toBe(true);
+  });
+
+  it('never lets a way to the bell jump levels, leave a tower but by a walk, or loop', () => {
+    const route = (c: GameDataInput['castle'], id: string) => {
+      const found = c.anchors.bellRoutes?.find((entry) => entry.id === id);
+      if (!found) throw new Error(`No route "${id}"`);
+      return found;
+    };
+    expect(
+      problemsWith((c) => {
+        route(c, 'down_west_stair').points = [{ tower: 'south_west' }, { ground: [-13.5, 6] }];
+      }),
+    ).toContain(
+      'Goes in or out of tower "south_west" other than along its walls\' walks (point 0)',
+    );
+    expect(
+      problemsWith((c) => {
+        route(c, 'along_front_left').points = [
+          { walk: 'front_left', at: 14.5 },
+          { ground: [-8, 6] },
+        ];
+      }),
+    ).toContain('Steps between the ground and the walk without a stair (point 0)');
+    expect(
+      problemsWith((c) => {
+        route(c, 'down_west_stair').then = 'along_front_left';
+      }),
+    ).toContain('Route "down_west_stair" goes round in a circle');
+    expect(
+      problemsWith((c) => {
+        route(c, 'down_west_stair').from = ['front_left_walk'];
+      }),
+    ).toContain('Post "front_left_walk" already has a way to the bell');
+    expect(
+      problemsWith((c) => {
+        const found = route(c, 'down_west_stair');
+        found.points = [...(found.points ?? []), { tower: 'the_moon' }];
+      }),
+    ).toContain('Unknown tower "the_moon"');
   });
 
   it('needs columns long enough for their merlons, and a square tower with no gate solid', () => {

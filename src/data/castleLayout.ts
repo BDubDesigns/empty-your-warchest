@@ -3,7 +3,8 @@ import type { Castle, CastleBuilding, CastleSide, CastleTower } from './schema';
 
 // The castle laid out from its data: where each wall runs and where it shows between its towers,
 // its walk and merlons, where the keep's kit pieces go, the stairs, and the siege's anchors (the
-// captain's windows, the spear rack, the bell, the guards' ways round) as points in the world. Pure
+// captain's windows, the spear rack, the bell and its rope, the guards' ways round and their ways to
+// the bell) as points in the world. Pure
 // numbers: no rendering. `castleProblems` checks the castle holds together (the wall closes round
 // the courtyard, everything inside stands clear of the walls, a guard's way never jumps between
 // the ground and the walk); the data's validation fails loudly on any of them.
@@ -74,13 +75,25 @@ export interface LaidStair {
   max: Vec2;
 }
 
-/** A point on a guard's way: on the ground or on a wall's walk (and which wall). */
+/**
+ * A point on a guard's way: on the ground or on a wall's walk (and which wall), or in a tower at
+ * its walks' height (on a way to the bell).
+ */
 export interface WayPoint {
   at: Vec3;
   level: 'ground' | 'walk';
   wall?: string;
   /** Set on a stair's ends: walking between them climbs the stair. */
   stair?: string;
+  tower?: string;
+}
+
+/** A way to the bell's rope: its points from the post's end to the rope (the last). */
+export interface BellRoute {
+  id: string;
+  /** The posts (guard paths and lookouts) whose guards take it. */
+  from: string[];
+  points: WayPoint[];
 }
 
 export interface CaptainWindow {
@@ -178,10 +191,12 @@ export interface CastleLayout {
     captainWindows: CaptainWindow[];
     /** Where the spear rack may stand: each a prop, its foot and turn (radians). */
     spearRacks: { id: string; at: Vec3; turn: number }[];
-    bell: { at: Vec3; turn: number };
+    /** The bell's foot and turn, and where its ringer stands at its rope (his feet). */
+    bell: { at: Vec3; turn: number; rope: Vec3 };
     guardPaths: { id: string; loop: boolean; points: WayPoint[] }[];
     /** A guard's place on a tower's top: where his feet are, and the tower. */
     lookouts: { id: string; tower: string; at: Vec3 }[];
+    bellRoutes: BellRoute[];
   };
 }
 
@@ -551,9 +566,9 @@ export function layoutCastle(castle: Castle): CastleLayout {
     };
   });
 
-  const guardPaths = castle.anchors.guardPaths.map((path) => {
+  const lay = (raw: readonly RouteWaypoint[]): WayPoint[] => {
     const points: WayPoint[] = [];
-    path.points.forEach((waypoint, index) => {
+    raw.forEach((waypoint, index) => {
       if ('walk' in waypoint) {
         points.push({
           at: walkLine(wallById(waypoint.walk), waypoint.at, castle.wall.height, castle),
@@ -562,20 +577,34 @@ export function layoutCastle(castle: Castle): CastleLayout {
         });
       } else if ('ground' in waypoint) {
         points.push({ at: [waypoint.ground[0], 0, waypoint.ground[1]], level: 'ground' });
+      } else if ('tower' in waypoint) {
+        const [x, z] = towerAt(waypoint.tower);
+        points.push({ at: [x, castle.wall.height, z], level: 'walk', tower: waypoint.tower });
       } else {
         const stair = stairById(waypoint.stair);
         const bottom: WayPoint = { at: stair.bottom, level: 'ground', stair: stair.id };
         const top: WayPoint = { at: stair.top, level: 'walk', wall: stair.wall, stair: stair.id };
         // Up, if it's come from the ground or goes on along the walk; down otherwise.
-        const before = path.points[index - 1];
-        const after = path.points[index + 1];
+        const before = raw[index - 1];
+        const after = raw[index + 1];
         const up =
           (before !== undefined && 'ground' in before) || (after !== undefined && 'walk' in after);
         points.push(...(up ? [bottom, top] : [top, bottom]));
       }
     });
-    return { id: path.id, loop: path.loop, points };
-  });
+    return points;
+  };
+  const guardPaths = castle.anchors.guardPaths.map((path) => ({
+    id: path.id,
+    loop: path.loop,
+    points: lay(path.points),
+  }));
+  const rope = bellRope(castle);
+  const bellRoutes = castle.anchors.bellRoutes.map((route) => ({
+    id: route.id,
+    from: [...route.from],
+    points: [...lay(routeChain(castle, route)), { at: rope, level: 'ground' as const }],
+  }));
 
   return {
     ring: ringed.ring,
@@ -587,11 +616,50 @@ export function layoutCastle(castle: Castle): CastleLayout {
     anchors: {
       captainWindows,
       spearRacks,
-      bell: { at: [castle.bell.at[0], 0, castle.bell.at[1]], turn: castle.bell.turn * DEG },
+      bell: {
+        at: [castle.bell.at[0], 0, castle.bell.at[1]],
+        turn: castle.bell.turn * DEG,
+        rope,
+      },
       guardPaths,
       lookouts,
+      bellRoutes,
     },
   };
+}
+
+type RouteWaypoint = Castle['anchors']['bellRoutes'][number]['points'][number];
+
+/** Where the bell's ringer stands, at its rope: `rope` from the frame's middle, turned with it. */
+function bellRope(castle: Castle): Vec3 {
+  const { at, turn, rope } = castle.bell;
+  const angle = turn * DEG;
+  // The frame's own x (along it) and z (out of it), turned about y as three.js turns them.
+  const x = rope[0] * Math.cos(angle) + rope[1] * Math.sin(angle);
+  const z = -rope[0] * Math.sin(angle) + rope[1] * Math.cos(angle);
+  return [at[0] + x, 0, at[1] + z];
+}
+
+/** A bell route's waypoints, and on along the routes it goes on by (`then`), each once. */
+function routeChain(
+  castle: Castle,
+  route: Castle['anchors']['bellRoutes'][number],
+): RouteWaypoint[] {
+  const points: RouteWaypoint[] = [];
+  const seen = new Set<string>();
+  let next: Castle['anchors']['bellRoutes'][number] | undefined = route;
+  while (next && !seen.has(next.id)) {
+    seen.add(next.id);
+    points.push(...next.points);
+    const then: string | undefined = next.then;
+    next = then === undefined ? undefined : castle.anchors.bellRoutes.find((r) => r.id === then);
+  }
+  return points;
+}
+
+/** The way from post `post` (a guard path or a lookout) to the bell's rope, if it has one. */
+export function bellRouteFrom(layout: CastleLayout, post: string): BellRoute | undefined {
+  return layout.anchors.bellRoutes.find((route) => route.from.includes(post));
 }
 
 /** A wedge's angle round its tower, and its rows' height, for a round tower that comes apart. */
@@ -1338,6 +1406,45 @@ export function castleProblems(castle: Castle): CastleProblem[] {
         issue(here, `Unknown stair "${point.stair}"`);
     });
   });
+  const posts = new Set([
+    ...castle.anchors.guardPaths.map((path) => path.id),
+    ...castle.anchors.lookouts.map((lookout) => lookout.id),
+  ]);
+  const routeIds = new Set(castle.anchors.bellRoutes.map((route) => route.id));
+  const routed = new Set<string>();
+  castle.anchors.bellRoutes.forEach((route, index) => {
+    const path = ['anchors', 'bellRoutes', index];
+    unique([...path, 'id'], route.id);
+    route.points.forEach((point, pointIndex) => {
+      const here = [...path, 'points', pointIndex];
+      if ('walk' in point && !wallIds.has(point.walk)) issue(here, `Unknown wall "${point.walk}"`);
+      if ('stair' in point && !stairIds.has(point.stair))
+        issue(here, `Unknown stair "${point.stair}"`);
+      if ('tower' in point && !towers.has(point.tower))
+        issue(here, `Unknown tower "${point.tower}"`);
+    });
+    route.from.forEach((post, postIndex) => {
+      if (!posts.has(post)) issue([...path, 'from', postIndex], `Unknown post "${post}"`);
+      else if (routed.has(post)) {
+        issue([...path, 'from', postIndex], `Post "${post}" already has a way to the bell`);
+      }
+      routed.add(post);
+    });
+    if (route.then !== undefined && !routeIds.has(route.then)) {
+      issue([...path, 'then'], `Unknown route "${route.then}"`);
+    }
+    // Following `then` must come to an end.
+    const seen = new Set<string>();
+    for (let next: typeof route | undefined = route; next;) {
+      if (seen.has(next.id)) {
+        issue([...path, 'then'], `Route "${route.id}" goes round in a circle`);
+        break;
+      }
+      seen.add(next.id);
+      const then: string | undefined = next.then;
+      next = castle.anchors.bellRoutes.find((candidate) => candidate.id === then);
+    }
+  });
   if (problems.length > before) return problems;
   const layout = layoutCastle(castle);
   const { walls, outline } = layout;
@@ -1555,6 +1662,86 @@ export function castleProblems(castle: Castle): CastleProblem[] {
         issue(path, `Walks through a building (point ${String(i)})`);
       }
     }
+  });
+
+  // The ways to the bell: each step stays on its level, changes it by a stair, or goes through a
+  // tower between its walls' walks; it ends on the ground, and crosses to the rope from there.
+  const wallsOf = (tower: string) =>
+    walls.filter((wall) => wall.from === tower || wall.to === tower).map((wall) => wall.id);
+  const stepProblem = (a: WayPoint, b: WayPoint): string | undefined => {
+    if (a.stair !== undefined && a.stair === b.stair) return undefined;
+    if (a.tower !== undefined || b.tower !== undefined) {
+      if (a.tower !== undefined && b.tower !== undefined) {
+        return a.tower === b.tower ? undefined : 'Goes from tower to tower without a walk';
+      }
+      const tower = a.tower ?? b.tower ?? '';
+      const other = a.tower === undefined ? a : b;
+      return other.wall !== undefined &&
+        other.stair === undefined &&
+        wallsOf(tower).includes(other.wall)
+        ? undefined
+        : `Goes in or out of tower "${tower}" other than along its walls' walks`;
+    }
+    if (a.level !== b.level) return 'Steps between the ground and the walk without a stair';
+    if (a.level === 'walk' && a.wall !== b.wall) {
+      return `Leaves wall "${a.wall ?? ''}"'s walk for "${b.wall ?? ''}"`;
+    }
+    if (
+      a.level === 'ground' &&
+      buildingBoxes.some((box) =>
+        segmentHitsBox([a.at[0], a.at[2]], [b.at[0], b.at[2]], box.min, box.max),
+      )
+    ) {
+      return 'Walks through a building';
+    }
+    return undefined;
+  };
+  const rope = layout.anchors.bell.rope;
+  if (!inCourtyard([rope[0], rope[2]]) || inBuilding([rope[0], rope[2]])) {
+    issue(['bell', 'rope'], 'The rope must hang in the courtyard, clear of buildings');
+  }
+  castle.anchors.bellRoutes.forEach((route, index) => {
+    const path = ['anchors', 'bellRoutes', index];
+    route.points.forEach((point, pointIndex) => {
+      const here = [...path, 'points', pointIndex];
+      if ('walk' in point) {
+        const wall = walls.find((candidate) => candidate.id === point.walk);
+        if (wall && (point.at < wall.clear[0] || point.at > wall.clear[1])) {
+          issue(here, `Off the end of wall "${wall.id}"'s walk`);
+        }
+      } else if ('ground' in point) {
+        if (!inCourtyard(point.ground) || inBuilding(point.ground)) {
+          issue(here, 'On the ground in the courtyard, clear of buildings');
+        }
+      } else if ('stair' in point && !stairOk.has(point.stair)) {
+        issue(here, `Stair "${point.stair}" is broken`);
+      }
+    });
+    const laid = layout.anchors.bellRoutes[index];
+    if (!laid) return;
+    const points = laid.points;
+    if (points.at(-2)?.level !== 'ground') {
+      issue(path, 'End on the courtyard’s ground, to cross to the bell’s rope');
+    }
+    for (let i = 1; i < points.length; i++) {
+      const a = points[i - 1];
+      const b = points[i];
+      if (!a || !b) continue;
+      const problem = stepProblem(a, b);
+      if (problem) issue(path, `${problem} (point ${String(i - 1)})`);
+    }
+    // From each of its posts onto its first point.
+    const first = points[0];
+    route.from.forEach((post, postIndex) => {
+      if (!first) return;
+      const lookout = layout.anchors.lookouts.find((entry) => entry.id === post);
+      const guardPath = layout.anchors.guardPaths.find((entry) => entry.id === post);
+      const end: WayPoint | undefined = lookout
+        ? { at: lookout.at, level: 'walk', tower: lookout.tower }
+        : guardPath?.points.at(-1);
+      const problem = end && stepProblem(end, first);
+      if (problem) issue([...path, 'from', postIndex], `From "${post}": ${problem}`);
+    });
   });
 
   castle.vantages.forEach((vantage, index) => {

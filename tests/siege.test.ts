@@ -1,12 +1,15 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import { Rng, type LogEvent } from '../src/core';
 import {
+  bellRouteFrom,
   castleBreakableKinds,
   GameDataError,
   layoutCastle,
   parseGameData,
+  postSlots,
   type GameData,
   type GameDataInput,
+  type SiegeFeel,
 } from '../src/data';
 import { siegeTunables } from '../src/stations/siege/feel';
 import { castleBodies, standsOn, within } from '../src/stations/siege/logic/castleBodies';
@@ -59,6 +62,14 @@ function planWith(seed: number, change: Partial<RoundPlan> = {}): RoundPlan {
   return { ...planRound(data.siege, LAYOUT, new Rng((seed ^ 0x9e3779b9) >>> 0)), ...change };
 }
 
+/** The feel with nothing alerting a guard: for what the alarm would only stir up. */
+const QUIET: SiegeFeel = {
+  ...data.siege.feel,
+  alertSpearRadius: 0,
+  alertBreakRadius: 0,
+  alertDeathRadius: 0,
+};
+
 /** A round at the castle, with `spears` in a pretend warchest. */
 function siege({
   spears = 600,
@@ -67,6 +78,7 @@ function siege({
   game = data,
   plan,
   vantage: at,
+  feel = game.siege.feel,
 }: Partial<{
   spears: number;
   aimed: number;
@@ -74,6 +86,7 @@ function siege({
   game: GameData;
   plan: RoundPlan;
   vantage: number;
+  feel: SiegeFeel;
 }> = {}) {
   const { logger } = testLogger();
   const logs: LogEvent[] = [];
@@ -86,7 +99,7 @@ function siege({
     game,
     {
       logger,
-      feel: () => game.siege.feel,
+      feel: () => feel,
       spears: () => warchest.spears,
       spend: (count) => {
         warchest.spears -= count;
@@ -300,9 +313,9 @@ describe('the siege round', () => {
     const start = logs.find((event) => event.type === 'siege.roundStart');
     expect(start?.data).toMatchObject({
       seed: 7,
-      par: data.siege.par,
       vantage: 'hill',
       feel: data.siege.feel,
+      alarm: data.siege.alarm,
     });
     expect((start?.data?.objectives as unknown[]).length).toBe(data.siege.objectives.count);
     // Each guard's look, from the seed.
@@ -396,7 +409,7 @@ describe('the siege round', () => {
     round.dispose();
   });
 
-  it('every objective done: won, and once it settles, the round ends with stars by par', () => {
+  it('every objective done with no bell: won, and once it settles, 3 stars', () => {
     const plan = planWith(7, {
       objectives: [{ kind: 'captain' }, { kind: 'rack' }],
       captainWindow: 0,
@@ -595,7 +608,8 @@ describe('the siege round', () => {
   });
 
   it('landed spears stop being bodies, and loose chunks are fixed where they settle', () => {
-    const { round } = siege();
+    // Quiet: guards running through the gatehouse would take spears the stonework gets here.
+    const { round } = siege({ feel: QUIET });
     const guard = round.guards.findIndex((entry) => entry.slot?.kind === 'path');
     dropColumnUnder(round, guard);
     shoot(round, { x: 0, y: 6, z: 17 }, 'barrage', 0);
@@ -735,26 +749,424 @@ describe('the weapon', () => {
   });
 });
 
+describe('the alarm', () => {
+  /** The feel with these alarm numbers. */
+  const tuned = (change: Partial<SiegeFeel>): SiegeFeel => ({ ...data.siege.feel, ...change });
+  /** Everyone hears any spear, takes it in at once, and a runner sets off straight away. */
+  const LOUD = tuned({ alertSpearRadius: 500, reactSeconds: 0, runnerDelaySeconds: 0 });
+  /** Into the field, well short of the castle. */
+  const FIELD = { x: -20, y: 0, z: 45 };
+  /** The battlement's guards (not the captain). */
+  const guardsOf = (round: SiegeRound) =>
+    round.guards.flatMap((guard, index) => (guard.role === 'guard' ? [index] : []));
+  /** Shoots guard `index` in the chest (over the parapet), from where the ballista stands. */
+  const shootChest = (round: SiegeRound, index: number, watch = 90) => {
+    const at = guardAt(round, index);
+    return shoot(round, { x: at.x, y: at.y + 0.3, z: at.z }, 'aimed', watch);
+  };
+  /** Steps until `done` says so, at most `steps`. */
+  const until = (round: SiegeRound, done: () => boolean, steps = 3000) => {
+    for (let step = 0; step < steps && !done() && round.phase !== 'done'; step++) round.step();
+    return done();
+  };
+  /** A plan with guards at these posts' slots (by index), for the battlement objective. */
+  const guardsAt = (slots: [string, number][]): RoundPlan => {
+    const base = planWith(7);
+    const objective = base.objectives.findIndex((entry) => entry.kind === 'guards');
+    const battlement = base.objectives[objective];
+    if (battlement?.kind !== 'guards') throw new Error('No battlement objective');
+    return {
+      ...base,
+      guards: slots.map(([post, slot]) => {
+        const found = postSlots(LAYOUT, post, battlement.slot)[slot];
+        if (!found) throw new Error(`No slot ${String(slot)} at ${post}`);
+        return { objective, slot: found, start: 0.5, heading: 1 };
+      }),
+    };
+  };
+
+  it('starts unaware: guards walk their stretches, and nothing far off alerts them', () => {
+    const { round, logs } = siege();
+    expect(round.alarm).toBe('quiet');
+    expect(round.guards.every((guard) => guard.mood === 'calm' && !guard.alertedBy)).toBe(true);
+    // A spear in the field is far out of earshot of the battlement.
+    shoot(round, FIELD, 'aimed', 120);
+    expect(round.alarm).toBe('quiet');
+    expect(logs.some((event) => event.type === 'siege.alert')).toBe(false);
+    round.dispose();
+  });
+
+  it('a spear landing within the radius alerts a guard, logged with what alerted him', () => {
+    const { round, logs, events } = siege({ feel: LOUD });
+    shoot(round, FIELD, 'aimed', 60);
+    expect(round.alarm).toBe('alerted');
+    for (const index of guardsOf(round)) expect(round.guards[index]?.alertedBy).toBe('shot');
+    const alert = logs.find((event) => event.type === 'siege.alert')?.data;
+    expect(alert?.cause).toBe('shot');
+    expect(['panic', 'hide']).toContain(alert?.reaction);
+    expect(alert?.distance).toBeGreaterThan(10);
+    expect(events.filter((event) => event.type === 'alert')).toHaveLength(guardsOf(round).length);
+    // The captain at his window is no part of it until the bell.
+    const captain = round.guards.find((guard) => guard.role === 'captain');
+    expect(captain).toMatchObject({ mood: 'calm', alertedBy: undefined });
+    round.dispose();
+  });
+
+  it('a guard falling is seen along his walk, but not through the gatehouse (line of sight)', () => {
+    const plan = guardsAt([
+      ['front_left_walk', 1],
+      ['front_left_walk', 2],
+      ['front_right_walk', 1],
+    ]);
+    const deathOnly = (sight: boolean) => {
+      const game = structuredClone(data);
+      game.siege.alarm.sight.death = sight;
+      const feel = tuned({ alertSpearRadius: 0, alertBreakRadius: 0, alertDeathRadius: 30 });
+      const { round } = siege({ game, plan, feel });
+      expect(shootChest(round, 0)).toBe(true);
+      expect(round.guards[0]?.down).toBe(true);
+      const moods = [1, 2].map((index) => round.guards[index]?.alertedBy);
+      round.dispose();
+      return moods;
+    };
+    // His neighbour on the walk sees him fall; the guard past the gatehouse doesn't...
+    expect(deathOnly(true)).toEqual(['death', undefined]);
+    // ...though he's near enough to, if seeing weren't needed.
+    expect(deathOnly(false)).toEqual(['death', 'death']);
+  });
+
+  it('alerted, a guard panics up and down his whole walk, or ducks and peeks, at random', () => {
+    const panic = siege({ feel: tuned({ ...LOUD, panicShare: 1, runnerDelaySeconds: 999 }) });
+    shoot(panic.round, FIELD, 'aimed', 60);
+    for (const index of guardsOf(panic.round)) {
+      const guard = panic.round.guards[index];
+      const slot = guard?.slot;
+      if (slot?.kind === 'path') {
+        expect(guard).toMatchObject({ mood: 'panic', walking: true });
+        // His whole walk, not his stretch of it.
+        expect(slot.from).toBe(0);
+      } else {
+        // At a lookout there's no walk to run: he ducks.
+        expect(guard?.mood).toBe('hide');
+      }
+    }
+    // Running, not walking: further in a second than a patrol goes.
+    const walker = guardsOf(panic.round).find(
+      (index) => panic.round.guards[index]?.mood === 'panic',
+    );
+    if (walker === undefined) throw new Error('No guard panicking');
+    const before = { ...guardAt(panic.round, walker) };
+    run(panic.round, 30);
+    const after = guardAt(panic.round, walker);
+    expect(Math.hypot(after.x - before.x, after.z - before.z)).toBeGreaterThan(
+      data.siege.guardMoves.patrolSpeed * 0.5 + 0.1,
+    );
+    panic.round.dispose();
+
+    const feel = tuned({ ...LOUD, panicShare: 0, runnerDelaySeconds: 999 });
+    const hide = siege({ feel });
+    shoot(hide.round, FIELD, 'aimed', 30);
+    const index = guardsOf(hide.round)[0] ?? 0;
+    const ducked = hide.round.guards[index];
+    // Ducked: his box under the parapet, his feet where they were.
+    expect(ducked).toMatchObject({ mood: 'hide', walking: false });
+    expect(ducked?.size[1]).toBe(data.siege.alarm.hideHeight);
+    const feet = (round: SiegeRound) => guardAt(round, index).y - (round.guards[index]?.feet ?? 0);
+    const floor = feet(hide.round);
+    // He peeks up before long, full height again, and ducks again after.
+    expect(until(hide.round, () => hide.round.guards[index]?.mood === 'peek', 60 * 6)).toBe(true);
+    run(hide.round, 1);
+    expect(hide.round.guards[index]?.size[1]).toBe(data.siege.guard.size[1]);
+    expect(feet(hide.round)).toBeCloseTo(floor, 2);
+    expect(until(hide.round, () => hide.round.guards[index]?.mood === 'hide', 60 * 3)).toBe(true);
+    hide.round.dispose();
+  });
+
+  it('the alerted guard nearest the bell runs for it; brought down, the next tries; no more after', () => {
+    const feel = tuned({ ...LOUD, runnerSpeed: 0.2 });
+    const { round, logs, events } = siege({ feel });
+    shoot(round, FIELD, 'aimed', 30);
+    const first = round.runner;
+    expect(first).toBeDefined();
+    if (first === undefined) return;
+    expect(round.guards[first]?.mood).toBe('run');
+    // The nearest by his way there.
+    const metres = (index: number) => {
+      const guard = round.guards[index];
+      const way = bellRouteFrom(LAYOUT, guard?.slot?.post ?? '');
+      const at = guardAt(round, index);
+      const points: [number, number, number][] = [
+        [at.x, at.y - (guard?.feet ?? 0), at.z],
+        ...(way?.points ?? []).map((p) => p.at),
+      ];
+      return points.slice(1).reduce((sum, point, i) => {
+        const from = points[i] ?? point;
+        return sum + Math.hypot(point[0] - from[0], point[1] - from[1], point[2] - from[2]);
+      }, 0);
+    };
+    const others = guardsOf(round).filter((index) => index !== first);
+    for (const other of others) expect(metres(other)).toBeGreaterThanOrEqual(metres(first) - 0.5);
+    expect(logs.find((event) => event.type === 'siege.runner')?.data).toMatchObject({
+      event: 'start',
+      guard: first,
+      runner: 1,
+    });
+
+    // Brought down on his way: the bell doesn't ring, and another sets off.
+    shootChest(round, first);
+    expect(round.guards[first]?.down).toBe(true);
+    expect(events).toContainEqual({ type: 'runner', guard: first, what: 'killed' });
+    run(round, 2);
+    const second = round.runner;
+    expect(second).toBeDefined();
+    expect(second).not.toBe(first);
+    if (second === undefined) return;
+    shootChest(round, second);
+    expect(round.guards[second]?.down).toBe(true);
+    // The data lets two try: no third.
+    run(round, 120);
+    expect(data.siege.alarm.runners).toBe(2);
+    expect(round.runner).toBeUndefined();
+    expect(round.alarm).toBe('alerted');
+    expect(
+      logs.filter((event) => event.type === 'siege.runner').map((event) => event.data?.event),
+    ).toEqual(['start', 'killed', 'start', 'killed']);
+    round.dispose();
+  });
+
+  it('a runner at the rope rings the bell: the whole castle alerted, the captain hides, a timer', () => {
+    const plan = planWith(7, { captainWindow: 0 });
+    const feel = tuned({ ...LOUD, alertSpearRadius: 6, runnerSpeed: 30 });
+    const { round, logs, events } = siege({ plan, feel });
+    // A spear by one guard only: he's the runner, and the rest hear the bell.
+    const index = guardsOf(round)[0] ?? 0;
+    const at = guardAt(round, index);
+    shoot(round, { x: at.x, y: 5, z: at.z + 1.6 }, 'aimed', 0);
+    expect(until(round, () => round.alarm === 'rang', 60 * 10)).toBe(true);
+    const ringer = round.guards.find((guard) => guard.mood === 'ring');
+    expect(ringer).toBeDefined();
+    const rope = LAYOUT.anchors.bell.rope;
+    const ringerAt = guardAt(round, round.guards.indexOf(ringer as never));
+    // At the rope (drawn between the last two steps: within a step's run of it).
+    expect(Math.hypot(ringerAt.x - rope[0], ringerAt.z - rope[2])).toBeLessThan(0.6);
+    expect(events).toContainEqual({ type: 'bell', rang: true });
+    for (const guard of round.guards) {
+      if (guard.role === 'guard' && !guard.down) expect(guard.alertedBy).toBeDefined();
+    }
+    expect(round.guards.some((guard) => guard.alertedBy === 'bell')).toBe(true);
+    const captain = round.guards.findIndex((guard) => guard.role === 'captain');
+    expect(round.guards[captain]?.mood).toBe('inside');
+    expect(round.reinforcementsIn).toBeCloseTo(feel.reinforcementSeconds, 0);
+    expect(logs.find((event) => event.type === 'siege.bell')?.data).toMatchObject({
+      event: 'rang',
+      reinforcementSeconds: feel.reinforcementSeconds,
+    });
+    expect(
+      logs.find((event) => event.type === 'siege.runner' && event.data?.event === 'reached'),
+    ).toBeDefined();
+    // In the keep, he's out of reach: a volley through his window finds no one.
+    const window = LAYOUT.anchors.captainWindows[0];
+    if (!window) throw new Error('No window');
+    shoot(round, { x: window.at[0], y: window.at[1] - 0.2, z: window.at[2] });
+    expect(round.guards[captain]?.down).toBe(false);
+    round.dispose();
+  });
+
+  it('reinforcements arriving lose the round: what was done still pays, a star for some', () => {
+    const plan = planWith(7, { captainWindow: 0 });
+    const feel = tuned({ ...LOUD, runnerSpeed: 30, reinforcementSeconds: 5 });
+    // The captain first (the spears by his window alert the castle), then the bell.
+    const { round, finished, logs } = siege({ plan, feel });
+    const captain = round.guards.findIndex((guard) => guard.role === 'captain');
+    shoot(round, guardAt(round, captain));
+    expect(round.guards[captain]?.down).toBe(true);
+    expect(until(round, () => round.alarm === 'rang', 60 * 10)).toBe(true);
+    expect(until(round, () => round.phase === 'done', 60 * 8)).toBe(true);
+    expect(finished[0]).toMatchObject({
+      ending: 'reinforcements',
+      rang: true,
+      done: 1,
+      stars: 1,
+      starsWhy: 'some',
+      won: true,
+    });
+    // As any round with something done: XP, and the share of spears back.
+    expect(finished[0]?.recovered).toBeGreaterThan(0);
+    expect(logs.find((event) => event.type === 'siege.reinforcements')?.data).toMatchObject({
+      done: 1,
+    });
+    expect(logs.find((event) => event.type === 'siege.end')?.data).toMatchObject({
+      ending: 'reinforcements',
+      starsWhy: 'some',
+      alarm: 'rang',
+    });
+    round.dispose();
+
+    // Nothing done: no stars, no spears back.
+    const none = siege({ feel });
+    shoot(none.round, FIELD, 'aimed', 0);
+    until(none.round, () => none.round.phase === 'done', 60 * 20);
+    expect(none.finished[0]).toMatchObject({ ending: 'reinforcements', stars: 0, recovered: 0 });
+    none.round.dispose();
+  });
+
+  it('every objective done after the bell rang is 2 stars, and the card says why', () => {
+    const base = planWith(7, { rack: 'spear_rack' });
+    const objective = base.objectives.find((entry) => entry.kind === 'guards');
+    if (objective?.kind !== 'guards') throw new Error('No battlement objective');
+    const plan: RoundPlan = {
+      objectives: [{ kind: 'rack' }, { ...objective, kill: 1 }],
+      captainWindow: undefined,
+      rack: 'spear_rack',
+      guards: base.guards.map((guard) => ({ ...guard, objective: 1 })),
+    };
+    // He takes a moment to react, so the volley that alerts him still brings him down.
+    const feel = tuned({ ...LOUD, reactSeconds: 0.6, runnerDelaySeconds: 1, runnerSpeed: 30 });
+    const { round, finished, logs } = siege({ plan, feel });
+    const lookout = round.guards.findIndex((guard) => guard.slot?.kind === 'lookout');
+    shootChest(round, lookout);
+    expect(round.guards[lookout]?.down).toBe(true);
+    expect(until(round, () => round.alarm === 'rang', 60 * 10)).toBe(true);
+    round.setVantage(TOWER);
+    shoot(round, partMiddle(round, 'spear_rack'), 'aimed', 0);
+    until(round, () => round.phase === 'done', 60 * 10);
+    expect(finished[0]).toMatchObject({
+      ending: 'all',
+      done: 2,
+      rang: true,
+      stars: 2,
+      starsWhy: 'bell',
+    });
+    expect(logs.find((event) => event.type === 'siege.end')?.data).toMatchObject({
+      stars: 2,
+      starsWhy: 'bell',
+    });
+    round.dispose();
+  });
+
+  it('a bell broken before it rings never rings: the runner gives up and ducks', () => {
+    const feel = tuned({ ...LOUD, runnerSpeed: 0.2 });
+    const { round, logs, events } = siege({ feel });
+    shoot(round, FIELD, 'aimed', 120);
+    const runner = round.runner;
+    expect(runner).toBeDefined();
+    // The bell itself, from a vantage point it can be seen from.
+    const { at, size, bell: across } = data.castle.bell;
+    const bell = { x: at[0], y: size[1] - across / 2, z: at[1] };
+    const from = data.castle.vantages.findIndex((vantage) =>
+      round.sees({ x: vantage.at[0], y: vantage.at[1], z: vantage.at[2] }, bell, 1),
+    );
+    expect(from).toBeGreaterThanOrEqual(0);
+    round.setVantage(from);
+    for (let tries = 0; tries < 4 && round.alarm !== 'broken'; tries++) {
+      shoot(round, bell, 'barrage', 120);
+    }
+    expect(round.alarm).toBe('broken');
+    expect(events).toContainEqual({ type: 'bell', rang: false });
+    expect(round.runner).toBeUndefined();
+    if (runner !== undefined && !round.guards[runner]?.down) {
+      expect(round.guards[runner]?.mood).toMatch(/hide|peek/);
+      expect(events).toContainEqual({ type: 'runner', guard: runner, what: 'gaveUp' });
+    }
+    expect(logs.find((event) => event.type === 'siege.bell')?.data).toMatchObject({
+      event: 'broken',
+    });
+    // No one else runs, and it never rings.
+    run(round, 60 * 20);
+    expect(round.runner).toBeUndefined();
+    expect(round.alarm).toBe('broken');
+    expect(round.reinforcementsIn).toBeUndefined();
+    round.dispose();
+  });
+
+  it('after the bell, the captain shows at a window now and then, leaning, and can be hit', () => {
+    const plan = planWith(7, { captainWindow: 0 });
+    const feel = tuned({
+      ...LOUD,
+      runnerSpeed: 30,
+      captainHideMinSeconds: 1,
+      captainHideMaxSeconds: 2,
+      captainShowMinSeconds: 30,
+      captainShowMaxSeconds: 30,
+    });
+    const { round, logs, events } = siege({ plan, feel });
+    shoot(round, FIELD, 'aimed', 0);
+    expect(until(round, () => round.alarm === 'rang', 60 * 10)).toBe(true);
+    const captain = round.guards.findIndex((guard) => guard.role === 'captain');
+    expect(round.guards[captain]?.mood).toBe('inside');
+    expect(until(round, () => round.guards[captain]?.mood === 'window', 60 * 3)).toBe(true);
+    const shown = events.find((event) => event.type === 'captainWindow');
+    expect(shown).toBeDefined();
+    const window = round.guards[captain]?.window ?? -1;
+    expect(LAYOUT.anchors.captainWindows[window]).toBeDefined();
+    expect(logs.find((event) => event.type === 'siege.captainWindow')?.data).toMatchObject({
+      window,
+    });
+    // At the window, where the rules have him: from a vantage point that sees him, a volley.
+    const at = guardAt(round, captain);
+    const from = data.castle.vantages.findIndex((vantage) =>
+      round.sees({ x: vantage.at[0], y: vantage.at[1], z: vantage.at[2] }, at, 1),
+    );
+    expect(from).toBeGreaterThanOrEqual(0);
+    round.setVantage(from);
+    shoot(round, guardAt(round, captain));
+    expect(round.guards[captain]?.down).toBe(true);
+    round.dispose();
+  });
+
+  it('replays exactly, alarm and all: the same seed and shots give the same alarm', () => {
+    const play = () => {
+      const feel = tuned({ ...LOUD, alertSpearRadius: 8, runnerSpeed: 6 });
+      const game = siege({ seed: 5, feel, plan: planWith(5, { captainWindow: 1 }) });
+      const { round } = game;
+      const guard = guardsOf(round)[0] ?? 0;
+      const at = guardAt(round, guard);
+      shoot(round, { x: at.x, y: 5, z: at.z + 1.6 }, 'aimed', 300);
+      round.setVantage(LOW);
+      shoot(round, { x: 0, y: 3, z: 19 }, 'barrage', 900);
+      round.withdraw();
+      const kinds = ['siege.alert', 'siege.runner', 'siege.bell', 'siege.captainWindow'];
+      const alarm = game.logs
+        .filter((event) => kinds.includes(event.type))
+        .map((event) => ({ type: event.type, data: event.data }));
+      const guards = round.guards.map((_, index) => round.guardPose(index, pose()));
+      const result = game.finished[0];
+      round.dispose();
+      return { alarm, guards, result };
+    };
+    const first = play();
+    expect(first.alarm.length).toBeGreaterThan(2);
+    const second = play();
+    expect(second.alarm).toEqual(first.alarm);
+    expect(second.guards).toEqual(first.guards);
+    expect(second.result).toEqual(first.result);
+  });
+});
+
 describe('siege stars and rewards', () => {
-  const par = data.siege.par;
-  it('3 for every objective at or under par, 2 for every objective, 1 for some, none for none', () => {
-    expect(siegeStars({ done: 3, objectives: 3, throws: par }, par)).toBe(3);
-    expect(siegeStars({ done: 3, objectives: 3, throws: par + 1 }, par)).toBe(2);
-    expect(siegeStars({ done: 2, objectives: 3, throws: 1 }, par)).toBe(1);
-    expect(siegeStars({ done: 0, objectives: 3, throws: 1 }, par)).toBe(0);
+  it('3 for every objective and no bell, 2 for every objective, 1 for some, none for none', () => {
+    expect(siegeStars({ done: 3, objectives: 3, rang: false })).toEqual({ stars: 3, why: 'quiet' });
+    expect(siegeStars({ done: 3, objectives: 3, rang: true })).toEqual({ stars: 2, why: 'bell' });
+    expect(siegeStars({ done: 2, objectives: 3, rang: false })).toEqual({ stars: 1, why: 'some' });
+    expect(siegeStars({ done: 2, objectives: 3, rang: true })).toEqual({ stars: 1, why: 'some' });
+    expect(siegeStars({ done: 0, objectives: 3, rang: false })).toEqual({ stars: 0, why: 'none' });
   });
 
   it('pays Command XP for parts, guards and objectives, and recovers a share on a win', () => {
     const recovery = data.tuning.weaponRecoveryOnWin;
     const { rewards, starBonus } = data.siege;
-    const outcome = { done: 3, objectives: 3, throws: par, used: 40, partsDown: 6, guardsDown: 4 };
+    const outcome = { done: 3, objectives: 3, rang: false, used: 40, partsDown: 6, guardsDown: 4 };
     const three = siegeRewards(outcome, data.siege, recovery);
     const base =
       6 * rewards.xpPerPart + 4 * rewards.xpPerGuard + 3 * rewards.xpPerObjective + rewards.winXp;
-    expect(three.stars).toBe(3);
+    expect(three).toMatchObject({ stars: 3, starsWhy: 'quiet' });
     expect(three.xp).toBe(base + Math.round(base * starBonus.three));
     const back = Math.floor(40 * recovery);
     expect(three.recovered).toBe(back + Math.round(back * starBonus.three));
+    // The bell rang: 2 stars, and their smaller bonus.
+    const two = siegeRewards({ ...outcome, rang: true }, data.siege, recovery);
+    expect(two).toMatchObject({ stars: 2, starsWhy: 'bell' });
+    expect(two.xp).toBe(base + Math.round(base * starBonus.two));
     const lost = siegeRewards({ ...outcome, done: 0 }, data.siege, recovery);
     expect(lost).toMatchObject({ stars: 0, won: false, recovered: 0 });
     expect(lost.xp).toBe(6 * rewards.xpPerPart + 4 * rewards.xpPerGuard);
@@ -796,6 +1208,10 @@ describe('siege data', () => {
       const objective = battlement(raw);
       objective.posts = ['south_west_top'];
     }, 'Room for 1 guards');
+    // Any of its guards may run for the bell: each post needs a way there.
+    fails((raw) => {
+      battlement(raw).posts.push('round_the_keep');
+    }, 'No way to the bell from "round_the_keep"');
   });
 
   it('fails on picking more objectives than the pool has', () => {

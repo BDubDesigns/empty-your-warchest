@@ -140,6 +140,9 @@ const instancedKinds = new Set<CastlePartKind>([
 const DEG = Math.PI / 180;
 /** How far inside a building's faces its dark inside starts (m): what its windows look into. */
 const INSIDE_INSET = 0.35;
+/** The bell's rope: how thick it's drawn, and how high its foot hangs, in its ringer's hands (m). */
+const ROPE_THICKNESS = 0.05;
+const ROPE_HAND = 1.1;
 
 const textureKeys = ['map', 'alphaMap'] as const;
 
@@ -689,6 +692,19 @@ export async function buildCastleScene(
     const hanging = bell(across);
     hanging.translate(...frame(0, height - 0.02));
     target.add(own.bell, hanging);
+    // Its rope, from under the bell down to its ringer's hands.
+    const [ropeX, , ropeZ] = layout.anchors.bell.rope;
+    const top = new THREE.Vector3(...frame(0, height - 0.02 - across));
+    const hand = new THREE.Vector3(ropeX, ROPE_HAND, ropeZ);
+    const turned = new THREE.Quaternion().setFromUnitVectors(UP, top.clone().sub(hand).normalize());
+    stone(
+      'timber',
+      block(
+        [ROPE_THICKNESS, top.distanceTo(hand), ROPE_THICKNESS],
+        new THREE.Matrix4().compose(hand, turned, new THREE.Vector3(1, 1, 1)),
+        skinOf('timber'),
+      ),
+    );
   });
 
   // Props and dressing, and the ivy. The spear racks are each their own group: a siege keeps one
