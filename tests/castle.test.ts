@@ -6,6 +6,8 @@ import {
   insidePolygon,
   GameDataError,
   castleBreakableKinds,
+  gatehouseEdges,
+  gatehouseRows,
   castleSchema,
   type GameDataInput,
 } from '../src/data';
@@ -147,6 +149,62 @@ describe('the castle', () => {
     expect(of(castle.bell.id, 'bell')).toHaveLength(1);
   });
 
+  it('builds the gatehouse of blocks: two piers and the stonework over the gate, in rows', () => {
+    const { parts } = layoutCastle(castle);
+    const gatehouse = castle.towers.find((tower) => tower.gate);
+    if (!gatehouse?.gate) throw new Error('No gatehouse');
+    const blocks = parts.filter(
+      (part) => part.kind === 'gatehouseChunk' && part.owner === gatehouse.id,
+    );
+    const { rows, deep } = castle.gatehouseChunks;
+    // Each pier in every row; over the gate, every row but the bottom one.
+    expect(blocks).toHaveLength(2 * rows * deep + (rows - 1) * deep);
+    // The bottom row is as high as the gate, and the rows stack to the gatehouse's height.
+    expect(gatehouseRows(castle, gatehouse)[1]).toBe(gatehouse.gate.height);
+    expect(gatehouseRows(castle, gatehouse).at(-1)).toBeCloseTo(gatehouse.height);
+    const volume = blocks.reduce(
+      (sum, part) => sum + part.size[0] * part.size[1] * part.size[2],
+      0,
+    );
+    const depth = (gatehouse.depth ?? gatehouse.size) * 2;
+    const whole = gatehouse.size * 2 * gatehouse.height * depth;
+    expect(volume).toBeCloseTo(whole - gatehouse.gate.width * gatehouse.gate.height * depth);
+    const ids = new Set(blocks.map((part) => part.id));
+    for (const part of blocks) {
+      // Bottom blocks stand on the ground; the lowest over the gate is held between the piers.
+      const over = Math.abs(part.at[0] - gatehouse.at[0]) < 1e-6;
+      expect(part.on).toHaveLength(part.row === 0 ? 0 : over && part.row === 1 ? 2 : 1);
+      for (const under of part.on ?? []) expect(ids.has(under)).toBe(true);
+    }
+    // Its merlons stand on its top row, and the parapet runs round its four edges on them.
+    const merlons = parts.filter((part) => part.kind === 'merlon' && part.owner === gatehouse.id);
+    for (const merlon of merlons) {
+      const under = blocks.find((part) => part.id === merlon.on?.[0]);
+      expect(under?.row).toBe(rows - 1);
+    }
+    const top = blocks.filter((part) => part.row === rows - 1);
+    const parapet = top.flatMap((part) => gatehouseEdges(castle, part));
+    const run = parapet.reduce((sum, edge) => sum + edge.length, 0);
+    const out = castle.details.corbel.out;
+    const thick = castle.wall.parapet.thickness;
+    expect(run).toBeCloseTo(2 * (gatehouse.size * 2 + out * 2) + 2 * (depth + out * 2 - thick * 2));
+  });
+
+  it('builds the keep’s top storey of blocks, its roof on them', () => {
+    const { parts, buildings } = layoutCastle(castle);
+    const keep = castle.buildings.find((building) => building.id === 'keep');
+    if (!keep?.chunks) throw new Error('The keep has no blocks');
+    const blocks = parts.filter((part) => part.kind === 'storeyChunk' && part.owner === 'keep');
+    expect(blocks).toHaveLength(keep.chunks.across.length * keep.chunks.deep.length);
+    const top = (keep.storeys - keep.chunks.storeys) * castle.storey;
+    expect(buildings.find((building) => building.id === 'keep')?.solidHeight).toBe(top);
+    for (const part of blocks) expect(part.at[1]).toBe(top);
+    const area = blocks.reduce((sum, part) => sum + part.size[0] * part.size[2], 0);
+    expect(area).toBe(keep.modules[0] * keep.modules[1] * castle.module ** 2);
+    const roof = parts.find((part) => part.kind === 'roof' && part.owner === 'keep');
+    expect([...(roof?.on ?? [])].sort()).toEqual(blocks.map((part) => part.id).sort());
+  });
+
   it('fixes slits, doorways and ivy to the chunk they are on', () => {
     const { parts } = layoutCastle(castle);
     const ids = new Set(parts.map((part) => part.id));
@@ -157,7 +215,7 @@ describe('the castle', () => {
       // Only what's on solid stonework has no chunk.
       const tower = castle.towers.find((candidate) => candidate.id === part.owner);
       const wall = castle.walls.find((candidate) => candidate.id === part.owner);
-      if (tower && tower.shape === 'round' && !tower.solid) expect(part.of).toBeDefined();
+      if (tower && !tower.solid) expect(part.of).toBeDefined();
       if (wall && !wall.solid) expect(part.of).toBeDefined();
     }
   });
@@ -286,16 +344,40 @@ describe('a castle that does not hold together', () => {
     ).toContain('Walks through a building (point 0)');
   });
 
-  it('needs columns long enough for their merlons, and square towers solid', () => {
+  it('needs columns long enough for their merlons, and a square tower with no gate solid', () => {
     expect(problemsWith((c) => (c.wall.chunks.length = 1.5))).toContain(
       'Wall "front_right"\'s columns are too short for two merlons',
     );
     expect(
       problemsWith((c) => {
         const gatehouse = c.towers.find((tower) => tower.id === 'gatehouse');
-        if (gatehouse) gatehouse.solid = false;
+        if (gatehouse) delete gatehouse.gate;
       }),
-    ).toContain('A square tower is solid (only round ones come apart yet)');
+    ).toContain(
+      'A square tower without a gate is solid (only gatehouses and round towers come apart)',
+    );
+  });
+
+  it('needs a building’s blocks to add up to its modules, in storeys it has', () => {
+    const keep = (c: GameDataInput['castle']) => c.buildings.find((b) => b.id === 'keep');
+    expect(
+      problemsWith((c) => {
+        const chunks = keep(c)?.chunks;
+        if (chunks) chunks.across = [2, 2];
+      }),
+    ).toContain('Its blocks across must add up to 5 modules');
+    expect(
+      problemsWith((c) => {
+        const chunks = keep(c)?.chunks;
+        if (chunks) chunks.deep = [4, 1];
+      }),
+    ).toContain('Its blocks deep must add up to 4 modules');
+    expect(
+      problemsWith((c) => {
+        const chunks = keep(c)?.chunks;
+        if (chunks) chunks.storeys = 4;
+      }),
+    ).toContain('No more storeys come apart than it has');
   });
 
   it('keeps stairs within their wall, and vantage points outside the walls', () => {

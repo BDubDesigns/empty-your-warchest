@@ -10,7 +10,9 @@ import { data, testLogger } from './helpers';
 // chunks are fixed where they lie. The same shots both ways: five barrages over the front wall,
 // then the front wall's columns knocked out from under it, watched for four seconds. It prints the
 // physics time per step (it varies with the machine, so it's not checked); what's checked is the
-// work: what's still a body once it's all settled.
+// work: what's still a body once it's all settled. (Nov 28, parts at half their hit points and
+// harder crashes: the same shots break about 70 parts where they broke 16, for a mean step of
+// 0.67 ms against 0.61, a 95th percentile of 1.65 against 1.2 and a worst of about 3 against 1.8.)
 
 let physics: Physics;
 beforeAll(async () => {

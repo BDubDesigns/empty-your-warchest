@@ -15,7 +15,7 @@ import {
   type SiegePartKind,
   type SiegeWeapon,
 } from '../../../data';
-import { castleBodies, standsOn, type BodyShape, type PartBody } from './castleBodies';
+import { castleBodies, standsOn, within, type BodyShape, type PartBody } from './castleBodies';
 import { objectiveProgress, planRound, type Progress, type RoundPlan } from './objectives';
 import type { Physics } from './physics';
 import { siegeRewards, type SiegeRewards } from './score';
@@ -303,6 +303,10 @@ export class SiegeRound {
   #damage = 0;
   #throws = 0;
   #lastThrow: { at: number; index: number } | undefined;
+  /** What the last throw has done so far, for the logs (told when the next goes, or at the end). */
+  #tally: { mode: ThrowMode; broken: number; loosened: number; guards: number } | undefined;
+  /** A part broke or came loose this step: what it held up is checked. */
+  #shifted = false;
   #calmFor = 0;
   #wonAt = 0;
 
@@ -468,7 +472,14 @@ export class SiegeRound {
       };
       this.guards.push(state);
       this.#guardBodies.push(this.#addGuard(index, feet, state));
-      this.#footing.push([]);
+      // In a storey that comes apart, he stands in one of its blocks, and goes down with it.
+      this.#footing.push(
+        this.parts.flatMap((part, at) =>
+          part.kind === 'storeyChunk' && within(part.body, [feet.x, feet.y + rules.sill, feet.z])
+            ? [at]
+            : [],
+        ),
+      );
     }
     this.progress = this.plan.objectives.map((objective, index) =>
       objectiveProgress(objective, this.#objectiveView(index)),
@@ -629,6 +640,8 @@ export class SiegeRound {
     );
     this.#hooks.spend(spears.length);
     this.#used += spears.length;
+    this.#logTally();
+    this.#tally = { mode, broken: 0, loosened: 0, guards: 0 };
     const index = this.#throws++;
     const { timestep } = this.rules.physics;
     for (const spear of spears) {
@@ -681,6 +694,18 @@ export class SiegeRound {
       y: from.y + dir.y * hit.timeOfImpact,
       z: from.z + dir.z * hit.timeOfImpact,
     };
+  }
+
+  /**
+   * Whether `to` can be seen from `from`: nothing the rules have stands in the way short of it
+   * (`slack` m short counts as there, so a target itself doesn't hide its own middle).
+   */
+  sees(from: Vec3, to: Vec3, slack: number): boolean {
+    const way = { x: to.x - from.x, y: to.y - from.y, z: to.z - from.z };
+    const far = Math.hypot(way.x, way.y, way.z);
+    const hit = this.rayHit(from, way, far);
+    if (!hit) return true;
+    return Math.hypot(hit.x - from.x, hit.y - from.y, hit.z - from.z) >= far - slack;
   }
 
   /**
@@ -786,6 +811,7 @@ export class SiegeRound {
       else this.#loosen(index);
     }
     for (const index of [...breaking].sort((x, y) => x - y)) this.#break(index);
+    if (this.#shifted) this.#checkHolds();
     for (const [index, speed] of [...crushes].sort((x, y) => x[0] - y[0])) {
       if (speed >= damage.knockSpeed) this.#guardDown(index, 'crush');
     }
@@ -856,6 +882,7 @@ export class SiegeRound {
   quit(): void {
     if (this.phase === 'done') return;
     this.phase = 'done';
+    this.#logTally();
     this.#hooks.logger.log('siege.quit', {
       used: this.#used,
       throws: this.#throws,
@@ -978,16 +1005,19 @@ export class SiegeRound {
     const state = this.guards[index];
     const footing = this.#footing[index];
     if (!state || !footing || footing.length === 0) return false;
+    const gone = (part: number) => {
+      const under = this.parts[part];
+      return under !== undefined && (under.mode === 'broken' || under.fallen);
+    };
+    // The captain stands in his window's block: he goes down once it does.
+    if (state.role === 'captain') return footing.every(gone);
     const feet = this.#feetOf(state);
     const under = footing.filter((part) => {
       const body = this.parts[part]?.body;
       return body !== undefined && standsOn(body, [feet.x, feet.y, feet.z], FOOTING);
     });
     if (under.length === 0) return false;
-    return under.every((part) => {
-      const state = this.parts[part];
-      return state !== undefined && (state.mode === 'broken' || state.fallen);
-    });
+    return under.every(gone);
   }
 
   /** One step of every standing guard: walking his stretch, pausing at its ends. */
@@ -1164,6 +1194,8 @@ export class SiegeRound {
       const body = this.#partBodies[next]?.body;
       if (!state || !body || (state.mode !== 'fixed' && state.mode !== 'frozen')) continue;
       state.mode = 'loose';
+      this.#shifted = true;
+      if (this.#tally) this.#tally.loosened++;
       const tracked = this.#partBodies[next];
       if (tracked) tracked.still = 0;
       body.setBodyType(this.#physics.RigidBodyType.Dynamic, true);
@@ -1172,6 +1204,35 @@ export class SiegeRound {
       this.#hooks.onEvent({ type: 'loose', part: next });
       stack.push(...this.#restingOn(next));
     }
+  }
+
+  /**
+   * What's held up by more than the part under it (a round tower's rows, by the row beneath): any
+   * that has too few of those left standing where they were built comes loose, and all that rests
+   * on it; and so on up, until nothing more gives.
+   */
+  #checkHolds(): void {
+    this.#shifted = false;
+    for (let again = true; again;) {
+      again = false;
+      this.parts.forEach((state, index) => {
+        const holds = state.body.holds;
+        if (!holds || state.mode !== 'fixed') return;
+        const standing = holds.parts.filter((part) => this.parts[part]?.mode === 'fixed').length;
+        if (standing >= holds.atLeast) return;
+        this.#hooks.logger.log('siege.collapse', {
+          part: state.body.id,
+          owner: state.body.owner,
+          standing,
+          needed: holds.atLeast,
+          throw: this.#throws,
+          step: this.#steps,
+        });
+        this.#loosen(index);
+        again = true;
+      });
+    }
+    this.#shifted = false;
   }
 
   /** The parts resting on part `index` (as built, or as they settled). */
@@ -1192,6 +1253,8 @@ export class SiegeRound {
     readPose(body, tracked.now);
     state.mode = 'broken';
     state.hp = 0;
+    this.#shifted = true;
+    if (this.#tally) this.#tally.broken++;
     const centre = this.#partMiddle(index);
     // What rested on it comes loose; loose bodies near it are woken (asleep, one resting on it
     // would stay up in the air).
@@ -1250,7 +1313,10 @@ export class SiegeRound {
     }
   }
 
-  /** A guard is down: one on the walk falls with the physics; the captain sinks where he stands. */
+  /**
+   * A guard is down: one on the walk falls with the physics, and so does the captain if his block
+   * of the keep went from under him; hit, the captain sinks where he stands.
+   */
   #guardDown(index: number, by: GuardDownBy): void {
     const state = this.guards[index];
     const tracked = this.#guardBodies[index];
@@ -1260,8 +1326,9 @@ export class SiegeRound {
     state.by = by;
     state.hp = 0;
     state.walking = false;
+    if (this.#tally) this.#tally.guards++;
     const at = copy(body.translation());
-    if (state.role === 'guard') {
+    if (state.role === 'guard' || by === 'fall') {
       body.setBodyType(this.#physics.RigidBodyType.Dynamic, true);
       const collider = tracked.colliders[0];
       collider?.setCollisionGroups(groups(GUARD, GROUND | PART | SPEAR));
@@ -1438,7 +1505,23 @@ export class SiegeRound {
     return counts;
   }
 
+  /** Logs what the last throw did: parts broken and come loose, guards down. */
+  #logTally(): void {
+    const tally = this.#tally;
+    if (!tally) return;
+    this.#tally = undefined;
+    this.#hooks.logger.log('siege.throwDone', {
+      throw: this.#throws,
+      mode: tally.mode,
+      partsBroken: tally.broken,
+      partsLoosened: tally.loosened,
+      guardsDown: tally.guards,
+      step: this.#steps,
+    });
+  }
+
   #finish(ending: SiegeEnding): void {
+    this.#logTally();
     const partsDown = this.partsDown;
     const guardsDown = this.guardsDown;
     const done = this.done;

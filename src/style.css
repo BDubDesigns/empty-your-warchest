@@ -2743,6 +2743,14 @@ body:not([data-view='camp']) #build-label {
   color: #9fe08a;
 }
 
+/* An objective out of view: which way to turn, or that this spot can't see it. */
+.sg-objectives .sg-where {
+  color: #fff;
+  font-weight: 600;
+  font-size: 11px;
+  opacity: 0.85;
+}
+
 /* An objective done, big, a moment. */
 .sg-title {
   position: absolute;

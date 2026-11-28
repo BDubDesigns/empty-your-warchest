@@ -82,8 +82,16 @@ const SOUNDS: Record<string, string> = {
 const GHOST_SEGMENTS = 120;
 /** The last shot's line, and the spears, show from this far from the camera on (m). */
 const GHOST_NEAR = 8;
-/** A touch that moves less than this (px) is a tap (it skips the kill look), not an aim. */
+/** A touch that moves less than this (px) is a tap (it skips the follow shot or kill look), not an aim. */
 const TAP_PX = 10;
+/** How far past its spear the follow shot looks (m). */
+const FOLLOW_LOOK = 8;
+/** The longest a follow shot rides one spear (real seconds), in case it never comes down. */
+const FOLLOW_MOST_SECONDS = 4;
+/** The follow shot's camera never goes lower than this over the field (m). */
+const FOLLOW_FLOOR = 1;
+/** How much of a target must be nearer than what's in the way to count as seen (m). */
+const SEEN_SLACK = 1.2;
 /** The crosshair's ring: its least size on screen (px). */
 const CROSSHAIR_PX = 30;
 /** Real seconds a title (an objective done) shows. */
@@ -98,8 +106,20 @@ const ANIMATE_WITHIN = 140;
 const DIE_SECONDS = 2.5;
 /** Frames drawn (textures uploaded) before what it costs to draw is measured. */
 const MEASURE_FRAMES = 4;
+/** How far up a tower its landmark for the tests and screenshots is (m): low on its drum. */
+const LANDMARK_HEIGHT = 1.5;
 /** How far out in front of the captain his gold mark hangs (m). */
 const MARK_OUT = 0.8;
+/** Where an objective is from where you're looking, for its line in the list. */
+type Where = '' | 'left' | 'right' | 'up' | 'down' | 'hidden';
+const WHERE_TEXT: Record<Where, string> = {
+  '': '',
+  left: ' ◀ turn left',
+  right: ' ▶ turn right',
+  up: ' ▲ look up',
+  down: ' ▼ look down',
+  hidden: ' · out of sight',
+};
 const COLORS = {
   sense: 0xff2a2a,
   stone: 0x9b978d,
@@ -130,10 +150,31 @@ interface GuardLook {
   downAt: number;
   /** His own outline in red, drawn through walls while a Sense potion lasts. */
   sense: THREE.Object3D[];
-  /** The captain's gold mark over his head. */
-  mark: THREE.Sprite | undefined;
-  /** His own materials (the captain's gold), freed with him. */
-  owned: THREE.Material[];
+  /** The gold mark over him, while his objective's live. */
+  mark: THREE.Sprite;
+  /** His own materials (they glow gold while his objective's live), freed with him. */
+  owned: THREE.MeshLambertMaterial[];
+}
+
+/** The spear rack's gold: its mark, and its own materials (they glow while it stands). */
+interface RackLook {
+  part: number;
+  mark: THREE.Sprite;
+  materials: THREE.MeshLambertMaterial[];
+}
+
+/**
+ * The follow shot: the camera rides behind the shot's lead spear until it hits (`hitAt`, real
+ * seconds), holds on it a moment, then eases back to the vantage point (`out`).
+ */
+interface Follow {
+  spear: number;
+  throw: number;
+  at: number;
+  hitAt: number | undefined;
+  out: boolean;
+  skipped: boolean;
+  last: THREE.Vector3 | undefined;
 }
 
 /**
@@ -182,6 +223,12 @@ interface Look {
   out: boolean;
 }
 
+/** The camera as a place and a point it looks at. */
+interface Shot {
+  position: THREE.Vector3;
+  look: THREE.Vector3;
+}
+
 /** A finger on the scene: where it went down, where it was last, and whether it's dragging. */
 interface Touch {
   id: number;
@@ -192,13 +239,16 @@ interface Touch {
 }
 
 /**
- * The siege in 3D, at the castle: the camera is fixed at one of its vantage points (Hill, Low
- * ground, Siege tower; switch between them any time), and a drag moves the crosshair over the view.
- * Fire shoots at what's under it, Aimed or Barrage (allowing for the drop), with a kick. A kill (or a
- * collapse) gets a freeze and a slow-motion look, the camera turning to it from where it stands. The
- * last shot's real path can stay as a solid line, so you learn the drop. The rules (SiegeRound, a
- * Rapier physics world) decide everything; this draws the castle's parts, the guards and the spears
- * where it says and adds the juice: hit-stop, shake, dust, debris, sounds and buzzes.
+ * The siege in 3D, at the castle: the camera stands at one of its vantage points (Hill, Low
+ * ground, Siege tower; switch between them any time), and a drag turns the view left and right (and
+ * up and down) under the crosshair in its middle. Fire shoots at what's under it, Aimed or Barrage
+ * (allowing for the drop), with a kick, and the camera follows the shot's lead spear to what it
+ * hits, then comes back. A kill (or a collapse) gets a freeze and a slow-motion look, the camera
+ * turning to it from where it is. Every live objective's targets glow gold under a gold mark, and
+ * the list says which way to turn for one that's out of view. The last shot's real path can stay
+ * as a solid line, so you learn the drop. The rules (SiegeRound, a Rapier physics world) decide
+ * everything; this draws the castle's parts, the guards and the spears where it says and adds the
+ * juice: hit-stop, shake, dust, debris, sounds and buzzes.
  */
 export class Siege3DView implements ScreenView {
   readonly #element: HTMLElement;
@@ -206,7 +256,10 @@ export class Siege3DView implements ScreenView {
   readonly #physics: Physics;
   readonly #renderer: THREE.WebGLRenderer;
   readonly #camera = new THREE.PerspectiveCamera(50, 1, 0.5, 700);
-  /** The vantage point's own camera, never kicked, shaken or turned: what Fire aims along. */
+  /**
+   * The vantage point's own camera, turned as the player has turned it but never kicked, shaken or
+   * sent after a spear: what Fire aims along.
+   */
   readonly #aimCamera = new THREE.PerspectiveCamera(50, 1, 0.5, 700);
   readonly #timer = new THREE.Timer();
   readonly #sfx = new Sfx();
@@ -258,7 +311,8 @@ export class Siege3DView implements ScreenView {
     depthTest: false,
     depthWrite: false,
   });
-  readonly #markTexture = textSprite('▼', '#ffc64a');
+  readonly #markTexture: THREE.CanvasTexture;
+  readonly #gold: THREE.Color;
   readonly #puffTexture: THREE.Texture;
   readonly #pose: Pose = { position: { x: 0, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0, w: 1 } };
   readonly #matrix = new THREE.Matrix4();
@@ -271,9 +325,16 @@ export class Siege3DView implements ScreenView {
   #round: SiegeRound | undefined;
   #mode: ThrowMode = 'aimed';
   #vantage = 0;
-  /** The crosshair (px in the view), and where it was left at each vantage point this round. */
-  #cross = { x: 0, y: 0 };
-  #crossAt = new Map<number, { x: number; y: number }>();
+  /**
+   * How far the view is turned from where the vantage point looks (degrees: yaw + to the right,
+   * pitch + up), and how it was left at each vantage point this round.
+   */
+  #view = { yaw: 0, pitch: 0 };
+  #viewAt = new Map<number, { yaw: number; pitch: number }>();
+  /** The spear rack's gold, if the round has one. */
+  #rack: RackLook | undefined;
+  /** Where each objective is from where you're looking (for its line in the list). */
+  #where: Where[] = [];
   #parts: PartLook[] = [];
   /** Instanced meshes with an instance moved this frame: their bounds need working out again. */
   #moved = new Set<THREE.InstancedMesh>();
@@ -298,6 +359,10 @@ export class Siege3DView implements ScreenView {
   #kick = 0;
   #gaze: Look | undefined;
   #lookBlend = 0;
+  /** The follow shot, how far over to it the camera is (0 to 1), and where it has the camera. */
+  #follow: Follow | undefined;
+  #followBlend = 0;
+  readonly #followShot: Shot = { position: new THREE.Vector3(), look: new THREE.Vector3() };
   readonly #lookPoint = new THREE.Vector3();
   /** Whether this shot has had its kill look (only the first kill of a shot gets one). */
   #killShown = false;
@@ -329,6 +394,8 @@ export class Siege3DView implements ScreenView {
     this.#castleTier = tier;
     this.#waiting.background = new THREE.Color(deps.game.data.castle.colors.sky);
     const rules = deps.game.data.siege;
+    this.#gold = new THREE.Color(rules.looks.objective.color);
+    this.#markTexture = textSprite('▼', rules.looks.objective.color);
     const station = deps.game.data.stations.find((entry) => entry.mechanic === 'siege');
     this.#skill = station?.skill ?? siegeWeapon(rules).skill;
     this.#skillBar = new SkillBar(element, { game: deps.game, skill: this.#skill });
@@ -548,13 +615,17 @@ export class Siege3DView implements ScreenView {
     );
     this.#round = round;
     this.#vantage = round.vantage;
-    this.#crossAt = new Map();
-    this.#centreCross();
+    this.#viewAt = new Map();
+    this.#view = { yaw: 0, pitch: 0 };
     this.#buildRound(round);
     this.#showVantages();
     this.#slow.until = this.#frozenUntil = 0;
     this.#gaze = undefined;
     this.#lookBlend = 0;
+    this.#follow = undefined;
+    this.#followBlend = 0;
+    this.#where = [];
+    this.#targetsAt = -Infinity;
     this.#breaks = [];
     this.#title = undefined;
     this.#perf = newPerf();
@@ -575,9 +646,16 @@ export class Siege3DView implements ScreenView {
       look.mixer.uncacheRoot(look.model);
       look.root.removeFromParent();
       for (const material of look.owned) material.dispose();
-      look.mark?.material.dispose();
+      look.mark.material.dispose();
     }
     this.#guards = [];
+    const rack = this.#rack;
+    if (rack) {
+      rack.mark.removeFromParent();
+      rack.mark.material.dispose();
+      for (const material of rack.materials) material.emissive.setScalar(0);
+    }
+    this.#rack = undefined;
     // The spears share their model's geometry and materials: only out of the scene.
     for (const spear of this.#spears) spear.removeFromParent();
     this.#spears = [];
@@ -668,6 +746,20 @@ export class Siege3DView implements ScreenView {
       this.#figures.add(look.root);
       return look;
     });
+    // The spear rack's gold: its own materials glow, and a mark hangs over it.
+    const rackPart = round.parts.findIndex((part) => part.kind === 'rack');
+    const rackObject = castle.racks.get(round.parts[rackPart]?.body.id ?? '');
+    if (rackObject) {
+      const materials: THREE.MeshLambertMaterial[] = [];
+      rackObject.traverse((child) => {
+        if (child instanceof THREE.Mesh && child.material instanceof THREE.MeshLambertMaterial) {
+          materials.push(child.material);
+        }
+      });
+      const mark = this.#markSprite();
+      this.#figures.add(mark);
+      this.#rack = { part: rackPart, mark, materials };
+    }
     // A blob under each guard and each part (shown on the low tier, for what's come loose).
     this.#blobs = new BlobShadows(
       round.guards.length + round.parts.length,
@@ -729,10 +821,20 @@ export class Siege3DView implements ScreenView {
     this.#deps.logger.log('siege.graphics', { tier });
   }
 
+  /** A gold mark: drawn behind walls as anything is, and through them while a Sense potion lasts. */
+  #markSprite(): THREE.Sprite {
+    const mark = new THREE.Sprite(
+      new THREE.SpriteMaterial({ map: this.#markTexture, depthWrite: false }),
+    );
+    mark.renderOrder = 21;
+    return mark;
+  }
+
   /**
    * A guard: Kenney's soldier (cloned with his skeleton), scaled evenly to `height`, his feet at
-   * his root, with his own mixer for his clips, and his red outline for Sense. The captain wears
-   * gold, and a gold mark over him.
+   * his root, with his own mixer for his clips, and his red outline for Sense. His own materials
+   * (they glow gold while his objective's live) and a gold mark over him; the captain wears gold
+   * besides.
    */
   #guardLook(height: number, captain: boolean): GuardLook {
     const rules = this.#deps.game.data.siege;
@@ -742,22 +844,18 @@ export class Siege3DView implements ScreenView {
     const tall = Math.max(bounds.max.y - bounds.min.y, 0.001);
     model.scale.setScalar(height / tall);
     model.rotation.y = skin.turn * DEG;
-    const owned: THREE.Material[] = [];
+    const owned: THREE.MeshLambertMaterial[] = [];
     const meshes: THREE.Mesh[] = [];
     model.traverse((child) => {
       child.castShadow = true;
       if (child instanceof THREE.Mesh) meshes.push(child as THREE.Mesh);
     });
-    if (captain) {
-      const tint = new THREE.Color(rules.captain.tint);
-      for (const mesh of meshes) {
-        const gold = (mesh.material as THREE.MeshLambertMaterial).clone();
-        gold.color.multiply(tint);
-        // A glow of gold too, so he reads as the captain far off, through a window.
-        gold.emissive.copy(tint).multiplyScalar(rules.captain.glow);
-        mesh.material = gold;
-        owned.push(gold);
-      }
+    const tint = new THREE.Color(rules.captain.tint);
+    for (const mesh of meshes) {
+      const own = (mesh.material as THREE.MeshLambertMaterial).clone();
+      if (captain) own.color.multiply(tint);
+      mesh.material = own;
+      owned.push(own);
     }
     // His outline: his own meshes again (on his skeleton, so it moves as he does), flat red and
     // drawn over everything.
@@ -783,12 +881,8 @@ export class Siege3DView implements ScreenView {
     });
     const root = new THREE.Group();
     root.add(model);
-    let mark: THREE.Sprite | undefined;
-    if (captain) {
-      mark = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.#markTexture }));
-      mark.renderOrder = 5;
-      root.add(mark);
-    }
+    const mark = this.#markSprite();
+    root.add(mark);
     const mixer = new THREE.AnimationMixer(model);
     const actions = new Map<string, THREE.AnimationAction>();
     for (const clip of this.#skins.guard.animations) actions.set(clip.name, mixer.clipAction(clip));
@@ -849,6 +943,16 @@ export class Siege3DView implements ScreenView {
         this.#ghost.count = 0;
         this.#endSlow();
         this.#killShown = false;
+        // The camera goes after that spear.
+        this.#follow = {
+          spear: this.#trailSpear,
+          throw: round.throws,
+          at: this.#now,
+          hitAt: undefined,
+          out: false,
+          skipped: false,
+          last: undefined,
+        };
         break;
       }
       case 'launch': {
@@ -961,6 +1065,8 @@ export class Siege3DView implements ScreenView {
       }
       case 'vantage':
         this.#play('wind', 0.35, -400);
+        // From its new place the list may point another way.
+        this.#targetsAt = -Infinity;
         break;
       case 'won':
         this.#play('rumble', 0.5);
@@ -1028,7 +1134,11 @@ export class Siege3DView implements ScreenView {
     this.#frozenUntil = Math.max(this.#frozenUntil, this.#now + ms / 1000);
   }
 
-  /** A kill look: a freeze, then slow motion for `seconds` while the camera turns to `target`. */
+  /**
+   * A kill look: a freeze, then slow motion for `seconds` while the camera turns to `target` from
+   * where it is (at the vantage point, or wherever the follow shot has it: that waits, and goes
+   * back once this is done).
+   */
   #killLook(target: KillTarget, seconds: number, slowMo: number): void {
     const feel = this.#deps.feel.values;
     this.#killShown = true;
@@ -1043,6 +1153,25 @@ export class Siege3DView implements ScreenView {
     this.#slow.until = this.#now;
     this.#frozenUntil = Math.min(this.#frozenUntil, this.#now);
     if (this.#gaze) this.#gaze.out = true;
+  }
+
+  /**
+   * The follow shot is over: the camera eases back to the vantage point. Skipped (`how`: a tap, a
+   * drag, the next shot, another vantage point) or run its course, it's logged.
+   */
+  #endFollow(how?: 'tap' | 'drag' | 'fire' | 'vantage'): void {
+    const follow = this.#follow;
+    if (!follow || follow.out) return;
+    follow.out = true;
+    follow.skipped = how !== undefined;
+    this.#deps.logger.log('siege.follow', {
+      throw: follow.throw,
+      skipped: follow.skipped,
+      ...(how && { how }),
+      hit: follow.hitAt !== undefined,
+      seconds: round1(this.#now - follow.at),
+      vantage: this.#deps.game.data.castle.vantages[this.#vantage]?.id,
+    });
   }
 
   #dust(at: Vec3, count: number, size: number): void {
@@ -1101,16 +1230,21 @@ export class Siege3DView implements ScreenView {
     const slow = this.#slow;
     const slowLeft = slow.until - this.#now;
     const slowShare = slow.seconds > 0 ? slowLeft / slow.seconds : 0;
-    const scale =
+    const slowed =
       slowLeft > 0 ? slow.factor + (1 - slow.factor) * Math.max(0, 1 - slowShare * 3) : 1;
-    const dt = frozen ? 0 : realDt * scale;
     const round = this.#round;
+    // The follow shot: time runs slower while its spear flies, so the flight can be watched.
+    const follow = this.#follow;
+    const riding =
+      follow !== undefined && !follow.out && round?.spears[follow.spear]?.flying === true;
+    const scale = riding ? Math.min(slowed, this.#deps.feel.values.followSlowMo) : slowed;
+    const dt = frozen ? 0 : realDt * scale;
     const physicsFrom = performance.now();
     round?.advance(dt);
     perf.physicsMs.push(performance.now() - physicsFrom);
     // Calm frames (aiming, no kill look, nothing slowed) tell the graphics tier how this phone
     // copes.
-    if (round?.phase === 'aim' && !this.#gaze && !frozen && scale === 1) {
+    if (round?.phase === 'aim' && !this.#gaze && !this.#follow && !frozen && scale === 1) {
       this.#deps.graphics.sample(realDt * 1000);
     }
     const finished = this.#finished;
@@ -1118,6 +1252,8 @@ export class Siege3DView implements ScreenView {
       this.#finished = undefined;
       this.#showCard(finished.result);
     }
+    // The camera first: the marks, the ghost line and the crosshair go by where it is.
+    this.#updateCamera(realDt);
     this.#drawBodies();
     this.#animateGuards(dt);
     this.#drawBlobs();
@@ -1126,7 +1262,6 @@ export class Siege3DView implements ScreenView {
     if (this.#ghost.visible && this.#trailPoints.length > 1) this.#drawGhost();
     this.#updateEffects(dt);
     this.#updateUi();
-    this.#updateCamera(realDt);
     this.#renderer.render(this.#castle?.scene ?? this.#waiting, this.#camera);
     if (!this.#castle) return;
     const info = this.#renderer.info.render;
@@ -1186,13 +1321,31 @@ export class Siege3DView implements ScreenView {
 
     const sensing = this.#now < this.#senseUntil;
     const feel = this.#deps.feel.values;
-    const clips = this.#deps.game.data.siege.skins.guard.clips;
+    const rules = this.#deps.game.data.siege;
+    const clips = rules.skins.guard.clips;
+    // A live objective's gold: its glow swells and fades, so it catches the eye.
+    const { glow, pulse, pulseSeconds } = rules.looks.objective;
+    const swell = 0.5 - 0.5 * Math.cos((this.#now / pulseSeconds) * Math.PI * 2);
+    const lit = glow * (1 - pulse * swell);
+    const live = (objective: number) => {
+      const progress = round.progress[objective];
+      return progress !== undefined && progress.done < progress.needed;
+    };
+    const markSize = (mark: THREE.Sprite) => {
+      mark.scale.set(feel.markSize * 2, feel.markSize, 1);
+      // Behind walls like anything else; through them while a Sense potion lasts.
+      mark.material.depthTest = !sensing;
+    };
     this.#guards.forEach((look, index) => {
       const state = round.guards[index];
       if (!state) return;
       round.guardPose(index, pose);
       const { x, y, z } = pose.position;
-      if (state.down && state.role === 'guard') {
+      const target = !state.down && live(state.objective);
+      for (const material of look.owned) {
+        material.emissive.copy(this.#gold).multiplyScalar(target ? lit : 0);
+      }
+      if (state.down && (state.role === 'guard' || state.by === 'fall')) {
         // Lying: where his body lies (his die clip does the falling), his feet on what's under it.
         look.root.position.set(x, y - Math.min(state.size[0], state.size[2]) / 2, z);
       } else {
@@ -1201,13 +1354,31 @@ export class Siege3DView implements ScreenView {
       }
       this.#playClip(look, state.down ? clips.down : state.walking ? clips.patrol : clips.stand);
       for (const overlay of look.sense) overlay.visible = sensing && !state.down;
-      if (look.mark) {
-        look.mark.visible = !state.down;
-        // Out in front of him (his window's wall would hide it over his head).
-        look.mark.position.set(0, state.height + feel.markSize * 0.5, MARK_OUT);
-        look.mark.scale.set(feel.markSize * 2, feel.markSize, 1);
-      }
+      look.mark.visible = target;
+      // Over his head; the captain's out in front of him (his window's wall would hide it).
+      look.mark.position.set(
+        0,
+        state.height + feel.markSize * 0.5,
+        state.role === 'captain' ? MARK_OUT : 0,
+      );
+      markSize(look.mark);
     });
+    const rack = this.#rack;
+    const rackState = rack ? round.parts[rack.part] : undefined;
+    if (rack && rackState) {
+      const standing = rackState.mode !== 'broken';
+      for (const material of rack.materials) {
+        material.emissive.copy(this.#gold).multiplyScalar(standing ? lit : 0);
+      }
+      rack.mark.visible = standing;
+      round.partPose(rack.part, pose);
+      rack.mark.position.set(
+        pose.position.x,
+        pose.position.y + rackState.body.size[1] + feel.markSize * 0.5 + 0.3,
+        pose.position.z,
+      );
+      markSize(rack.mark);
+    }
     this.#spears.forEach((spear, index) => {
       const state = round.spears[index];
       spear.visible = state?.gone !== true;
@@ -1215,9 +1386,9 @@ export class Siege3DView implements ScreenView {
       round.spearPose(index, pose);
       spear.position.set(pose.position.x, pose.position.y, pose.position.z);
       spear.quaternion.set(pose.rotation.x, pose.rotation.y, pose.rotation.z, pose.rotation.w);
-      // Just out of the ballista, under the camera, it'd fill the screen: it shows from a few
-      // metres on.
-      if (spear.position.distanceTo(this.#camera.position) < GHOST_NEAR) spear.visible = false;
+      // Just out of the ballista, under the vantage point, it'd fill the screen: it shows from a
+      // few metres on.
+      if (spear.position.distanceTo(this.#aimCamera.position) < GHOST_NEAR) spear.visible = false;
     });
     // The last shot's middle spear leaves its line while it flies.
     const trailed = this.#trailSpear;
@@ -1344,8 +1515,8 @@ export class Siege3DView implements ScreenView {
       turn.setFromUnitVectors(forward, way.normalize());
       const middle = from.clone().lerp(to, 0.5);
       const far = middle.distanceTo(this.#camera.position);
-      // Not where it leaves the ballista, just under the camera: there it'd fill the screen.
-      if (far < GHOST_NEAR) continue;
+      // Not where it leaves the ballista, just under the vantage point: there it'd fill the screen.
+      if (middle.distanceTo(this.#aimCamera.position) < GHOST_NEAR) continue;
       const width = Math.max(feel.ghostWidth, far * perPixel * feel.ghostPx);
       matrix.compose(middle, turn, new THREE.Vector3(width, width, length));
       this.#ghost.setMatrixAt(count++, matrix);
@@ -1355,15 +1526,17 @@ export class Siege3DView implements ScreenView {
   }
 
   /**
-   * The crosshair where it's been dragged, `reticleSize` across, or as wide as a barrage's spread
-   * if that's wider. The last shot's path shows if it's turned on.
+   * The crosshair in the middle of the view, `reticleSize` across, or as wide as a barrage's
+   * spread if that's wider (not while the camera's away after a spear). The last shot's path shows
+   * if it's turned on.
    */
   #drawAim(): void {
     const round = this.#round;
     const ui = this.#ui;
     const feel = this.#deps.feel.values;
-    this.#ghost.visible = this.#deps.ghost.value === 'on';
-    const showing = round !== undefined && round.phase === 'aim' && ui.card.hidden;
+    const away = this.#follow !== undefined;
+    this.#ghost.visible = this.#deps.ghost.value === 'on' && !away;
+    const showing = round !== undefined && round.phase === 'aim' && ui.card.hidden && !away;
     ui.crosshair.hidden = !showing;
     if (!showing) return;
     const half = Math.tan((this.#aimCamera.fov * DEG) / 2);
@@ -1373,8 +1546,8 @@ export class Siege3DView implements ScreenView {
         : 0;
     const radius = Math.max(spread, feel.reticleSize / 2, CROSSHAIR_PX / 2);
     ui.crosshair.style.width = ui.crosshair.style.height = `${String(radius * 2)}px`;
-    ui.crosshair.style.left = `${String(this.#cross.x)}px`;
-    ui.crosshair.style.top = `${String(this.#cross.y)}px`;
+    ui.crosshair.style.left = `${String(this.#element.clientWidth / 2)}px`;
+    ui.crosshair.style.top = `${String(this.#element.clientHeight / 2)}px`;
     ui.crosshair.dataset.mode = this.#mode;
   }
 
@@ -1425,23 +1598,41 @@ export class Siege3DView implements ScreenView {
   // Camera
 
   /**
-   * Fixed at the vantage point: where it stands, what it looks at, its field of view. A shot
-   * kicks it back and up a moment, hits shake it, and a kill look turns it (from where it stands)
-   * to what came down, zoomed in, and eases back.
+   * At the vantage point, turned as the player has turned it (`#view`): where it stands, what it
+   * looks at, its field of view. After a shot it rides behind the lead spear (the follow shot) and
+   * comes back; a shot kicks it back and up a moment, hits shake it, and a kill look turns it (from
+   * where it is) to what came down, zoomed in, and eases back. One at a time: the follow shot waits
+   * where it is while a kill look runs.
    */
   #updateCamera(dt: number): void {
     const feel = this.#deps.feel.values;
     const vantage = this.#deps.game.data.castle.vantages[this.#vantage];
     if (!vantage) return;
     const at = new THREE.Vector3(...vantage.at);
-    const ahead = new THREE.Vector3(...vantage.look);
+    const toward = new THREE.Vector3(...vantage.look).sub(at);
+    const reach = toward.length() || 1;
+    // Turned from where the vantage point looks: right by the yaw, up by the pitch.
     this.#aimCamera.position.copy(at);
-    this.#aimCamera.lookAt(ahead);
+    this.#aimCamera.rotation.set(
+      Math.atan2(toward.y, Math.hypot(toward.x, toward.z)) + this.#view.pitch * DEG,
+      Math.atan2(-toward.x, -toward.z) - this.#view.yaw * DEG,
+      0,
+      'YXZ',
+    );
     if (this.#aimCamera.fov !== vantage.fov) {
       this.#aimCamera.fov = vantage.fov;
       this.#aimCamera.updateProjectionMatrix();
     }
     this.#aimCamera.updateMatrixWorld();
+    const ahead = this.#aimCamera
+      .getWorldDirection(new THREE.Vector3())
+      .multiplyScalar(reach)
+      .add(at);
+    // The follow shot: over to it fast, and easing back (faster, if it was skipped).
+    this.#updateFollow(dt, at, ahead);
+    const riding = this.#followBlend * this.#followBlend * (3 - 2 * this.#followBlend);
+    const stand = at.clone().lerp(this.#followShot.position, riding);
+    const facing = ahead.clone().lerp(this.#followShot.look, riding);
     // The kill look.
     const look = this.#gaze;
     if (look) {
@@ -1459,10 +1650,11 @@ export class Siege3DView implements ScreenView {
       }
     }
     const share = this.#lookBlend * this.#lookBlend * (3 - 2 * this.#lookBlend);
-    const target = ahead.clone().lerp(this.#lookPoint, share);
-    const fov = vantage.fov * (1 - (1 - feel.killCamZoom) * share);
+    const target = facing.lerp(this.#lookPoint, share);
+    // It zooms in from the vantage point; close behind a spear it's near enough already.
+    const fov = vantage.fov * (1 - (1 - feel.killCamZoom) * share * (1 - riding));
     this.#shake *= Math.exp(-9 * dt);
-    this.#camera.position.copy(at);
+    this.#camera.position.copy(stand);
     if (this.#shake > 0.001) {
       this.#camera.position.add(
         new THREE.Vector3(Math.random() - 0.5, Math.random() - 0.5, 0).multiplyScalar(
@@ -1473,7 +1665,7 @@ export class Siege3DView implements ScreenView {
     // A shot's kick: the view jolts back and up, and settles.
     this.#kick = Math.max(0, this.#kick - dt / Math.max(feel.kickSeconds, 0.01));
     const kick = this.#kick * this.#kick;
-    const forward = target.clone().sub(at).normalize();
+    const forward = target.clone().sub(stand).normalize();
     this.#camera.position.addScaledVector(forward, -feel.kickBack * kick);
     this.#camera.lookAt(target);
     this.#camera.rotateX(feel.kickTilt * DEG * kick);
@@ -1481,6 +1673,67 @@ export class Siege3DView implements ScreenView {
       this.#camera.fov = fov;
       this.#camera.updateProjectionMatrix();
     }
+    this.#camera.updateMatrixWorld();
+  }
+
+  /**
+   * The follow shot: where it would have the camera now (`#followShot`), and how far over to it
+   * the camera has gone. While its spear flies it rides `followBack` behind it and `followRise`
+   * above, looking on past it; once the spear's hit, it stays there and looks at where it struck
+   * for `followHoldSeconds` (longer if a kill look is running), then eases back to the vantage
+   * point (`at`, looking at `ahead`).
+   */
+  #updateFollow(dt: number, at: THREE.Vector3, ahead: THREE.Vector3): void {
+    const feel = this.#deps.feel.values;
+    const follow = this.#follow;
+    const round = this.#round;
+    const shot = this.#followShot;
+    if (!follow || !round) {
+      this.#follow = undefined;
+      this.#followBlend = 0;
+      return;
+    }
+    if (follow.out) {
+      const seconds = Math.max(feel.followReturnSeconds, 0.05) * (follow.skipped ? 0.5 : 1);
+      this.#followBlend -= dt / seconds;
+      if (this.#followBlend <= 0) {
+        this.#followBlend = 0;
+        this.#follow = undefined;
+      }
+      return;
+    }
+    const spear = round.spears[follow.spear];
+    if (!spear) {
+      // Not off the ballista yet (or the shot had no spears): still at the vantage point.
+      shot.position.copy(at);
+      shot.look.copy(ahead);
+      if (this.#now - follow.at >= FOLLOW_MOST_SECONDS) this.#endFollow();
+      return;
+    }
+    round.spearPose(follow.spear, this.#pose);
+    const now = new THREE.Vector3(
+      this.#pose.position.x,
+      this.#pose.position.y,
+      this.#pose.position.z,
+    );
+    if (spear.flying) {
+      // Behind it and a little above, looking on past it along its flight.
+      const travel = follow.last ? now.clone().sub(follow.last) : new THREE.Vector3();
+      const heading =
+        travel.lengthSq() > 1e-8 ? travel.normalize() : ahead.clone().sub(at).normalize();
+      shot.position.copy(now).addScaledVector(heading, -feel.followBack);
+      shot.position.y = Math.max(shot.position.y + feel.followRise, FOLLOW_FLOOR);
+      shot.look.copy(now).addScaledVector(heading, FOLLOW_LOOK);
+      follow.last = now;
+    } else {
+      // It's hit: hold there, looking at where it struck.
+      follow.hitAt ??= this.#now;
+      if (!spear.gone) shot.look.lerp(now, Math.min(1, dt * 6));
+    }
+    this.#followBlend = Math.min(1, this.#followBlend + dt / Math.max(feel.followInSeconds, 0.01));
+    const held = follow.hitAt !== undefined && this.#now - follow.hitAt >= feel.followHoldSeconds;
+    const watching = this.#gaze !== undefined && !this.#gaze.out;
+    if ((held && !watching) || this.#now - follow.at >= FOLLOW_MOST_SECONDS) this.#endFollow();
   }
 
   /** Where a kill look's target is now: a guard's chest, or a point. */
@@ -1501,7 +1754,6 @@ export class Siege3DView implements ScreenView {
       camera.aspect = width / height;
       camera.updateProjectionMatrix();
     }
-    this.#keepCross();
   }
 
   #play(name: string, volume: number, detune = 0): void {
@@ -1510,28 +1762,29 @@ export class Siege3DView implements ScreenView {
 
   // Aim
 
-  /** The crosshair in the middle of the view: on what the vantage point looks at. */
-  #centreCross(): void {
-    this.#cross = { x: this.#element.clientWidth / 2, y: this.#element.clientHeight / 2 };
+  /**
+   * Turns the view by a drag of (`dx`, `dy`) px: what's under the finger moves `aimPerPx` px for
+   * each (so the aim goes the way the finger does), kept within the vantage point's yaw and pitch.
+   */
+  #turnView(dx: number, dy: number): void {
+    const vantage = this.#deps.game.data.castle.vantages[this.#vantage];
+    if (!vantage) return;
+    // Degrees a pixel spans up the view.
+    const perPx =
+      (vantage.fov / Math.max(this.#element.clientHeight, 1)) * this.#deps.feel.values.aimPerPx;
+    const [down, up] = vantage.pitch;
+    this.#view.yaw = Math.min(Math.max(this.#view.yaw + dx * perPx, -vantage.yaw), vantage.yaw);
+    this.#view.pitch = Math.min(Math.max(this.#view.pitch - dy * perPx, down), up);
   }
 
-  /** The crosshair kept `aimEdge` px inside the view. */
-  #keepCross(): void {
-    const edge = this.#deps.feel.values.aimEdge;
-    const { clientWidth: width, clientHeight: height } = this.#element;
-    this.#cross.x = Math.min(Math.max(this.#cross.x, edge), Math.max(width - edge, edge));
-    this.#cross.y = Math.min(Math.max(this.#cross.y, edge), Math.max(height - edge, edge));
-  }
-
-  /** Moves the camera (and the ballista) to vantage point `index`, its crosshair as you left it. */
+  /** Moves the camera (and the ballista) to vantage point `index`, turned as you left it there. */
   #goTo(index: number): void {
     const round = this.#round;
     if (!round || !round.setVantage(index)) return;
-    this.#crossAt.set(this.#vantage, { ...this.#cross });
+    this.#viewAt.set(this.#vantage, { ...this.#view });
     this.#vantage = index;
-    const kept = this.#crossAt.get(index);
-    if (kept) this.#cross = { ...kept };
-    else this.#centreCross();
+    this.#view = { ...(this.#viewAt.get(index) ?? { yaw: 0, pitch: 0 }) };
+    this.#endFollow('vantage');
     this.#endSlow();
     this.#showVantages();
     // What it costs to draw from here.
@@ -1560,23 +1813,24 @@ export class Siege3DView implements ScreenView {
         Math.hypot(event.clientX - touch.x, event.clientY - touch.y) > TAP_PX
       ) {
         touch.dragging = true;
-        // Aiming again ends any kill look.
+        // Aiming again ends any follow shot or kill look.
+        this.#endFollow('drag');
         this.#endSlow();
       }
       if (!touch.dragging) return;
-      // A drag moves the crosshair over the view (the camera stays where it is).
-      const per = this.#deps.feel.values.aimPerPx;
-      this.#cross.x += (event.clientX - touch.last.x) * per;
-      this.#cross.y += (event.clientY - touch.last.y) * per;
-      this.#keepCross();
+      // A drag turns the view under the crosshair (the camera stays where it stands).
+      this.#turnView(event.clientX - touch.last.x, event.clientY - touch.last.y);
       touch.last = { x: event.clientX, y: event.clientY };
     });
     const end = (event: PointerEvent) => {
       const touch = this.#touch;
       if (!touch || touch.id !== event.pointerId) return;
       this.#touch = undefined;
-      // A tap: the kill look ends early.
-      if (!touch.dragging) this.#endSlow();
+      // A tap: the follow shot or the kill look ends early.
+      if (!touch.dragging) {
+        this.#endFollow('tap');
+        this.#endSlow();
+      }
     };
     canvas.addEventListener('pointerup', end);
     canvas.addEventListener('pointercancel', (event) => {
@@ -1588,11 +1842,19 @@ export class Siege3DView implements ScreenView {
   #fire(): void {
     const round = this.#round;
     if (!round) return;
+    this.#endFollow('fire');
     this.#endSlow();
     const rules = this.#deps.game.data.siege;
     const target = this.#crossTarget();
     const aim = solveAim(round.mount(), target, siegeWeapon(rules), rules.physics.gravity);
-    round.throw(this.#mode, aim, target);
+    if (!round.throw(this.#mode, aim, target)) return;
+    // How far the view was turned for it (for tuning each vantage point's range).
+    this.#deps.logger.log('siege.look', {
+      throw: round.throws,
+      vantage: round.vantages[round.vantage]?.id,
+      yaw: round1(this.#view.yaw),
+      pitch: round1(this.#view.pitch),
+    });
   }
 
   /**
@@ -1601,12 +1863,8 @@ export class Siege3DView implements ScreenView {
    */
   #crossTarget(): Vec3 {
     const feel = this.#deps.feel.values;
-    const { clientWidth: width, clientHeight: height } = this.#element;
-    const ndc = new THREE.Vector2(
-      (this.#cross.x / Math.max(width, 1)) * 2 - 1,
-      1 - (this.#cross.y / Math.max(height, 1)) * 2,
-    );
-    this.#raycaster.setFromCamera(ndc, this.#aimCamera);
+    // Through the middle of the vantage point's view.
+    this.#raycaster.setFromCamera(new THREE.Vector2(0, 0), this.#aimCamera);
     const { origin, direction } = this.#raycaster.ray;
     const from = { x: origin.x, y: origin.y, z: origin.z };
     const way = { x: direction.x, y: direction.y, z: direction.z };
@@ -1783,12 +2041,19 @@ export class Siege3DView implements ScreenView {
     const left = this.#deps.game.inventory.count(rules.item);
     this.#element.dataset.thrown = String(round?.used ?? 0);
     this.#element.dataset.done = String(round?.done ?? 0);
-    this.#element.dataset.aim = `${this.#cross.x.toFixed(1)} ${this.#cross.y.toFixed(1)}`;
+    this.#element.dataset.aim = `${this.#view.yaw.toFixed(1)} ${this.#view.pitch.toFixed(1)}`;
     const look = this.#gaze;
-    this.#element.dataset.camera = !look ? 'vantage' : 'guard' in look.target ? 'kill' : 'collapse';
+    this.#element.dataset.camera = look
+      ? 'guard' in look.target
+        ? 'kill'
+        : 'collapse'
+      : this.#follow
+        ? 'follow'
+        : 'vantage';
     if (round && this.#now - this.#targetsAt > TARGETS_SECONDS) {
       this.#targetsAt = this.#now;
       this.#element.dataset.targets = JSON.stringify(this.#targetsOnScreen(round));
+      this.#where = round.plan.objectives.map((_, index) => this.#whereIs(round, index));
     }
     if (!round) {
       // The castle is still being built: no controls yet, and it says so.
@@ -1830,9 +2095,15 @@ export class Siege3DView implements ScreenView {
       const done = progress.done >= progress.needed;
       const count =
         progress.needed > 1 ? ` (${String(progress.done)}/${String(progress.needed)})` : '';
-      return { text: `${done ? '✓' : '○'} ${objectiveText(objective)}${count}`, done };
+      // Out of view from here: which way to turn, or that this spot can't see it.
+      const where = done ? '' : (this.#where[index] ?? '');
+      return {
+        text: `${done ? '✓' : '○'} ${objectiveText(objective)}${count}`,
+        done,
+        where,
+      };
     });
-    const key = items.map((item) => item.text).join('|');
+    const key = items.map((item) => `${item.text}${item.where}`).join('|');
     if (ui.objectives.dataset.key !== key) {
       ui.objectives.dataset.key = key;
       ui.objectives.replaceChildren(
@@ -1840,6 +2111,13 @@ export class Siege3DView implements ScreenView {
           const line = document.createElement('li');
           line.textContent = item.text;
           if (item.done) line.className = 'sg-done';
+          line.dataset.where = item.where;
+          if (item.where) {
+            const note = document.createElement('span');
+            note.className = 'sg-where';
+            note.textContent = WHERE_TEXT[item.where];
+            line.append(note);
+          }
           return line;
         }),
       );
@@ -1849,7 +2127,7 @@ export class Siege3DView implements ScreenView {
       : phase === 'aim' && left < 1 && !round.reloading
         ? 'Out of spears…'
         : phase === 'aim' && round.throws === 0
-          ? 'Drag to aim, then Fire'
+          ? 'Drag to look and aim, then Fire'
           : '';
     if (ui.hint.textContent !== hint) ui.hint.textContent = hint;
     ui.hint.hidden = !ui.card.hidden;
@@ -1857,8 +2135,8 @@ export class Siege3DView implements ScreenView {
 
   /**
    * Where the round's targets are on screen (px in the view, off its edges too, `on` if they're
-   * in it): its guards' and the captain's chests and the spear rack. For the e2e tests and
-   * screenshots to aim at, as a player would by eye.
+   * in it): its guards' and the captain's chests and the spear rack, and each tower's foot (a
+   * landmark, `tower:<id>`). For the e2e tests and screenshots to aim at, as a player would by eye.
    */
   #targetsOnScreen(round: SiegeRound): { kind: string; x: number; y: number; on: boolean }[] {
     const { clientWidth: width, clientHeight: height } = this.#element;
@@ -1886,7 +2164,66 @@ export class Siege3DView implements ScreenView {
       const [x, y, z] = part.body.foot;
       return onScreen('rack', new THREE.Vector3(x, y + 0.6, z));
     });
-    return [...guards, ...rack];
+    const towers = this.#deps.game.data.castle.towers.flatMap((tower) =>
+      onScreen(`tower:${tower.id}`, new THREE.Vector3(tower.at[0], LANDMARK_HEIGHT, tower.at[1])),
+    );
+    return [...guards, ...rack, ...towers];
+  }
+
+  /**
+   * Where objective `index`'s targets are from the vantage point, as it's turned: nothing to say
+   * if one is in view and in sight; which way to turn if one's in sight but off the screen; or
+   * that none can be seen from here (stone in the way: another vantage point, or a breach).
+   */
+  #whereIs(round: SiegeRound, index: number): Where {
+    const objective = round.plan.objectives[index];
+    const progress = round.progress[index];
+    if (!objective || !progress || progress.done >= progress.needed) return '';
+    // Each target's middle and a point higher on it (a parapet hides a guard to the chest).
+    const targets: [THREE.Vector3, THREE.Vector3][] = [];
+    if (objective.kind === 'rack') {
+      round.parts.forEach((part, at) => {
+        if (part.kind !== 'rack' || part.mode === 'broken') return;
+        round.partPose(at, this.#pose);
+        const { x, y, z } = this.#pose.position;
+        const tall = part.body.size[1];
+        targets.push([
+          new THREE.Vector3(x, y + tall / 2, z),
+          new THREE.Vector3(x, y + tall * 0.9, z),
+        ]);
+      });
+    } else {
+      round.guards.forEach((guard, at) => {
+        if (guard.down || guard.objective !== index) return;
+        round.guardPose(at, this.#pose);
+        const { x, y, z } = this.#pose.position;
+        targets.push([
+          new THREE.Vector3(x, y, z),
+          new THREE.Vector3(x, y + guard.size[1] * 0.4, z),
+        ]);
+      });
+    }
+    const eye = this.#aimCamera.position;
+    const from = { x: eye.x, y: eye.y, z: eye.z };
+    const inSight = targets.filter((points) =>
+      points.some((point) => round.sees(from, point, SEEN_SLACK)),
+    );
+    if (inSight.length === 0) return targets.length > 0 ? 'hidden' : '';
+    // In the camera's own frame: -z ahead, x to the right, y up.
+    const half = Math.tan((this.#aimCamera.fov * DEG) / 2);
+    let best: { where: Where; off: number } | undefined;
+    for (const [middle] of inSight) {
+      const local = middle.clone().applyMatrix4(this.#aimCamera.matrixWorldInverse);
+      const ahead = Math.max(-local.z, 1e-6);
+      const across = local.z < 0 ? local.x / (ahead * half * this.#aimCamera.aspect) : Infinity;
+      const up = local.z < 0 ? local.y / (ahead * half) : 0;
+      if (Math.abs(across) < 1 && Math.abs(up) < 1) return '';
+      const sideways = Math.abs(across) >= 1;
+      const where: Where = sideways ? (local.x < 0 ? 'left' : 'right') : up < 0 ? 'down' : 'up';
+      const off = Math.atan2(Math.hypot(local.x, local.y), -local.z);
+      if (!best || off < best.off) best = { where, off };
+    }
+    return best?.where ?? '';
   }
 
   /** The end card: how it ended, the objectives, throws against par, stars, XP and spears back. */

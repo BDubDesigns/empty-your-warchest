@@ -1058,13 +1058,13 @@ const siegeWeaponSchema = z.object({
 /** Feel numbers for the siege. The debug menu can override them live. */
 export const siegeFeelSchema = z.object({
   /**
-   * Aiming: the camera is fixed at the vantage point, and a drag moves the crosshair over the
-   * view, `aimPerPx` pixels for every pixel dragged, kept `aimEdge` pixels inside the view's
-   * edges. Fire aims the shot at whatever is under it (or `aimFallback` metres out, if nothing
-   * is), allowing for the drop: an aimed shot lands its middle spear right there.
+   * Aiming: the camera stays at the vantage point, the crosshair in the middle of the view, and a
+   * drag turns the view (within the vantage point's `yaw` and `pitch`): what's under the finger
+   * moves `aimPerPx` pixels for every pixel dragged (1: the view follows the finger). Fire aims
+   * the shot at whatever is under the crosshair (or `aimFallback` metres out, if nothing is),
+   * allowing for the drop: an aimed shot lands its middle spear right there.
    */
   aimPerPx: positive,
-  aimEdge: nonNegative,
   aimFallback: positive,
   /**
    * The sight on screen: a ring `reticleSize` pixels across with ticks in to the middle (a
@@ -1105,8 +1105,22 @@ export const siegeFeelSchema = z.object({
   kickSeconds: positive,
   /** A Sense potion shows every guard's outline in red through walls for `senseSeconds`. */
   senseSeconds: positive,
-  /** The gold mark over the captain, `markSize` metres tall. */
+  /** The gold mark over each objective's targets, `markSize` metres tall. */
   markSize: positive,
+  /**
+   * The follow shot: after Fire the camera rides behind the shot's lead spear (`followBack` m
+   * behind it, `followRise` above), getting there in `followInSeconds`, with time running at
+   * `followSlowMo` while it flies; it holds `followHoldSeconds` (real seconds) on what the spear
+   * hit, then eases back to the vantage point in `followReturnSeconds`. A kill or a collapse look
+   * takes over from where it is (the camera goes back once that's done). A tap, a drag or the next
+   * shot skips it.
+   */
+  followBack: positive,
+  followRise: nonNegative,
+  followInSeconds: positive,
+  followSlowMo: z.number().min(0.05).max(1),
+  followHoldSeconds: nonNegative,
+  followReturnSeconds: positive,
   /**
    * The kill look: when a shot brings a guard down (the first of the shot), or a big collapse
    * (`collapseParts` parts breaking within `collapseWindowSeconds`), time freezes for
@@ -1212,15 +1226,14 @@ const siegeSchema = z.object({
     topple: nonNegative,
   }),
   /**
-   * The captain: a guard `scale` times as big, tinted `tint` (and glowing `glow` of it, so he
-   * reads far off), with `hp` hit points, standing in
+   * The captain: a guard `scale` times as big, tinted `tint`, with `hp` hit points, standing in
    * one of the keep's captain windows with his middle `inset` m inside its face. Only what shows
-   * of him is hit: his box starts `sill` m above his floor (the window's sill).
+   * of him is hit: his box starts `sill` m above his floor (the window's sill). If his window is
+   * in a storey that comes apart, he goes down with the chunk he stands in.
    */
   captain: z.object({
     scale: positive,
     tint: hexColor,
-    glow: fraction,
     hp: positive,
     sill: nonNegative,
     inset: z.number(),
@@ -1234,6 +1247,8 @@ const siegeSchema = z.object({
     wallChunk: siegePartSchema,
     battlement: siegePartSchema,
     towerChunk: siegePartSchema,
+    gatehouseChunk: siegePartSchema,
+    storeyChunk: siegePartSchema,
     merlon: siegePartSchema,
     gate: siegePartSchema,
     towerRoof: siegePartSchema,
@@ -1244,10 +1259,17 @@ const siegeSchema = z.object({
   /**
    * The castle's bodies: every part's body is `gap` m short of it on each side (so loose chunks
    * slide past their neighbours, never jam), the keep's `keepInset` m inside its walls (so the
-   * captain stands in its windows), and what the castle's data marks solid (and the keep, and the
-   * props) is made of `solid`, and never breaks.
+   * captain stands in its windows), and what the castle's data marks solid (and the keep's lower
+   * storeys, and the props) is made of `solid`, and never breaks. A round tower's row stays up
+   * while at least `towerHold` of the wedges in the row under it still stand where they were
+   * built: with fewer, everything above comes down.
    */
-  bodies: z.object({ gap: nonNegative, keepInset: nonNegative, solid: id }),
+  bodies: z.object({
+    gap: nonNegative,
+    keepInset: nonNegative,
+    solid: id,
+    towerHold: positiveInt,
+  }),
   /** Each round has `count` objectives, picked at random from `pool` (and placed at random). */
   objectives: z.object({ count: positiveInt, pool: z.array(siegeObjectiveSchema).min(1) }),
   /** A guard walks his stretch at `patrolSpeed` m/s, pausing `patrolPause` s at each end. */
@@ -1279,6 +1301,17 @@ const siegeSchema = z.object({
       spread: positive,
       lift: positive,
       fadeHeight: positive,
+    }),
+    /**
+     * A live objective's targets (the captain, the spear rack, the battlement's guards): each
+     * glows `color` (`glow` of it, swelling and fading by `pulse` of that every `pulseSeconds`)
+     * and has a mark in that colour over it. Done, they lose both.
+     */
+    objective: z.object({
+      color: hexColor,
+      glow: fraction,
+      pulse: fraction,
+      pulseSeconds: positive,
     }),
     tiers: z.object({ high: siegeTierLookSchema, low: siegeTierLookSchema }),
   }),
@@ -1752,7 +1785,10 @@ const castleTowerSchema = z.object({
   height: positive,
   top: z.enum(['roof', 'battlements']),
   gate: z.object({ width: positive, height: positive }).optional(),
-  /** Stays whole when the siege breaks things (a round tower comes apart otherwise). */
+  /**
+   * Stays whole when the siege breaks things. Otherwise a round tower comes apart in wedges
+   * (`towerChunks`) and a gatehouse in blocks (`gatehouseChunks`).
+   */
   solid: z.boolean().default(false),
 });
 
@@ -1779,6 +1815,17 @@ const castleBuildingSchema = z.object({
     left: z.array(castleFacade),
     right: z.array(castleFacade),
   }),
+  /**
+   * Its top `storeys` come apart in the siege (the rest never do), each in blocks `across` (x) and
+   * `deep` (z) modules wide: both must add up to its `modules`. The roof rests on the top ones.
+   */
+  chunks: z
+    .object({
+      storeys: positiveInt,
+      across: z.array(positiveInt).min(1),
+      deep: z.array(positiveInt).min(1),
+    })
+    .optional(),
 });
 
 /** A thing from the kit standing in the courtyard (the spear rack, barrels, a wagon). */
@@ -1812,13 +1859,20 @@ const castleWaypointSchema = z.union([
   z.object({ stair: id }),
 ]);
 
-/** A place the player shoots from: the camera there, looking at `look`, `fov` degrees high. */
+/**
+ * A place the player shoots from: the camera there, looking at `look` to start with, `fov`
+ * degrees high. The player turns the view from there: up to `yaw` degrees left or right of
+ * `look`, and from `pitch[0]` degrees under it to `pitch[1]` over it (far enough to see the whole
+ * castle from each).
+ */
 const castleVantageSchema = z.object({
   id,
   name,
   at: castleVec3,
   look: castleVec3,
   fov: z.number().min(20).max(90),
+  yaw: z.number().min(0).max(180),
+  pitch: z.tuple([z.number().min(-80).max(0), z.number().min(0).max(80)]),
 });
 
 /**
@@ -1872,6 +1926,13 @@ export const castleSchema = z.object({
   towers: z.array(castleTowerSchema).min(3),
   /** A round tower that comes apart: in `sectors` wedges round it, `rows` high. */
   towerChunks: z.object({ sectors: z.number().int().min(3), rows: positiveInt }),
+  /**
+   * A gatehouse that comes apart: its two piers (either side of the gate) and the stonework over
+   * the gate, each in blocks `deep` front to back and `rows` high (the bottom row as high as the
+   * gate, the rest sharing what's above it; the stonework over the gate has none in the bottom
+   * row). Its top row carries the parapet, and its merlons stand on that.
+   */
+  gatehouseChunks: z.object({ rows: z.number().int().min(2), deep: positiveInt }),
   walls: z.array(castleWallSchema).min(3),
   /**
    * The kit's wall module (m): a building's walls are this wide, each storey `storey` high, a

@@ -1,20 +1,26 @@
-// Screenshots of the siege at a phone's size (Playwright's Pixel 7): each vantage point on High,
-// the low ground on Low, a Sense potion's outlines, and a collapse as it falls. Prints what each
-// view costs to draw (draw calls, triangles, texture memory).
-// usage: node tools/siege/shots.mjs <the game's URL, e.g. http://localhost:5173/> <out dir>
+// Screenshots of the siege at a phone's size (Playwright's Pixel 7): each vantage point as it
+// starts and turned all the way left and right, the follow shot behind a spear, the spear rack's
+// gold, a Sense potion's outlines, a wrecked wall, a collapsed tower, and the Low tier. Prints
+// what each view costs to draw (draw calls, triangles, texture memory).
+// usage: node tools/siege/shots.mjs <the game's URL, e.g. http://localhost:5173/> <out dir> [parts]
+// `parts`: some of castle,tower,low (all three by default; drawn in software, each takes minutes).
 import { mkdir, readFile } from 'node:fs/promises';
 import { chromium, devices } from '@playwright/test';
 
-const [url, out] = process.argv.slice(2);
+const [url, out, parts] = process.argv.slice(2);
+const want = (part) => !parts || parts.split(',').includes(part);
 if (!url || !out) throw new Error('usage: node tools/siege/shots.mjs <url> <out dir>');
 await mkdir(out, { recursive: true });
 
-// The War tent's spot in the camp, and every skill (all at 0, so the save fits the data).
-const stations = await readFile(new URL('../../src/data/stations.ts', import.meta.url), 'utf8');
-const tent = /id: 'war_tent'[\s\S]*?camp: \{ x: ([\d.]+), y: ([\d.]+) \}/.exec(stations);
+// The War tent's spot in the camp, every skill (all at 0, so the save fits the data), and how far
+// the view turns for a pixel dragged.
+const read = (path) => readFile(new URL(`../../src/data/${path}`, import.meta.url), 'utf8');
+const tent = /id: 'war_tent'[\s\S]*?camp: \{ x: ([\d.]+), y: ([\d.]+) \}/.exec(
+  await read('stations.ts'),
+);
 if (!tent) throw new Error('No war tent in src/data/stations.ts');
-const skillsText = await readFile(new URL('../../src/data/skills.ts', import.meta.url), 'utf8');
-const skills = [...skillsText.matchAll(/id: '([a-z_]+)'/g)].map((match) => match[1]);
+const skills = [...(await read('skills.ts')).matchAll(/id: '([a-z_]+)'/g)].map((match) => match[1]);
+const aimPerPx = Number(/aimPerPx: ([\d.]+)/.exec(await read('siege.ts'))?.[1] ?? 1);
 
 const browser = await chromium.launch({
   args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'],
@@ -59,14 +65,17 @@ async function openTent(tier) {
   return page;
 }
 
+const view = (page) => page.locator('#screen-siege3d');
+
 async function shot(page, name) {
   await page.screenshot({ path: `${out}/${name}.png` });
-  const view = page.locator('#screen-siege3d');
-  const [calls, triangles, textures] = await Promise.all(
-    ['data-draw-calls', 'data-triangles', 'data-texture-mb'].map((key) => view.getAttribute(key)),
+  const [calls, triangles, textures, aim] = await Promise.all(
+    ['data-draw-calls', 'data-triangles', 'data-texture-mb', 'data-aim'].map((key) =>
+      view(page).getAttribute(key),
+    ),
   );
   console.log(
-    `${name}: ${calls} draws · ${Math.round(Number(triangles) / 1000)}k tris · ${textures} MB textures`,
+    `${name}: ${calls} draws · ${Math.round(Number(triangles) / 1000)}k tris · ${textures} MB textures · turned ${aim}`,
   );
 }
 
@@ -75,29 +84,55 @@ async function vantage(page, name) {
   await page.waitForTimeout(1500);
 }
 
-/** Where the round's targets of `kind` are on screen. */
-async function targets(page, kind) {
-  const list = JSON.parse(
-    (await page.locator('#screen-siege3d').getAttribute('data-targets')) ?? '[]',
-  );
-  return list.filter((target) => target.kind === kind && target.on);
+/** The camera back at the vantage point (a tap skips the follow shot or a kill look). */
+async function settle(page, skip = true) {
+  const canvas = await page.locator('#screen-siege3d .sg-canvas').boundingBox();
+  if (skip && (await view(page).getAttribute('data-camera')) !== 'vantage') {
+    await page.mouse.click(canvas.x + canvas.width / 2, canvas.y + canvas.height * 0.4);
+  }
+  await page.locator('#screen-siege3d[data-camera=vantage]').waitFor({ timeout: 60_000 });
 }
 
-/** Drags the crosshair to (x, y) on the view. */
-async function aimAt(page, x, y) {
-  const [cx, cy] = ((await page.locator('#screen-siege3d').getAttribute('data-aim')) ?? '0 0')
-    .split(' ')
-    .map(Number);
+/** Drags the view by (dx, dy) px, in strokes that stay on the canvas. */
+async function drag(page, dx, dy) {
   const box = await page.locator('#screen-siege3d .sg-canvas').boundingBox();
-  const startX = box.x + box.width / 2;
-  const startY = box.y + box.height * 0.45;
-  await page.mouse.move(startX, startY);
-  await page.mouse.down();
-  await page.mouse.move(startX + (x - cx), startY + (y - cy), { steps: 8 });
-  await page.mouse.up();
+  const strokes = Math.max(1, Math.ceil(Math.max(Math.abs(dx) / 280, Math.abs(dy) / 280)));
+  for (let stroke = 0; stroke < strokes; stroke++) {
+    const startX = box.x + box.width / 2 - dx / strokes / 2;
+    const startY = box.y + box.height * 0.45 - dy / strokes / 2;
+    await page.mouse.move(startX, startY);
+    await page.mouse.down();
+    await page.mouse.move(startX + dx / strokes, startY + dy / strokes, { steps: 6 });
+    await page.mouse.up();
+  }
 }
 
-async function fire(page) {
+/** Where the round's targets of `kind` are on screen (off its edges too). */
+async function targets(page, kind) {
+  const list = JSON.parse((await view(page).getAttribute('data-targets')) ?? '[]');
+  return list.filter((target) => target.kind === kind);
+}
+
+/**
+ * Turns the view until the first target of `kind` is under the crosshair (`below` px under it, to
+ * aim lower than the target). Returns false if there's none.
+ */
+async function aimAt(page, kind, below = 0) {
+  const size = page.viewportSize();
+  for (let tries = 0; tries < 8; tries++) {
+    await page.waitForTimeout(400);
+    const [target] = await targets(page, kind);
+    if (!target) return false;
+    const dx = target.x - size.width / 2;
+    const dy = target.y + below - size.height / 2;
+    if (Math.hypot(dx, dy) < 4) return true;
+    await drag(page, dx / aimPerPx, dy / aimPerPx);
+  }
+  return true;
+}
+
+async function fire(page, mode = 'Aimed') {
+  await page.getByRole('radio', { name: new RegExp(mode) }).click();
   const button = page.getByRole('button', { name: 'Fire' });
   await button.waitFor();
   await page.waitForFunction(
@@ -106,38 +141,92 @@ async function fire(page) {
   await button.click();
 }
 
-const high = await openTent('high');
-for (const name of ['Hill', 'Low ground', 'Siege tower']) {
-  await vantage(high, name);
-  await shot(high, `high-${name.toLowerCase().replace(/\W+/g, '-')}`);
-}
-// A Sense potion: every guard's outline in red through the walls.
-await vantage(high, 'Siege tower');
-await high.getByRole('button', { name: /Sense/ }).click();
-await high.waitForTimeout(800);
-await shot(high, 'high-sense');
-// A collapse: two volleys low on the wall under a guard on the battlement, from the hill.
-await vantage(high, 'Hill');
-// Under a guard on the walk if one's in view, else low on the front wall in the middle of the view.
-const [guard] = await targets(high, 'guard');
-const size = high.viewportSize();
-const spot = guard
-  ? { x: guard.x, y: guard.y + 150 }
-  : { x: size.width * 0.5, y: size.height * 0.675 };
-await aimAt(high, spot.x, spot.y);
-await fire(high);
-await high.waitForTimeout(2500);
-await fire(high);
-for (let index = 0; index < 4; index++) {
-  await high.waitForTimeout(350);
-  await shot(high, `high-collapse-${String(index)}`);
-}
-await high.close();
+const slug = (name) => name.toLowerCase().replace(/\W+/g, '-');
 
-const low = await openTent('low');
-await vantage(low, 'Low ground');
-await shot(low, 'low-low-ground');
-await vantage(low, 'Hill');
-await shot(low, 'low-hill');
-await low.close();
+if (want('castle')) {
+  const high = await openTent('high');
+  // Each vantage point as it starts, then turned all the way left and all the way right.
+  for (const name of ['Hill', 'Low ground', 'Siege tower']) {
+    await vantage(high, name);
+    await shot(high, `high-${slug(name)}`);
+    await drag(high, -1400, 0);
+    await high.waitForTimeout(400);
+    await shot(high, `high-${slug(name)}-left`);
+    await drag(high, 2800, 0);
+    await high.waitForTimeout(400);
+    await shot(high, `high-${slug(name)}-right`);
+    await drag(high, -1400, 0);
+  }
+  // The spear rack's gold, from the siege tower (or what its line says, if it can't be seen there).
+  await vantage(high, 'Siege tower');
+  await aimAt(high, 'rack');
+  await shot(high, 'high-rack');
+  // A Sense potion: every guard's outline in red, and the gold marks, through the walls.
+  await high.getByRole('button', { name: /Sense/ }).click();
+  await high.waitForTimeout(800);
+  await shot(high, 'high-sense');
+  // The follow shot: an aimed volley at the captain (or a guard) from the hill, the camera behind
+  // its lead spear.
+  await vantage(high, 'Hill');
+  (await aimAt(high, 'captain')) || (await aimAt(high, 'guard'));
+  await shot(high, 'high-aimed');
+  await fire(high);
+  await high.locator('#screen-siege3d[data-camera=follow]').waitFor({ timeout: 30_000 });
+  for (let index = 0; index < 4; index++) {
+    await high.waitForTimeout(250);
+    await shot(high, `high-follow-${String(index)}`);
+  }
+  await settle(high, false);
+  // A wrecked wall: volleys low on the wall under a guard on the battlement, then a barrage.
+  if (await aimAt(high, 'guard', 85)) {
+    await fire(high);
+    await settle(high);
+    await fire(high);
+    await high.waitForTimeout(600);
+    await shot(high, 'high-wall-falling');
+    await settle(high);
+    await fire(high, 'Barrage');
+    await high.waitForTimeout(5000);
+    await settle(high);
+    await shot(high, 'high-wall-wrecked');
+  }
+  await high.close();
+}
+
+// A collapsed tower: barrages low on the south-west tower from the low ground, on a fresh round.
+if (want('tower')) {
+  const tower = await openTent('high');
+  await vantage(tower, 'Low ground');
+  await aimAt(tower, 'tower:south_west');
+  await shot(tower, 'high-tower-before');
+  for (let volley = 0; volley < 3; volley++) {
+    await fire(tower, 'Barrage');
+    await tower.waitForTimeout(900);
+    await shot(tower, `high-tower-falling-${String(volley)}`);
+    await tower.waitForTimeout(4000);
+    await settle(tower);
+  }
+  await shot(tower, 'high-tower-collapsed');
+  await tower.close();
+}
+
+if (want('low')) {
+  const low = await openTent('low');
+  await vantage(low, 'Low ground');
+  await shot(low, 'low-low-ground');
+  await drag(low, -1400, 0);
+  await low.waitForTimeout(400);
+  await shot(low, 'low-low-ground-left');
+  await vantage(low, 'Hill');
+  await shot(low, 'low-hill');
+  await aimAt(low, 'tower:south_west');
+  await fire(low, 'Barrage');
+  await low.locator('#screen-siege3d[data-camera=follow]').waitFor({ timeout: 30_000 });
+  await low.waitForTimeout(500);
+  await shot(low, 'low-follow');
+  await low.waitForTimeout(5000);
+  await settle(low);
+  await shot(low, 'low-hill-wrecked');
+  await low.close();
+}
 await browser.close();

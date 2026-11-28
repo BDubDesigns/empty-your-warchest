@@ -21,6 +21,7 @@ import {
 } from '../../data';
 import {
   battlement,
+  gatehouseBlock,
   merlon as merlonShape,
   solidTower,
   towerWedge,
@@ -32,10 +33,10 @@ import { archPath, bell, block, slab, stepsShape, tidy, type Skin } from './ston
 // The castle in three.js, built from its layout (src/data/castle.ts through castleLayout.ts): the
 // kit's pieces where the layout puts them, and the stonework the kits don't have (walls, towers,
 // the gatehouse, merlons, stairs) drawn in code in the kits' own materials. What never comes apart
-// (the keep, the gatehouse, the stairs, the props) is merged into one mesh per material. What can
-// (the layout's parts: wall and tower chunks, battlements, merlons, roofs, the gate, the bell) is
-// drawn on its own, the parts of a shape as instances of it, so the siege can hide any one and put
-// a physics body in its place. The scene round it (sky, haze, sun, meadow, road, trees) is the
+// (the keep's lower storeys, the stairs, the props) is merged into one mesh per material. What can
+// (the layout's parts: wall and tower chunks, the gatehouse's and the keep's blocks, battlements,
+// merlons, roofs, the gate, the bell) is drawn on its own, the parts of a shape as instances of
+// it, so the siege can hide any one and put a physics body in its place. The scene round it (sky, haze, sun, meadow, road, trees) is the
 // siege's look. Only looks: the layout says where everything is, and this draws it there.
 
 /** A merged mesh's worth: the shapes in one material. */
@@ -121,11 +122,15 @@ function byMaterial(shape: Shape): Shape {
   });
 }
 
-/** The parts drawn as instances of their shape; the rest (gates, roofs, the bell) on their own. */
+/**
+ * The parts drawn as instances of their shape; the rest (gates, roofs, the bell, a building's
+ * blocks) on their own.
+ */
 const instancedKinds = new Set<CastlePartKind>([
   'wallChunk',
   'battlement',
   'towerChunk',
+  'gatehouseChunk',
   'merlon',
   'towerRoof',
   'slit',
@@ -133,6 +138,8 @@ const instancedKinds = new Set<CastlePartKind>([
   'vine',
 ]);
 const DEG = Math.PI / 180;
+/** How far inside a building's faces its dark inside starts (m): what its windows look into. */
+const INSIDE_INSET = 0.35;
 
 const textureKeys = ['map', 'alphaMap'] as const;
 
@@ -350,6 +357,15 @@ export async function buildCastleScene(
       const sx = tower.size;
       const sz = tower.depth ?? tower.size;
       const tower_ = skinOf('tower');
+      if (tower.gate && !tower.solid) {
+        // A gatehouse that comes apart is all blocks (drawn below, as instances): only the
+        // passage's floor is left.
+        stone(
+          'courtyard',
+          block([tower.gate.width, 0.03, sz * 2], placed([x, 0, z], 0), skinOf('courtyard')),
+        );
+        continue;
+      }
       if (tower.gate) {
         const { width, height } = tower.gate;
         const face = new THREE.Shape();
@@ -465,34 +481,106 @@ export async function buildCastleScene(
   for (const [index, building] of layout.buildings.entries()) {
     const data = castle.buildings[index];
     if (!data) continue;
-    for (const piece of building.pieces) put(piece.node, placed(piece.at, piece.turn));
+    // What never comes apart: its storeys up to `solidHeight` (all of it, without blocks).
+    const solid = building.solidHeight;
+    const whole = solid >= building.height;
+    const blocks = layout.parts.filter(
+      (part) => part.kind === 'storeyChunk' && part.owner === building.id,
+    );
+    for (const piece of building.pieces) {
+      if (piece.storey * castle.storey < solid) put(piece.node, placed(piece.at, piece.turn));
+    }
     const width = building.max[0] - building.min[0];
     const depth = building.max[1] - building.min[1];
     const mid: [number, number] = [
       (building.min[0] + building.max[0]) / 2,
       (building.min[1] + building.max[1]) / 2,
     ];
-    // Dark inside, seen through the open windows.
+    // Dark inside, seen through the open windows (and from above, once its top is gone).
     target.add(
       own.inside,
-      block([width - 0.7, building.height, depth - 0.7], placed([mid[0], 0, mid[1]], 0), {
-        tile: 1,
-      }),
+      block(
+        [width - INSIDE_INSET * 2, solid, depth - INSIDE_INSET * 2],
+        placed([mid[0], 0, mid[1]], 0),
+        { tile: 1 },
+      ),
     );
-    for (const [qx, qz] of [
+    if (!whole) {
+      target.add(
+        own.dark,
+        block([width - 0.1, 0.04, depth - 0.1], placed([mid[0], solid - 0.04, mid[1]], 0), {
+          tile: 1,
+        }),
+      );
+    }
+    const corners = [
       building.min,
       building.max,
       [building.min[0], building.max[1]],
       [building.max[0], building.min[1]],
-    ] as Vec2[]) {
+    ] as Vec2[];
+    for (const [qx, qz] of corners) {
       stone(
         'tower',
         block(
-          [castle.quoin, building.height + 0.12, castle.quoin],
+          [castle.quoin, whole ? solid + 0.12 : solid, castle.quoin],
           placed([qx, 0, qz], 0),
           skinOf('tower'),
         ),
       );
+    }
+    // Its storeys that come apart, block by block: each with its stretch of the walls, the dark
+    // inside it (showing where a neighbour's gone), and its corner's stones.
+    for (const part of blocks) {
+      apart(part.id, () => {
+        const [bx, by, bz] = part.at;
+        const [lengthX, tall, lengthZ] = part.size;
+        const x0 = bx - lengthX / 2;
+        const x1 = bx + lengthX / 2;
+        const z0 = bz - lengthZ / 2;
+        const z1 = bz + lengthZ / 2;
+        const eps = 1e-6;
+        for (const piece of building.pieces) {
+          const [px, pz] = piece.middle;
+          if (Math.abs(piece.storey * castle.storey - by) > eps) continue;
+          if (px < x0 - eps || px > x1 + eps || pz < z0 - eps || pz > z1 + eps) continue;
+          put(piece.node, placed(piece.at, piece.turn));
+        }
+        const inset = (at: number, face: number) => (Math.abs(at - face) < eps ? INSIDE_INSET : 0);
+        const dx0 = x0 + inset(x0, building.min[0]);
+        const dx1 = x1 - inset(x1, building.max[0]);
+        const dz0 = z0 + inset(z0, building.min[1]);
+        const dz1 = z1 - inset(z1, building.max[1]);
+        target.add(
+          own.dark,
+          block([dx1 - dx0, tall, dz1 - dz0], placed([(dx0 + dx1) / 2, by, (dz0 + dz1) / 2], 0), {
+            tile: 1,
+          }),
+        );
+        // Dark over the gap behind its walls too, where it shows: on its top (once the roof's
+        // gone) and on each face it shares with a neighbour (once that's gone).
+        const skin = 0.03;
+        const lid = (size: [number, number, number], at: [number, number, number]) => {
+          target.add(own.dark, block(size, placed(at, 0), { tile: 1 }));
+        };
+        lid([lengthX - skin * 2, skin, lengthZ - skin * 2], [bx, by + tall - skin, bz]);
+        if (dx0 === x0) lid([skin, tall, lengthZ - skin * 2], [x0 + skin / 2, by, bz]);
+        if (dx1 === x1) lid([skin, tall, lengthZ - skin * 2], [x1 - skin / 2, by, bz]);
+        if (dz0 === z0) lid([lengthX - skin * 2, tall, skin], [bx, by, z0 + skin / 2]);
+        if (dz1 === z1) lid([lengthX - skin * 2, tall, skin], [bx, by, z1 - skin / 2]);
+        const last = by + tall >= building.height - eps;
+        for (const [qx, qz] of corners) {
+          if (qx < x0 - eps || qx > x1 + eps || qz < z0 - eps || qz > z1 + eps) continue;
+          stone(
+            'tower',
+            block(
+              [castle.quoin, last ? tall + 0.12 : tall, castle.quoin],
+              placed([qx, by, qz], 0),
+              skinOf('tower'),
+            ),
+          );
+        }
+      });
     }
     // The roof (a part that can come apart), stretched to the walls (and its overhang), its pitch
     // kept across its span.
@@ -655,6 +743,8 @@ export async function buildCastleScene(
         return battlement(castle, stoneSkins, part.size[0]);
       case 'towerChunk':
         return towerWedge(castle, stoneSkins, part);
+      case 'gatehouseChunk':
+        return gatehouseBlock(castle, stoneSkins, part);
       case 'merlon':
         return merlonShape(castle, stoneSkins);
       case 'towerRoof':

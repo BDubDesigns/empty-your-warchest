@@ -1,5 +1,6 @@
 import {
   castleBreakableKinds,
+  gatehouseEdges,
   type Castle,
   type CastleLayout,
   type CastlePart,
@@ -12,8 +13,10 @@ import {
 // what the rules hit is where the castle is drawn. Each part that can come apart is a body of one
 // or more shapes in its own frame (its foot's middle, turned about y), resting on the parts it's
 // built on (a wall's upper chunks on the ones under them, a battlement on its column, a tower's
-// rows on the rows below, its roof on its top row). What never comes apart (the keep, the gatehouse,
-// the stretches of wall inside the towers, the stairs, the props) is one fixed body of shapes.
+// rows on the rows below, its roof on its top row, a gatehouse's blocks on the ones under them and
+// the stonework over its gate between its piers, the keep's roof on its top storey's blocks). What
+// never comes apart (the keep's lower storeys, the stretches of wall inside the towers, the stairs,
+// the props) is one fixed body of shapes.
 
 /** A shape in a body's frame: a box (half its size, its middle), a convex hull, or a cone. */
 export type BodyShape =
@@ -31,8 +34,15 @@ export interface PartBody {
   foot: Vec3;
   turn: number;
   shapes: BodyShape[];
+  /** Its size as the castle lays it out: a box's (along, up, across); a wedge's (radius, height, angle). */
+  size: Vec3;
   /** The parts (by index) it's built on: if one goes, it comes loose. */
   supports: number[];
+  /**
+   * What else holds it up (a round tower's row, by the row under it): it comes loose once fewer
+   * than `atLeast` of `parts` still stand where they were built.
+   */
+  holds: { parts: number[]; atLeast: number } | undefined;
   /**
    * Where a guard can stand on it, in its frame: its top's height, and the footprint (a box's
    * half sizes across x and z, or a wedge's radius and its angles).
@@ -93,6 +103,7 @@ export function castleBodies(
   for (const part of breakable) {
     const shapes: BodyShape[] = [];
     const supports: number[] = [];
+    let holds: PartBody['holds'];
     let top: PartBody['top'];
     const kind = part.kind as SiegePartKind;
     const [length, height, depth] = part.size;
@@ -101,6 +112,9 @@ export function castleBodies(
       if (found !== undefined) supports.push(found);
     };
     const number = Number(part.id.slice(part.id.lastIndexOf('.') + 1));
+    // What the layout says it's built on (a gatehouse's blocks and merlons, a building's blocks
+    // and roof).
+    for (const id of part.on ?? []) below(id);
     switch (part.kind) {
       case 'wallChunk': {
         shapes.push(standing([length - gap * 2, height, depth]));
@@ -187,7 +201,49 @@ export function castleBodies(
             top = { kind: 'wedge', y: walk, radius: inner, from: 0, to: angle };
           }
         }
-        if (row > 0) below(`${part.owner}.towerChunk.${String(number - sectors)}`);
+        if (row > 0) {
+          below(`${part.owner}.towerChunk.${String(number - sectors)}`);
+          // The whole row under it holds it up too: with too few of its wedges left, it comes down.
+          const under = Array.from({ length: sectors }, (_, sector) =>
+            of(`${part.owner}.towerChunk.${String((row - 1) * sectors + sector)}`),
+          ).filter((index): index is number => index !== undefined);
+          holds = { parts: under, atLeast: Math.min(bodies.towerHold, sectors) };
+        }
+        break;
+      }
+      case 'gatehouseChunk': {
+        shapes.push(standing([length - gap * 2, height, depth - gap * 2]));
+        if (part.row !== undefined && part.row === (part.rows ?? 1) - 1) {
+          // The top row carries the parapet, out on the corbels, along each of the gatehouse's
+          // edges the block is on.
+          for (const edge of gatehouseEdges(castle, part)) {
+            shapes.push(
+              standing(
+                edge.alongX
+                  ? [edge.length, w.parapet.height, w.parapet.thickness]
+                  : [w.parapet.thickness, w.parapet.height, edge.length],
+                [edge.at[0], height, edge.at[1]],
+              ),
+            );
+          }
+        }
+        break;
+      }
+      case 'storeyChunk': {
+        // Inset from the building's faces (so the captain stands in its windows), short of its
+        // neighbours by the gap.
+        const building = layout.buildings.find((candidate) => candidate.id === part.owner);
+        if (!building) throw new Error(`No building "${part.owner}"`);
+        const inset = (at: number, face: number) =>
+          Math.abs(at - face) < 1e-6 ? bodies.keepInset : gap;
+        const [x, , z] = part.at;
+        const x0 = x - length / 2 + inset(x - length / 2, building.min[0]);
+        const x1 = x + length / 2 - inset(x + length / 2, building.max[0]);
+        const z0 = z - depth / 2 + inset(z - depth / 2, building.min[1]);
+        const z1 = z + depth / 2 - inset(z + depth / 2, building.max[1]);
+        shapes.push(
+          standing([x1 - x0, height, z1 - z0], [(x0 + x1) / 2 - x, 0, (z0 + z1) / 2 - z]),
+        );
         break;
       }
       case 'merlon':
@@ -205,7 +261,7 @@ export function castleBodies(
           at: [0, 0, 0],
         });
         const tower = castle.towers.find((candidate) => candidate.id === part.owner);
-        if (tower && !tower.solid) {
+        if (tower && !tower.solid && tower.shape === 'round') {
           const sectors = castle.towerChunks.sectors;
           const rows = castle.towerChunks.rows;
           for (let sector = 0; sector < sectors; sector++) {
@@ -251,8 +307,10 @@ export function castleBodies(
       owner: part.owner,
       foot: part.at,
       turn: part.turn,
+      size: part.size,
       shapes,
       supports,
+      holds,
       top,
     });
   }
@@ -269,8 +327,10 @@ export function castleBodies(
       owner: rack,
       foot: spot.at,
       turn: spot.turn,
+      size: [...box.size],
       shapes: [{ kind: 'box', half: halves(box.size), at: box.middle, turn: 0 }],
       supports: [],
+      holds: undefined,
       top: undefined,
     });
   }
@@ -338,6 +398,8 @@ function solidShapes(castle: Castle, layout: CastleLayout, bodies: Siege['bodies
     }
     const sx = tower.size;
     const sz = tower.depth ?? tower.size;
+    // A gatehouse that comes apart is all parts.
+    if (!tower.solid && tower.gate) continue;
     if (tower.gate) {
       // Either side of the gate, and over it.
       const { width, height } = tower.gate;
@@ -373,9 +435,10 @@ function solidShapes(castle: Castle, layout: CastleLayout, bodies: Siege['bodies
     const inset = bodies.keepInset;
     const width = building.max[0] - building.min[0] - inset * 2;
     const depth = building.max[1] - building.min[1] - inset * 2;
+    if (building.solidHeight <= 0) continue;
     shapes.push(
       worldBox(
-        [width, building.height, depth],
+        [width, building.solidHeight, depth],
         [(building.min[0] + building.max[0]) / 2, 0, (building.min[1] + building.max[1]) / 2],
         0,
       ),
@@ -443,6 +506,20 @@ export function standsOn(part: PartBody, point: Vec3, reach: number): boolean {
   const angle = (Math.atan2(local[0], local[2]) + Math.PI * 2) % (Math.PI * 2);
   const slack = radius > 0 ? reach / radius : Math.PI;
   return angle >= top.from - slack && angle <= top.to + slack;
+}
+
+/** Whether `point` (in the world) is within `part`'s own box as laid out (`reach` m past it too). */
+export function within(part: PartBody, point: Vec3, reach = 0): boolean {
+  const local = turnY(
+    [point[0] - part.foot[0], point[1] - part.foot[1], point[2] - part.foot[2]],
+    -part.turn,
+  );
+  return (
+    Math.abs(local[0]) <= part.size[0] / 2 + reach &&
+    local[1] >= -reach &&
+    local[1] <= part.size[1] + reach &&
+    Math.abs(local[2]) <= part.size[2] / 2 + reach
+  );
 }
 
 /** The parts of `layout` drawn fixed to a part that comes apart (slits, doorways, ivy). */

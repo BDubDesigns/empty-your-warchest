@@ -34,12 +34,13 @@ export const castle = {
       height: 10,
       top: 'battlements',
       gate: { width: 3.4, height: 4.6 },
-      // The gatehouse's stonework stays whole: a fixed point the siege can't knock down.
-      solid: true,
     },
     { id: 'south_west', shape: 'round', at: [-18, 16], size: 3.5, height: 10, top: 'battlements' },
   ],
   towerChunks: { sectors: 6, rows: 3 },
+  // The gatehouse: each pier and the stonework over the gate in a front and a back block, three
+  // rows high (16 blocks).
+  gatehouseChunks: { rows: 3, deep: 2 },
   walls: [
     { id: 'north', from: 'north_west', to: 'north_east' },
     { id: 'east', from: 'north_east', to: 'south_east' },
@@ -90,6 +91,9 @@ export const castle = {
         left: ['-tt-', 't--t', '-ww-'],
         right: ['-tt-', 't--t', '-ww-'],
       },
+      // Its top storey comes apart in six blocks (and its roof with them); the two under it stay
+      // whole for now.
+      chunks: { storeys: 1, across: [2, 1, 2], deep: [2, 2] },
     },
   ],
   pieces: {
@@ -174,9 +178,35 @@ export const castle = {
     ],
   },
   vantages: [
-    { id: 'hill', name: 'Hill', at: [-28, 24, 54], look: [0, 2, -3], fov: 50 },
-    { id: 'low', name: 'Low ground', at: [9, 1.7, 40], look: [-2, 5, 8], fov: 55 },
-    { id: 'tower', name: 'Siege tower', at: [40, 24, 8], look: [0, 1, -4], fov: 50 },
+    // Each turns 60° either way, and far enough down and up to take in the castle's foot and its
+    // roofs from where it stands (a phone's view is only about 25° wide).
+    {
+      id: 'hill',
+      name: 'Hill',
+      at: [-28, 24, 54],
+      look: [0, 2, -3],
+      fov: 50,
+      yaw: 60,
+      pitch: [-25, 20],
+    },
+    {
+      id: 'low',
+      name: 'Low ground',
+      at: [9, 1.7, 40],
+      look: [-2, 5, 8],
+      fov: 55,
+      yaw: 60,
+      pitch: [-12, 30],
+    },
+    {
+      id: 'tower',
+      name: 'Siege tower',
+      at: [40, 24, 8],
+      look: [0, 1, -4],
+      fov: 50,
+      yaw: 60,
+      pitch: [-25, 20],
+    },
   ],
   skins: {
     wall: { material: 'MI_Brick', tile: 3 },
