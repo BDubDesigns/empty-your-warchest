@@ -104,13 +104,18 @@ export const archery = {
   // Birds drop 2–4 feathers (the Archery page's pick, Nov 27).
   feathers: { item: 'feather', count: { min: 2, max: 4 } },
   // The near miss (Brandon's joke): one seed, and the bird flaps off half as fast again.
-  scare: { seeds: 1, speedUp: 1.5 },
+  // Scared again and again (Brandon, Nov 28), a seed and a point each time, at most every 0.3 s a
+  // bird; each scare speeds it up half as much again, to at most 2.5 times its own speed.
+  scare: { seeds: 1, speedUp: 1.5, cooldown: 0.3, maxSpeedUp: 2.5 },
   // Fletched flies true and far; bare wobbles, drifts and drops sooner (Brandon likes that): at a
   // full draw straight up a fletched arrow tops out past the field, a bare one about crow height.
+  // Nov 28 (Brandon wanted more oomph): fletched 30% faster against stronger gravity, so it tops
+  // out as high (about 42) but gets there quicker and flatter; bare retuned to stay clearly weaker
+  // (tops out about 27, 0.58 s to 20 up against 0.43 s).
   arrows: [
     {
       item: 'fletched_arrow',
-      speed: 42,
+      speed: 55,
       drag: 0.04,
       drift: 0,
       wobble: 0,
@@ -120,10 +125,10 @@ export const archery = {
     },
     {
       item: 'bare_arrow',
-      speed: 38,
-      drag: 0.2,
-      drift: 3,
-      wobble: 10,
+      speed: 48,
+      drag: 0.26,
+      drift: 3.5,
+      wobble: 12,
       wobbleHz: 2.2,
       fishtail: 10,
       breakChance: 0.2,
@@ -154,20 +159,31 @@ export const archery = {
     },
   },
   feel: {
-    gravity: 20,
+    gravity: 34,
     arrowSpeed: 1,
     birdSpeed: 1,
     hitRadius: 1,
-    // The graze ring: just outside the hit radius (it was a flat 2.6, six times a hit's area).
-    graze: 0.6,
+    // Scared from about a bird's width away (Brandon, Nov 28): a finch's hit is within 0.9, its
+    // scare out to 2.7. A 0.6 ring was too thin to aim for.
+    graze: 1.8,
     fullDrawPx: 150,
     minDraw: 0.15,
-    previewSeconds: 0.3,
+    // Shorter, as the arrows are faster: about as far along the path as before.
+    previewSeconds: 0.24,
     hitStopMs: 70,
     shakeStrength: 1,
     buzzDrawMs: 6,
     buzzReleaseMs: 18,
     buzzHitMs: 35,
     buzzPoopMs: 20,
+    // The release: the string snaps a quarter of a full draw past rest and rings out, the view
+    // kicks up a touch, a streak follows each arrow, and a whoosh.
+    snapOvershoot: 0.25,
+    snapSeconds: 0.18,
+    kickDegrees: 0.7,
+    kickSeconds: 0.16,
+    trailSeconds: 0.12,
+    trailWidth: 0.22,
+    whooshVolume: 0.5,
   },
 } satisfies GameDataInput['archery'];
