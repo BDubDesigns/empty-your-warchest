@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { releaseContext, restoreContext } from '../../../app/trouble';
 import { groundMesh, wornGround } from '../../../app/ground';
 import type { Haptics } from '../../../app/haptics';
+import { itemText } from '../../../app/itemText';
 import type { ScreenView } from '../../../app/screen';
 import { Sfx, type SoundLoop } from '../../../app/sfx';
 import { SkillBar, type XpDeposit } from '../../../app/skillBar';
@@ -303,6 +304,19 @@ export class Firemaking3DView implements ScreenView {
     this.#renderer.setAnimationLoop((time) => {
       this.#loop(time);
     });
+  }
+
+  /** Back to camp with the rack on the fire loses the rack, and the fuel is already burned. */
+  leaveCost(): string | undefined {
+    const round = this.#round;
+    if (round?.phase.kind !== 'cook') return undefined;
+    const { game } = this.#deps;
+    const fuel = round.logsPlaced;
+    const burned =
+      fuel > 0
+        ? `, and the ${itemText(game.data, game.data.firemaking.fuel, fuel)} you laid are burned`
+        : '';
+    return `The rack on the fire is lost${burned}.`;
   }
 
   stop(): void {

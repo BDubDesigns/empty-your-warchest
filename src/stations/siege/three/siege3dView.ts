@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { BlobShadows, blobTexture } from '../../../app/blobShadows';
 import { gpuOf } from '../../../app/deviceHints';
 import type { Haptics } from '../../../app/haptics';
+import { countOf } from '../../../app/leaveGuard';
 import { loadModel } from '../../../app/models';
 import { capturePointer } from '../../../app/pointer';
 import type { ScreenView } from '../../../app/screen';
@@ -517,6 +518,13 @@ export class Siege3DView implements ScreenView {
     // Built for another tier (the phone was moved to Low as it played): build it again first.
     if (this.#deps.graphics.tier !== this.#castleTier) this.#rebuild(this.#deps.graphics.tier);
     else this.#startRound();
+  }
+
+  /** Back to camp mid-siege loses the thrown spears (Withdraw is the way to keep what's done). */
+  leaveCost(): string | undefined {
+    const round = this.#round;
+    if (!round || round.phase === 'done' || round.used === 0) return undefined;
+    return `The ${countOf(round.used, 'spear')} you've thrown ${round.used === 1 ? 'is' : 'are'} lost.`;
   }
 
   stop(): void {
