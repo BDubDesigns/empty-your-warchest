@@ -1,9 +1,10 @@
 import { expect, test } from '@playwright/test';
+import { characters } from '../src/data/characters';
 
-// Debug → Character preview loads the guard and the captain and draws them, plays a clip, shows
-// the crowd, and closes back to the camp. CI draws 3D in software, which the graphics tier reads
+// Debug → Character preview loads the guards and the captain and draws them, plays a clip, cycles
+// the guards' looks, shows the crowd, and closes back to the camp. CI draws 3D in software, which the graphics tier reads
 // as a low-end phone, so this is the Low build: the lighter one.
-test('the character preview opens from Debug, plays a clip, shows a crowd and closes', async ({
+test('the character preview opens from Debug, plays a clip, cycles looks, shows a crowd and closes', async ({
   page,
 }) => {
   test.setTimeout(120_000);
@@ -30,6 +31,19 @@ test('the character preview opens from Debug, plays a clip, shows a crowd and cl
   await expect(clips.getByRole('button', { name: 'Walk' })).toHaveAttribute('aria-pressed', 'true');
   await clips.getByRole('button', { name: 'Die' }).tap();
   await expect(preview).toHaveAttribute('data-clip', 'die');
+
+  // Look shows each of the guards' looks in turn beside the captain, and round to the first.
+  const look = preview.getByRole('button', { name: /^Look / });
+  await expect(preview).toHaveAttribute('data-look', characters.guards[0] ?? '');
+  for (const [index, id] of [...characters.guards.slice(1), characters.guards[0]].entries()) {
+    await look.tap();
+    await expect(preview).toHaveAttribute('data-look', id ?? '');
+    const name = characters.models.find((model) => model.id === id)?.name ?? '';
+    await expect(look).toContainText(name);
+    if (index === 0) {
+      await expect(preview.getByRole('status')).toContainText(name, { timeout: 30_000 });
+    }
+  }
 
   // The crowd: a dozen guards, each a draw of its own.
   const before = Number(await preview.getAttribute('data-draw-calls'));

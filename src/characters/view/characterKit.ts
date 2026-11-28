@@ -44,6 +44,17 @@ function lambert(
   return material;
 }
 
+/** The files `loadCharacterKit` fetches on `tier` (to warm the browser's cache ahead of it). */
+export function characterFiles(characters: Characters, tier: GraphicsTier): string[] {
+  const sizes = characters.tiers[tier].textureSizes;
+  const maps = new Set(characters.models.flatMap((model) => model.maps));
+  return [
+    characters.clipFile,
+    ...characters.models.map((model) => model.files[tier]),
+    ...[...maps].map((map) => `models/characters/tex-${String(sizes[map] ?? 1024)}/${map}.jpg`),
+  ];
+}
+
 /**
  * Loads the characters for `tier`: each one's GLB (its colour maps from the size folder the tier
  * gives them) and the clips. Throws if a clip the data names isn't in the clips GLB.

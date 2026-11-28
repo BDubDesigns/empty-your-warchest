@@ -72,15 +72,22 @@ export const charactersSchema = z
     /** Seconds a clip blends into the next. */
     fadeSeconds: positive,
     models: z.array(characterSchema).min(1),
+    /** The guards' looks (models): the siege picks one for each guard from its round's seed. */
+    guards: z.array(id).min(1),
+    /**
+     * Every character's body (m) in the idle clip, without what only decorates it: across, up (its
+     * height) and deep. Each model is drawn to fit its box by this height; the box must hold it.
+     */
+    body: z.tuple([positive, positive, positive]),
     tiers: z.object({ high: tierSchema, low: tierSchema }),
     /** The most bones a character's skeleton may have (checked against the shipped GLBs). */
     maxBones: positiveInt,
     /**
-     * Debug → Character preview: the characters `spacing` m apart on a ground `ground` m across,
-     * an orbit camera (dragged `dragDegrees` a screen width, zoomed `zoomStep` a wheel notch or
-     * pinched); and the crowd: `count` copies of `model` in rows of `columns`, `spacing` m apart,
-     * playing `clips` in turn, seen from `distance` m and `pitch` degrees up. The frame time is the median of the last
-     * `frames` frames.
+     * Debug → Character preview: a guard's look (Look cycles them) and the captain, `spacing` m
+     * apart on a ground `ground` m across, an orbit camera (dragged `dragDegrees` a screen width,
+     * zoomed `zoomStep` a wheel notch or pinched); and the crowd: `count` guards wearing the guards'
+     * looks in turn, in rows of `columns`, `spacing` m apart, playing `clips` in turn, seen from
+     * `distance` m and `pitch` degrees up. The frame time is the median of the last `frames` frames.
      */
     preview: z.object({
       spacing: positive,
@@ -90,7 +97,6 @@ export const charactersSchema = z
       dragDegrees: positive,
       zoomStep: positive,
       crowd: z.object({
-        model: id,
         count: positiveInt,
         columns: positiveInt,
         spacing: positive,
@@ -151,10 +157,13 @@ export const charactersSchema = z
         if (!maps.has(map)) issue(['tiers', tier, 'textureSizes', map], `Unknown map "${map}"`);
       }
     }
+    const guards = new Set<string>();
+    data.guards.forEach((guard, index) => {
+      if (!modelIds.has(guard)) issue(['guards', index], `Unknown model "${guard}"`);
+      if (guards.has(guard)) issue(['guards', index], `Duplicate look "${guard}"`);
+      guards.add(guard);
+    });
     const { crowd, orbit } = data.preview;
-    if (!modelIds.has(crowd.model)) {
-      issue(['preview', 'crowd', 'model'], `Unknown model "${crowd.model}"`);
-    }
     crowd.clips.forEach((clip, index) => {
       if (!clipIds.has(clip)) issue(['preview', 'crowd', 'clips', index], `Unknown clip "${clip}"`);
     });
