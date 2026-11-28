@@ -462,10 +462,10 @@ export class Fletching3DView implements ScreenView {
     const top = new THREE.Vector3(0, 0, 1).applyQuaternion(this.#pose.quaternion);
     // Over the index wheel's twelve o'clock, at the back end.
     const radius = this.#rules.looks.shaftRadius;
-    const back = new THREE.Vector3(0, -radius * 0.5, 0)
+    const back = new THREE.Vector3(0, -radius * 1.2, 0)
       .applyQuaternion(this.#pose.quaternion)
       .add(this.#pose.position);
-    pointer.position.copy(back).addScaledVector(top, radius * 3.7);
+    pointer.position.copy(back).addScaledVector(top, radius * 2.9);
     pointer.quaternion
       .copy(this.#pose.quaternion)
       .multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 2));
