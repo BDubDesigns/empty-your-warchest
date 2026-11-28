@@ -148,7 +148,7 @@ export const woodcuttingTunables: readonly Tunable[] = [
   },
   {
     key: 'fellRestFallSeconds',
-    label: 'Fell the rest: fall time (s)',
+    label: 'Fell the rest: each tree topples in (s)',
     min: 0.2,
     max: 2,
     step: 0.05,
