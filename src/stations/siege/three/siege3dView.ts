@@ -2378,7 +2378,7 @@ export class Siege3DView implements ScreenView {
   #hidingNote(round: SiegeRound, objective: number): string {
     const standing = round.guards.filter((guard) => !guard.down && guard.objective === objective);
     const captain = standing.find((guard) => guard.role === 'captain');
-    if (captain) return captain.mood === 'inside' ? ' · hiding in the keep' : '';
+    if (captain) return captain.mood === 'inside' ? ' · hiding' : '';
     const hiding = standing.filter((guard) => guard.mood === 'hide').length;
     return hiding > 0 ? ` · ${String(hiding)} hiding` : '';
   }
