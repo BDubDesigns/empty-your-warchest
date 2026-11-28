@@ -43,6 +43,33 @@ export class Sfx {
   }
 
   /**
+   * A whoosh, made rather than loaded: a burst of noise through a band-pass filter sweeping down
+   * from `from` to `to` Hz over `seconds` (an arrow leaving the bow, a swing).
+   */
+  whoosh(volume: number, seconds = 0.3, from = 2400, to = 500): void {
+    const context = this.#context;
+    if (!context || volume <= 0) return;
+    const length = Math.max(Math.round(context.sampleRate * seconds), 1);
+    const noise = context.createBuffer(1, length, context.sampleRate);
+    const samples = noise.getChannelData(0);
+    for (let index = 0; index < length; index++) samples[index] = Math.random() * 2 - 1;
+    const source = context.createBufferSource();
+    source.buffer = noise;
+    const band = context.createBiquadFilter();
+    band.type = 'bandpass';
+    band.Q.value = 1.2;
+    const now = context.currentTime;
+    band.frequency.setValueAtTime(from, now);
+    band.frequency.exponentialRampToValueAtTime(to, now + seconds);
+    const gain = context.createGain();
+    gain.gain.setValueAtTime(0, now);
+    gain.gain.linearRampToValueAtTime(volume, now + seconds * 0.15);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + seconds);
+    source.connect(band).connect(gain).connect(context.destination);
+    source.start();
+  }
+
+  /**
    * A clip that plays on a loop (e.g. a fire's crackle), silent until its volume is set above 0.
    * It starts once the clip is ready, so set the volume every frame. `trim` seconds are skipped at
    * each end of the clip (mp3 pads both ends, which would click at the seam).
