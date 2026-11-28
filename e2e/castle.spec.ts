@@ -6,7 +6,8 @@ import { expect, test } from '@playwright/test';
 test('the castle preview opens from Debug, flies to a vantage point and closes', async ({
   page,
 }) => {
-  test.setTimeout(120_000);
+  // Slow CI runners draw two castles at once in software (this, and the siege in another test).
+  test.setTimeout(180_000);
   const errors: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));
   await page.goto('/');

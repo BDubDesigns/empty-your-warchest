@@ -37,7 +37,6 @@ import { checkMechanics } from '../stations';
 import { archeryFeel } from '../stations/archery/feel';
 import { brewingFeel } from '../stations/brewing/feel';
 import { checkBrews } from '../stations/brewing/logic/brew';
-import { checkForts } from '../stations/siege/logic/fairness';
 import { firemakingFeel } from '../stations/firemaking/feel';
 import { fletchingFeel } from '../stations/fletching/feel';
 import {
@@ -109,8 +108,6 @@ async function openSink(): Promise<{ sink: EventSink; fallback?: string }> {
 export async function bootGame(buildLabel: string): Promise<Booted> {
   const data = loadGameData();
   checkMechanics(data);
-  // Every siege fort must be fair (walls block, the banner's out of reach until the end).
-  checkForts(data);
   // Every brew must have a 3-star answer within the fill, wherever its target lands.
   checkBrews(data);
   const clock = systemClock;

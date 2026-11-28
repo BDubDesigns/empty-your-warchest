@@ -128,21 +128,15 @@ export function forageChain(
   rules: WoodcuttingForage,
   paid: Set<string>,
 ): ChainForage {
-  const found: ChainForage = { trees: [], boulders: [], patches: [], drops: [] };
+  const found = forageTrees(
+    chain.steps.map((step) => step.tree),
+    forage,
+    rules,
+    paid,
+  );
   const add = (item: string, count: number) => {
-    if (count <= 0) return;
-    const stack = found.drops.find((entry) => entry.item === item);
-    if (stack) stack.count += count;
-    else found.drops.push({ item, count });
+    addDrops(found.drops, [{ item, count }]);
   };
-  for (const step of chain.steps) {
-    const drop = forage.trees.get(step.tree);
-    if (!drop || paid.has(`tree:${step.tree}`)) continue;
-    paid.add(`tree:${step.tree}`);
-    found.trees.push(step.tree);
-    add(rules.mossyTrees.item, drop.moss);
-    add(rules.mushroomTrees.item, drop.mushrooms);
-  }
   for (const roll of chain.rolls) {
     const moss = forage.boulders.get(roll.boulder);
     if (moss === undefined || paid.has(`boulder:${roll.boulder}`)) continue;
@@ -167,9 +161,34 @@ export function forageChain(
   return found;
 }
 
-/** Adds `stacks` into `into`, item by item. */
+/**
+ * What felling `trees` forages from the trees themselves (moss on the trunk, mushrooms at the
+ * foot), each paying once a round (`paid`, as in forageChain). No boulders or patches.
+ */
+export function forageTrees(
+  trees: readonly string[],
+  forage: Forage,
+  rules: WoodcuttingForage,
+  paid: Set<string>,
+): ChainForage {
+  const found: ChainForage = { trees: [], boulders: [], patches: [], drops: [] };
+  for (const tree of trees) {
+    const drop = forage.trees.get(tree);
+    if (!drop || paid.has(`tree:${tree}`)) continue;
+    paid.add(`tree:${tree}`);
+    found.trees.push(tree);
+    addDrops(found.drops, [
+      { item: rules.mossyTrees.item, count: drop.moss },
+      { item: rules.mushroomTrees.item, count: drop.mushrooms },
+    ]);
+  }
+  return found;
+}
+
+/** Adds `stacks` into `into`, item by item (empty stacks are skipped). */
 export function addDrops(into: Stack[], stacks: readonly Stack[]): void {
   for (const stack of stacks) {
+    if (stack.count <= 0) continue;
     const found = into.find((entry) => entry.item === stack.item);
     if (found) found.count += stack.count;
     else into.push({ ...stack });

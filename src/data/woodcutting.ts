@@ -71,6 +71,9 @@ export const woodcutting = {
     { level: 40, text: 'Denser clearings: up to 22 trees', trees: { min: 18, max: 22 } },
   ],
   fastFall: { fallSeconds: 0.9, chainDelay: 0.12 },
+  // Fell the rest (Brandon, Nov 28): at 3 stars, knock down what's left for 1 log a tree and end
+  // the round, so the leftover singles needn't be chopped one by one.
+  fellRest: { minStars: 3, logsPerTree: 1, angleTries: 16 },
   // Outside the fence: grass thick by the fence and thinning out, undergrowth, a wall of forest
   // (held back on the camera's side), and the woodcutter's track, woodpile and chopping block.
   // Foraging for brewing (M9, Brandon): 1 tree in 3 mossy (1–2 moss), 1 in 10 with mushrooms
@@ -191,5 +194,10 @@ export const woodcutting = {
     crashSettleSeconds: 2.6,
     buzzCrashMs: 70,
     buzzCrashPulses: 5,
+    // Fell the rest: a quick ripple out from the middle, a tree every 0.07 s (all of them
+    // started within 0.8 s), each down in 0.55 s (a chopped tree takes 1.5).
+    fellRestGap: 0.07,
+    fellRestSpread: 0.8,
+    fellRestFallSeconds: 0.55,
   },
 } satisfies GameDataInput['woodcutting'];

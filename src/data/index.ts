@@ -27,7 +27,6 @@ import { parseGameData } from './validate';
 
 export * from './schema';
 export { GameDataError, parseGameData } from './validate';
-export * from './siegePieces';
 export * from './castleLayout';
 
 export const rawGameData: GameDataInput = {

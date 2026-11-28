@@ -15,11 +15,13 @@ export interface LiveBird {
   vy: number;
   /** Seconds since it came in. */
   age: number;
-  /** Field units a second, now (a scared bird flies faster). */
+  /** Field units a second, now (a scared bird flies faster), and before any scare. */
   speed: number;
+  baseSpeed: number;
   /** Its hit radius (the data's, times the feel's). */
   radius: number;
-  /** Round time it was scared (it poops once), and shot down. */
+  /** How many times it's been scared, the round time it last was, and when it was shot down. */
+  scares: number;
   scaredAt: number | undefined;
   downAt: number | undefined;
 }
@@ -42,8 +44,11 @@ export interface ShotArrow {
   /** Birds it grazed (and so scared) on the way past, and how far outside each one's hit radius. */
   scared: LiveBird[];
   grazes: number[];
-  /** The nearest it has come to each bird so far, by the bird's number. */
-  readonly passing: Map<number, number>;
+  /**
+   * How it's passing each bird, by the bird's number: its distance last step, whether it's coming
+   * closer, and the nearest it's come on this pass.
+   */
+  readonly passing: Map<number, { last: number; closing: boolean; nearest: number }>;
 }
 
 export type ArcheryEndReason = 'time' | 'cleared' | 'empty';
@@ -146,7 +151,9 @@ export class ArcheryRound {
       vy: 0,
       age: 0,
       speed: plan.speed * this.feel.birdSpeed,
+      baseSpeed: plan.speed * this.feel.birdSpeed,
       radius: plan.bird.radius * this.feel.hitRadius,
+      scares: 0,
       scaredAt: undefined,
       downAt: undefined,
     }));
@@ -315,13 +322,26 @@ export class ArcheryRound {
         hit = bird;
         nearest = distance;
       }
-      // A graze: it passed through the thin ring just outside the bird's hit radius, and is now
-      // going away from it.
-      const passing = arrow.passing.get(bird.plan.index) ?? Infinity;
-      if (distance < passing) arrow.passing.set(bird.plan.index, distance);
-      else if (passing <= bird.radius + this.feel.graze && bird.scaredAt === undefined) {
-        this.#scare(arrow, bird, passing - bird.radius);
+      // A graze: it came within `graze` of the bird's hit radius and is now going away from it.
+      // Every pass counts (up past a bird and back down past it again is two), but a bird is
+      // only scared once per cooldown.
+      let passing = arrow.passing.get(bird.plan.index);
+      if (!passing) {
+        passing = { last: Infinity, closing: false, nearest: Infinity };
+        arrow.passing.set(bird.plan.index, passing);
       }
+      if (distance < passing.last) {
+        passing.closing = true;
+        passing.nearest = distance;
+      } else if (passing.closing) {
+        passing.closing = false;
+        const calm =
+          bird.scaredAt === undefined || this.now - bird.scaredAt >= this.rules.scare.cooldown;
+        if (passing.nearest <= bird.radius + this.feel.graze && calm) {
+          this.#scare(arrow, bird, passing.nearest - bird.radius);
+        }
+      }
+      passing.last = distance;
     }
     if (hit) {
       this.#hit(arrow, hit);
@@ -370,7 +390,9 @@ export class ArcheryRound {
   #scare(arrow: ShotArrow, bird: LiveBird, graze: number): void {
     const species = bird.plan.bird;
     bird.scaredAt = this.now;
-    bird.speed *= this.rules.scare.speedUp;
+    bird.scares += 1;
+    const { speedUp, maxSpeedUp } = this.rules.scare;
+    bird.speed = Math.min(bird.speed * speedUp, bird.baseSpeed * maxSpeedUp);
     arrow.scared.push(bird);
     arrow.grazes.push(graze);
     const drops: Stack[] = [{ item: species.seed, count: this.rules.scare.seeds }];

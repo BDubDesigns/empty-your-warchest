@@ -84,6 +84,8 @@ export interface CastleScene {
   layout: CastleLayout;
   /** How each of the layout's parts is drawn, by its id. */
   parts: Map<string, CastlePartLook>;
+  /** Each spear rack the siege may use, drawn on its own (by its prop id), so it can hide it. */
+  racks: Map<string, THREE.Object3D>;
   /** The castle's merged meshes (not the ground or trees). */
   castle: THREE.Group;
   /**
@@ -601,10 +603,22 @@ export async function buildCastleScene(
     target.add(own.bell, hanging);
   });
 
-  // Props and dressing, and the ivy.
+  // Props and dressing, and the ivy. The spear racks are each their own group: a siege keeps one
+  // and breaks it.
+  const racks = new Map<string, THREE.Object3D>();
   for (const prop of castle.props) {
+    const rack = castle.anchors.spearRacks.includes(prop.id);
+    const saved = target;
+    if (rack) target = new Batch();
     for (const piece of castle.pieces[prop.piece] ?? []) {
       putPiece(piece, [prop.at[0], 0, prop.at[1]], prop.turn * DEG);
+    }
+    if (rack) {
+      const group = target.build();
+      group.name = prop.id;
+      partGroups.add(group);
+      racks.set(prop.id, group);
+      target = saved;
     }
   }
   for (const dressing of castle.dressing) {
@@ -825,6 +839,7 @@ export async function buildCastleScene(
     scene,
     layout,
     parts: looks,
+    racks,
     castle: castleGroup,
     measure() {
       const textures = new Set<THREE.Texture>();

@@ -1,49 +1,65 @@
 import * as THREE from 'three';
 import { arrowModel, dusterModel } from '../../../app/warchestHud';
 
+/** The wooden bow: Quaternius's (CC0, built by tools/archery/build_bow.py). */
+export const BOW_MODEL = 'models/quaternius/bow_wooden.glb';
+
 /**
- * The wooden starter bow, built in code, as you hold it at the bottom of the screen: lying in the
- * screen's plane with the arrow pointing up its local +y (the shot), its limbs out to the sides
- * and the string below the grip. Drawing pulls the string (and the nocked arrow) back and bends
- * the limbs further. `size` is the bow's span tip to tip. Turn its group to aim.
+ * The wooden starter bow as you hold it at the bottom of the screen: lying in the screen's plane
+ * with the arrow pointing up its local +y (the shot), the limbs out to the sides and the string
+ * below the grip. The model (`BOW_MODEL`, 1 across tip to tip, its string left out) is bent as you
+ * draw: its limbs flex back toward you, the tips draw in, and the string, drawn here, comes back
+ * from the tips to the nocked arrow. On release the string snaps forward past rest and rings out.
+ * `size` is the bow's span tip to tip. Turn its group to aim.
  */
 
-/** In shares of the bow's size. */
-const LIMB_BEND = 0.16;
-const DRAW_BEND = 0.16;
-/** How far the string sits behind the grip at rest, and how far a full draw pulls it. */
-const BRACE = 0.12;
+/** In shares of the bow's span: how far the tips flex back at a full draw, and the draw length. */
+const FLEX = 0.11;
 const DRAW_LENGTH = 0.42;
-const LIMB_RADIUS = 0.017;
 const STRING_RADIUS = 0.0035;
 const ARROW_LENGTH = 0.9;
 
 /** The kinds of arrow the bow can have on its string. */
 export type NockedArrow = 'fletched' | 'bare' | 'duster';
 
+interface Limb {
+  mesh: THREE.Mesh;
+  rest: Float32Array;
+}
+
 export class Bow {
   readonly group = new THREE.Group();
   readonly #size: number;
-  readonly #limbs: THREE.Mesh;
-  readonly #wood = new THREE.MeshLambertMaterial({ color: 0x8a5a2e, flatShading: true });
+  readonly #limbs: Limb[] = [];
+  /** Where the string meets each tip, at rest (in the model's units). */
+  readonly #nocks: THREE.Vector3[];
   readonly #strings: [THREE.Mesh, THREE.Mesh];
   readonly #arrows: Record<NockedArrow, THREE.Object3D>;
-  #draw = -1;
+  #key = '';
   #nocked: NockedArrow | undefined;
 
-  constructor(size: number) {
+  /** `model` is the loaded `BOW_MODEL` (shared: it's cloned). */
+  constructor(size: number, model: THREE.Object3D) {
     this.#size = size;
-    this.#limbs = new THREE.Mesh(new THREE.BufferGeometry(), this.#wood);
-    const grip = new THREE.Mesh(
-      new THREE.CylinderGeometry(
-        LIMB_RADIUS * 1.9 * size,
-        LIMB_RADIUS * 1.9 * size,
-        0.15 * size,
-        8,
-      ),
-      new THREE.MeshLambertMaterial({ color: 0x3b2416 }),
-    );
-    grip.rotation.z = Math.PI / 2;
+    const bow = model.clone(true);
+    bow.scale.setScalar(size);
+    const meshes: THREE.Mesh[] = [];
+    bow.traverse((child) => {
+      if (child instanceof THREE.Mesh) meshes.push(child as THREE.Mesh);
+    });
+    for (const mesh of meshes) {
+      // Its own copy, to bend.
+      const geometry = mesh.geometry.clone();
+      mesh.geometry = geometry;
+      const position = geometry.getAttribute('position');
+      this.#limbs.push({ mesh, rest: Float32Array.from(position.array as ArrayLike<number>) });
+    }
+    const nock = (name: string, fallback: THREE.Vector3) =>
+      bow.getObjectByName(name)?.position.clone() ?? fallback;
+    this.#nocks = [
+      nock('nock_bottom', new THREE.Vector3(-0.48, -0.19, 0)),
+      nock('nock_top', new THREE.Vector3(0.46, -0.18, 0)),
+    ];
     const stringMaterial = new THREE.MeshBasicMaterial({ color: 0xf1e9d6 });
     const stringGeometry = new THREE.CylinderGeometry(
       STRING_RADIUS * size,
@@ -57,17 +73,17 @@ export class Bow {
     ];
     const nocked = (kind: NockedArrow) => {
       const arrow = new THREE.Group();
-      const model = kind === 'duster' ? dusterModel(14) : arrowModel(kind === 'fletched');
-      // Pointing up the bow (+y), its back end at the group's origin (the nock).
-      model.rotation.x = -Math.PI / 2;
-      model.position.y = 0.44;
-      arrow.add(model);
+      const arrowMesh = kind === 'duster' ? dusterModel(14) : arrowModel(kind === 'fletched');
+      // Pointing up the bow (+y), its back end (the nock) at the group's origin.
+      arrowMesh.rotation.x = -Math.PI / 2;
+      arrowMesh.position.y = 0.44;
+      arrow.add(arrowMesh);
       arrow.scale.setScalar(ARROW_LENGTH * size);
       arrow.visible = false;
       return arrow;
     };
     this.#arrows = { fletched: nocked('fletched'), bare: nocked('bare'), duster: nocked('duster') };
-    this.group.add(this.#limbs, grip, ...this.#strings, ...Object.values(this.#arrows));
+    this.group.add(bow, ...this.#strings, ...Object.values(this.#arrows));
     this.setDraw(0);
   }
 
@@ -81,40 +97,45 @@ export class Bow {
     return this.#nocked;
   }
 
-  /** Draws the bow to `draw` (0 at rest, 1 full): the limbs bend, the string comes back. */
-  setDraw(draw: number): void {
+  /**
+   * Draws the bow to `draw` (0 at rest, 1 full): the limbs flex, the string comes back. `snap`
+   * pushes the string forward past rest (a share of a full draw), as it rings after a release.
+   */
+  setDraw(draw: number, snap = 0): void {
     const d = Math.min(Math.max(draw, 0), 1);
-    if (Math.abs(d - this.#draw) < 0.002) return;
-    this.#draw = d;
+    const key = `${d.toFixed(3)}:${snap.toFixed(3)}`;
+    if (key === this.#key) return;
+    this.#key = key;
+    const flex = (x: number, y: number, out: THREE.Vector3) => {
+      // Further along the limb bends more: the tips flex back toward the string and draw in.
+      const t = Math.min(Math.abs(x) / 0.5, 1);
+      return out.set(x * (1 - 0.06 * d * t * t), y - FLEX * d * t * t, 0);
+    };
+    const bent = new THREE.Vector3();
+    for (const limb of this.#limbs) {
+      const position = limb.mesh.geometry.getAttribute('position') as THREE.BufferAttribute;
+      const rest = limb.rest;
+      for (let index = 0; index < position.count; index++) {
+        const x = rest[index * 3] ?? 0;
+        flex(x, rest[index * 3 + 1] ?? 0, bent);
+        position.setXYZ(index, bent.x, bent.y, rest[index * 3 + 2] ?? 0);
+      }
+      position.needsUpdate = true;
+      limb.mesh.geometry.computeBoundingSphere();
+    }
     const size = this.#size;
-    const half = 0.5 * size * (1 - 0.1 * d);
-    const bend = (LIMB_BEND + DRAW_BEND * d) * size;
-    // One curve, tip to tip through the grip: the limbs sweep back toward the string.
-    const points = Array.from({ length: 13 }, (_, index) => {
-      const t = index / 6 - 1;
-      return new THREE.Vector3(t * half, -bend * t * t, 0);
-    });
-    const curve = new THREE.CatmullRomCurve3(points);
-    this.#limbs.geometry.dispose();
-    this.#limbs.geometry = new THREE.TubeGeometry(curve, 24, LIMB_RADIUS * size, 6, false);
-    const tipY = -bend;
-    const nock = new THREE.Vector3(0, tipY - BRACE * size - DRAW_LENGTH * size * d, 0);
-    [-1, 1].forEach((side, index) => {
+    const tips = this.#nocks.map((nock) =>
+      flex(nock.x, nock.y, new THREE.Vector3()).multiplyScalar(size),
+    );
+    const restY = ((this.#nocks[0]?.y ?? 0) + (this.#nocks[1]?.y ?? 0)) / 2;
+    const nock = new THREE.Vector3(0, (restY - DRAW_LENGTH * (d - snap)) * size, 0);
+    tips.forEach((tip, index) => {
       const string = this.#strings[index];
       if (!string) return;
-      const tip = new THREE.Vector3(side * half, tipY, 0);
-      const length = tip.distanceTo(nock);
       string.position.copy(tip).add(nock).multiplyScalar(0.5);
-      string.scale.set(1, length, 1);
+      string.scale.set(1, tip.distanceTo(nock), 1);
       string.rotation.z = Math.atan2(nock.y - tip.y, nock.x - tip.x) - Math.PI / 2;
     });
     for (const arrow of Object.values(this.#arrows)) arrow.position.copy(nock);
-  }
-
-  /** Where the nocked arrow's point is, in the bow's group (the shot leaves from here). */
-  get point(): THREE.Vector3 {
-    return this.#arrows.fletched.position
-      .clone()
-      .add(new THREE.Vector3(0, ARROW_LENGTH * this.#size, 0));
   }
 }

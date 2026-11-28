@@ -1,6 +1,6 @@
 import { z } from 'zod';
-import { castleProblems } from './castleLayout';
-import { gameDataShape, type GameData, type SiegeObjective, type SiegePosition } from './schema';
+import { castleProblems, layoutCastle, postSlots } from './castleLayout';
+import { gameDataShape, type GameData } from './schema';
 
 type Path = (string | number)[];
 
@@ -413,18 +413,17 @@ function checkReferences(data: GameData, ctx: z.RefinementCtx): void {
   }
 }
 
-/** Blocks closer than this (metres) count as touching: data is typed by hand. */
-const TOUCH = 1e-6;
-
 /**
- * The siege's forts must stand on their own: every block rests on the ground or on blocks
- * directly under it, with its middle over what holds it up (or it would tip), and no two blocks
- * overlap (the physics would push them apart the moment the round starts).
+ * The siege: what it shoots and drinks, its weapon, what the castle's parts are made of, and its
+ * objectives (each one possible at this castle: its posts are the castle's, with room for its
+ * guards). Its tiers draw shadows as the castle's do.
  */
 function checkSiege(data: GameData, issue: (path: Path, message: string) => void): void {
   const siege = data.siege;
-  if (!data.items.some((item) => item.id === siege.item)) {
-    issue(['siege', 'item'], `Unknown item "${siege.item}"`);
+  for (const key of ['item', 'potion'] as const) {
+    if (!data.items.some((item) => item.id === siege[key])) {
+      issue(['siege', key], `Unknown item "${siege[key]}"`);
+    }
   }
   const weapons = new Set<string>();
   siege.weapons.forEach((weapon, index) => {
@@ -434,10 +433,7 @@ function checkSiege(data: GameData, issue: (path: Path, message: string) => void
     if (!data.skills.some((skill) => skill.id === weapon.skill)) {
       issue([...path, 'skill'], `Unknown skill "${weapon.skill}"`);
     }
-    const { tilt } = weapon;
-    if (tilt.min >= tilt.max || tilt.start < tilt.min || tilt.start > tilt.max) {
-      issue([...path, 'tilt'], 'Needs min under max, and start between them');
-    }
+    if (weapon.tilt.min >= weapon.tilt.max) issue([...path, 'tilt'], 'Needs min under max');
   });
   if (!weapons.has(siege.weapon)) issue(['siege', 'weapon'], `Unknown weapon "${siege.weapon}"`);
   const materials = new Set<string>();
@@ -447,138 +443,51 @@ function checkSiege(data: GameData, issue: (path: Path, message: string) => void
     }
     materials.add(material.id);
   });
-  const forts = new Set<string>();
-  siege.forts.forEach((fort, fortIndex) => {
-    const path = ['siege', 'forts', fortIndex];
-    if (forts.has(fort.id)) issue([...path, 'id'], `Duplicate id "${fort.id}"`);
-    forts.add(fort.id);
-    fort.pieces.forEach((piece, pieceIndex) => {
-      const at = [...path, 'pieces', pieceIndex];
-      if (piece.kind === 'wall') {
-        piece.windows.forEach((window, windowIndex) => {
-          if (
-            window.from + window.width > piece.length ||
-            window.sill + window.courses >= piece.courses
-          ) {
-            issue(
-              [...at, 'windows', windowIndex],
-              'A window must fit in its wall, with a course over it for the lintel',
-            );
-          }
-        });
-      }
-      if ('watch' in piece && piece.watch === 'patrol' && piece.kind !== 'walkway') {
-        issue([...at, 'watch'], 'Only a guard on a walkway can patrol');
-      }
-      if ('material' in piece && !materials.has(piece.material)) {
-        issue([...at, 'material'], `Unknown material "${piece.material}"`);
-      }
-      if ('guard' in piece && piece.guard !== undefined && piece.guard >= fort.positions.length) {
-        issue([...at, 'guard'], `No position ${String(piece.guard)} to guard`);
-      }
-    });
-    const banners = fort.blocks.filter((block) => block.banner);
-    if (banners.length > 1) issue([...path, 'blocks'], 'A fort has one banner at most');
-    const banner = banners[0];
-    const last = fort.positions.length - 1;
-    if (fort.positions[last]?.objective.kind !== 'banner_down') {
-      issue([...path, 'positions', last, 'objective'], 'The last position brings the banner down');
+  for (const [kind, part] of Object.entries(siege.parts)) {
+    if (!materials.has(part.material)) {
+      issue(['siege', 'parts', kind, 'material'], `Unknown material "${part.material}"`);
     }
-    // Each kind of objective checks what it needs.
-    const objectives: {
-      [K in SiegeObjective['kind']]: (
-        objective: Extract<SiegeObjective, { kind: K }>,
-        position: SiegePosition,
-        at: Path,
-      ) => void;
-    } = {
-      guards_down: (_, position, at) => {
-        if (position.guards.length === 0) issue(at, 'Bringing the guards down needs guards');
-      },
-      banner_down: (objective, _, at) => {
-        const height = objective.height ?? siege.banner.winHeight;
-        if (!banner) issue(at, 'Bringing the banner down needs a banner');
-        else if (banner.at[1] <= height) issue(at, 'The banner must start above the win height');
-      },
-    };
-    fort.positions.forEach((position, positionIndex) => {
-      const at = [...path, 'positions', positionIndex];
-      objectives[position.objective.kind](position.objective as never, position, [
-        ...at,
-        'objective',
-      ]);
-    });
-
-    type Box = { min: number[]; max: number[] };
-    const overlap = (a: Box, b: Box, axis: number) =>
-      Math.min(a.max[axis] ?? 0, b.max[axis] ?? 0) - Math.max(a.min[axis] ?? 0, b.min[axis] ?? 0);
-    const boxes: Box[] = fort.blocks.map((block) => ({
-      min: block.at.map((value, axis) => value - (block.size[axis] ?? 0) / 2),
-      max: block.at.map((value, axis) => value + (block.size[axis] ?? 0) / 2),
-    }));
-    /** Why a box can't stand where it is, if it can't: floating, or overhanging what holds it. */
-    const unsupported = (own: Box): string | undefined => {
-      const bottom = own.min[1] ?? 0;
-      if (Math.abs(bottom) <= TOUCH) return undefined;
-      // What it stands on: blocks whose tops meet its bottom, under part of it.
-      const under = boxes.filter(
-        (other) =>
-          Math.abs((other.max[1] ?? 0) - bottom) <= TOUCH &&
-          overlap(own, other, 0) > TOUCH &&
-          overlap(own, other, 2) > TOUCH,
-      );
-      if (under.length === 0) return 'Floats: it must rest on the ground or on a block';
-      const span = (axis: number) => ({
-        min: Math.min(...under.map((other) => Math.max(other.min[axis] ?? 0, own.min[axis] ?? 0))),
-        max: Math.max(...under.map((other) => Math.min(other.max[axis] ?? 0, own.max[axis] ?? 0))),
-      });
-      const middle = (axis: number) => ((own.min[axis] ?? 0) + (own.max[axis] ?? 0)) / 2;
-      const x = span(0);
-      const z = span(2);
-      if (middle(0) < x.min || middle(0) > x.max || middle(2) < z.min || middle(2) > z.max) {
-        return 'Overhangs: its middle must be over what holds it up';
-      }
-      return undefined;
-    };
-    fort.blocks.forEach((block, index) => {
-      const blockPath = [...path, 'blocks', index];
-      if (!materials.has(block.material)) {
-        issue([...blockPath, 'material'], `Unknown material "${block.material}"`);
-      }
-      const own = boxes[index];
-      if (!own) return;
-      boxes.forEach((other, otherIndex) => {
-        if (otherIndex <= index) return;
-        if ([0, 1, 2].every((axis) => overlap(own, other, axis) > TOUCH)) {
-          issue(blockPath, `Overlaps block ${String(otherIndex)}`);
-        }
-      });
-      const problem = unsupported(own);
-      if (problem) issue(blockPath, problem);
-    });
-    // Guards stand on the ground or on blocks, clear of every block and each other.
-    const [width, height, depth] = siege.guard.size;
-    const guards = fort.positions.flatMap((position, positionIndex) =>
-      position.guards.map((guard, guardIndex) => ({
-        path: [...path, 'positions', positionIndex, 'guards', guardIndex],
-        box: {
-          min: [guard.at[0] - width / 2, guard.at[1], guard.at[2] - depth / 2],
-          max: [guard.at[0] + width / 2, guard.at[1] + height, guard.at[2] + depth / 2],
-        },
-      })),
-    );
-    guards.forEach((guard, index) => {
-      const hits = [...boxes, ...guards.slice(index + 1).map((other) => other.box)].some((other) =>
-        [0, 1, 2].every((axis) => overlap(guard.box, other, axis) > TOUCH),
-      );
-      if (hits) issue(guard.path, 'Overlaps a block or another guard');
-      const problem = unsupported(guard.box);
-      if (problem) issue(guard.path, problem);
-    });
-  });
-  if (siege.stars.three > siege.stars.two) {
-    issue(['siege', 'stars'], 'Three stars must not allow more throws than two');
   }
+  if (!materials.has(siege.bodies.solid)) {
+    issue(['siege', 'bodies', 'solid'], `Unknown material "${siege.bodies.solid}"`);
+  }
+  for (const tier of ['high', 'low'] as const) {
+    const map = siege.looks.tiers[tier].shadows === 'map';
+    if (map !== data.castle.tiers[tier].shadows) {
+      issue(
+        ['siege', 'looks', 'tiers', tier, 'shadows'],
+        'Shadows as the castle draws them on this tier: a map with its shadows, blobs without',
+      );
+    }
+  }
+  const { objectives } = siege;
+  if (objectives.count > objectives.pool.length) {
+    issue(['siege', 'objectives', 'count'], 'Pick no more objectives than the pool has');
+  }
+  // Where guards can stand needs the castle laid out: only if it holds together.
+  const layout = castleProblems(data.castle).length === 0 ? layoutCastle(data.castle) : undefined;
+  const posts = new Set([
+    ...data.castle.anchors.guardPaths.map((path) => path.id),
+    ...data.castle.anchors.lookouts.map((lookout) => lookout.id),
+  ]);
+  objectives.pool.forEach((objective, index) => {
+    const path = ['siege', 'objectives', 'pool', index];
+    if (objective.kind !== 'guards') return;
+    if (objective.kill > objective.guards) {
+      issue([...path, 'kill'], 'Kill no more guards than there are');
+    }
+    objective.posts.forEach((post, postIndex) => {
+      if (!posts.has(post)) issue([...path, 'posts', postIndex], `Unknown post "${post}"`);
+    });
+    if (!layout || objective.posts.some((post) => !posts.has(post))) return;
+    const room = objective.posts.flatMap((post) => postSlots(layout, post, objective.slot)).length;
+    if (room < objective.guards) {
+      issue(
+        [...path, 'guards'],
+        `Room for ${String(room)} guards ${String(objective.slot)} m apart at its posts`,
+      );
+    }
+  });
 }
 
 /** The bird hunt: its birds, flocks and arrows point at real things, and its ranges make sense. */
@@ -644,6 +553,9 @@ function checkArchery(
     }
   });
   if (archery.aim.min >= archery.aim.max) issue(['archery', 'aim'], 'min must be under max');
+  if (archery.scare.maxSpeedUp < archery.scare.speedUp) {
+    issue(['archery', 'scare', 'maxSpeedUp'], 'Must not be under one scare’s speed-up');
+  }
   const { one, two } = archery.stars;
   if (one > two) issue(['archery', 'stars'], 'More stars must not need less');
   // The trees stand behind the field, so they never hide a bird or an arrow.
