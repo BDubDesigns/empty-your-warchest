@@ -2,9 +2,10 @@ import type { GameDataInput } from './schema';
 
 // The castle the siege will be fought at (Siege 2.0), built from the Quaternius kits: a curtain
 // wall with a walk and battlements round a courtyard, four round corner towers, a gatehouse, a
-// three-storey keep whose windows the captain shows at, an alarm bell, and a spear rack. Shown on
-// its own in Debug → Castle preview until the siege moves onto it. Metres; the gate faces +z, toward
-// the player. Looks and sizes here are first guesses, tuned by eye from the preview.
+// three-storey keep whose windows the captain shows at, an alarm bell, and the spear racks (a siege
+// keeps one of them). The War tent's siege is fought here; Debug → Castle preview shows it on its
+// own. Metres; the gate faces +z, toward the player. Looks and sizes here are first guesses, tuned
+// by eye from the preview.
 
 export const castle = {
   kit: 'models/castle/kit.glb',
@@ -63,7 +64,8 @@ export const castle = {
     gable: { node: 'Roof_Front_Brick8' },
     overhang: 0.6,
   },
-  towerRoof: { piece: { node: 'Roof_Tower_RoundTiles' }, overhang: 0.5 },
+  // The kit's tower roof is 1.2 times as tall as it is wide (7.36 m over 5.66 m).
+  towerRoof: { piece: { node: 'Roof_Tower_RoundTiles' }, overhang: 0.5, rise: 1.2 },
   quoin: 0.55,
   details: {
     towerSides: 20,
@@ -101,8 +103,19 @@ export const castle = {
     banner: [{ node: 'Banner_1' }],
     torch: [{ node: 'Torch_Metal' }],
   },
+  // From the kit pieces' bounds (a crate is the kit's scaled to 0.78).
+  boxes: {
+    weapon_stand: { size: [1.39, 1.11, 0.99], middle: [0, 0.55, 0] },
+    barrel: { size: [0.7, 0.9, 0.7], middle: [0, 0.45, 0] },
+    crate: { size: [0.84, 0.93, 0.9], middle: [0, 0.41, 0] },
+    wagon: { size: [1.95, 1.53, 4.02], middle: [0, 0.77, -1.14] },
+  },
   props: [
+    // Where the spear rack may stand: seen from the siege tower, through the broken gate from the
+    // low ground, and behind the east wall (seen once it's breached).
     { id: 'spear_rack', piece: 'weapon_stand', at: [6.5, 0.5], turn: -15 },
+    { id: 'spear_rack_gate', piece: 'weapon_stand', at: [-4.5, 4], turn: 10 },
+    { id: 'spear_rack_east', piece: 'weapon_stand', at: [11, 9], turn: -40 },
     { id: 'barrel_1', piece: 'barrel', at: [-7.5, 9.5] },
     { id: 'barrel_2', piece: 'barrel', at: [-8.3, 10.2] },
     { id: 'crate_1', piece: 'crate', at: [-6.6, 10.4], turn: 15 },
@@ -120,7 +133,7 @@ export const castle = {
       { building: 'keep', side: 'left', storey: 2, module: 1 },
       { building: 'keep', side: 'right', storey: 2, module: 2 },
     ],
-    spearRack: 'spear_rack',
+    spearRacks: ['spear_rack', 'spear_rack_gate', 'spear_rack_east'],
     guardPaths: [
       {
         id: 'front_left_walk',
@@ -153,6 +166,11 @@ export const castle = {
           { ground: [-8, -13.3] },
         ],
       },
+    ],
+    // On the front towers' tops, toward the field.
+    lookouts: [
+      { id: 'south_west_top', tower: 'south_west', at: [0.6, 1.4] },
+      { id: 'south_east_top', tower: 'south_east', at: [-0.6, 1.4] },
     ],
   },
   vantages: [
