@@ -80,7 +80,7 @@ const SOUNDS: Record<string, string> = {
 };
 /** Segments, at most, in the solid line along the last shot's path. */
 const GHOST_SEGMENTS = 120;
-/** The last shot's line starts this far from the camera (m). */
+/** The last shot's line, and the spears, show from this far from the camera on (m). */
 const GHOST_NEAR = 8;
 /** A touch that moves less than this (px) is a tap (it skips the kill look), not an aim. */
 const TAP_PX = 10;
@@ -1180,6 +1180,9 @@ export class Siege3DView implements ScreenView {
       round.spearPose(index, pose);
       spear.position.set(pose.position.x, pose.position.y, pose.position.z);
       spear.quaternion.set(pose.rotation.x, pose.rotation.y, pose.rotation.z, pose.rotation.w);
+      // Just out of the ballista, under the camera, it'd fill the screen: it shows from a few
+      // metres on.
+      if (spear.position.distanceTo(this.#camera.position) < GHOST_NEAR) spear.visible = false;
     });
     // The last shot's middle spear leaves its line while it flies.
     const trailed = this.#trailSpear;

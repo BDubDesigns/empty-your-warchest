@@ -118,17 +118,20 @@ await high.waitForTimeout(800);
 await shot(high, 'high-sense');
 // A collapse: two volleys low on the wall under a guard on the battlement, from the hill.
 await vantage(high, 'Hill');
+// Under a guard on the walk if one's in view, else low on the front wall in the middle of the view.
 const [guard] = await targets(high, 'guard');
-if (guard) {
-  await aimAt(high, guard.x, guard.y + 150);
-  await fire(high);
-  await high.waitForTimeout(2500);
-  await fire(high);
-  for (let index = 0; index < 4; index++) {
-    await high.waitForTimeout(350);
-    await shot(high, `high-collapse-${String(index)}`);
-  }
-} else console.log('No guard on screen from the hill to bring the wall down under');
+const size = high.viewportSize();
+const spot = guard
+  ? { x: guard.x, y: guard.y + 150 }
+  : { x: size.width * 0.5, y: size.height * 0.675 };
+await aimAt(high, spot.x, spot.y);
+await fire(high);
+await high.waitForTimeout(2500);
+await fire(high);
+for (let index = 0; index < 4; index++) {
+  await high.waitForTimeout(350);
+  await shot(high, `high-collapse-${String(index)}`);
+}
 await high.close();
 
 const low = await openTent('low');
