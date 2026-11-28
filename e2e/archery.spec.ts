@@ -80,15 +80,14 @@ test('draws the bow and shoots an arrow, logged with its draw and aim', async ({
   // A tiny pull lets the string down: no shot.
   await drawAndShoot(page, 8);
   await expect(screen).toHaveAttribute('data-shots', '0');
-  // A real one shoots, and spends an arrow.
+  // A real one shoots, and spends an arrow (one that hits a bird comes back, unless it broke).
   await drawAndShoot(page, 140, -30);
   await expect(screen).toHaveAttribute('data-shots', '1');
-  await expect(page.getByRole('radio', { name: /Fletched arrow/ })).toHaveAttribute(
-    'aria-label',
-    /: 19$/,
-  );
   // Once it's come down, the shot is in the log.
   await page.waitForTimeout(4000);
+  const quiver = await page
+    .getByRole('radio', { name: /Fletched arrow/ })
+    .getAttribute('aria-label');
   await page.getByRole('button', { name: 'Back to camp' }).tap();
   await expect(page.locator('body')).toHaveAttribute('data-view', 'camp');
   await page.getByRole('button', { name: 'Open debug menu' }).tap();
@@ -107,6 +106,8 @@ test('draws the bow and shoots an arrow, logged with its draw and aim', async ({
   // Pulled down and to the left: the shot goes up and to the right.
   expect(Number(shot?.data?.angle)).toBeLessThan(90);
   expect(typeof shot?.data?.hit).toBe('boolean');
+  const back = shot?.data?.hit === true && shot.data.broke !== true;
+  expect(quiver).toMatch(back ? /: 20$/ : /: 19$/);
   expect(errors).toEqual([]);
 });
 
