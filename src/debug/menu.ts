@@ -29,6 +29,8 @@ export interface DebugDeps {
   stressTest?: () => void;
   /** Opens Debug → Castle preview (the siege's castle on its own, to orbit and judge). */
   castlePreview?: () => void;
+  /** Opens Debug → Character preview (the siege's guard and captain, playing their clips). */
+  characterPreview?: () => void;
 }
 
 const MINUTE = 60_000;
@@ -474,6 +476,15 @@ export function mountDebugMenu(root: HTMLElement, deps: DebugDeps): void {
     closeButton.click();
     castlePreview?.();
   });
+  const characterPreview = deps.characterPreview;
+  const characterButton = characterPreview
+    ? el('button', { type: 'button', textContent: 'Character preview' })
+    : undefined;
+  characterButton?.addEventListener('click', () => {
+    logger.log('debug.characterPreview');
+    closeButton.click();
+    characterPreview?.();
+  });
   const panel = el(
     'div',
     { className: 'debug-panel', hidden: true, role: 'dialog', ariaLabel: 'Debug menu' },
@@ -528,6 +539,19 @@ export function mountDebugMenu(root: HTMLElement, deps: DebugDeps): void {
                   'The castle the siege moves onto next, on its own: drag to look round it, or jump to the siege’s vantage points.',
               }),
               castleButton,
+            ),
+          ]
+        : []),
+      ...(characterButton
+        ? [
+            section(
+              'Characters',
+              el('p', {
+                className: 'debug-note',
+                textContent:
+                  'The siege’s guard and captain, side by side: play their clips, or a crowd of guards to see what it costs.',
+              }),
+              characterButton,
             ),
           ]
         : []),
